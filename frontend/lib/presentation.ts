@@ -8,8 +8,11 @@ type Meta = {
 
 const STATUS_META: Record<string, Meta> = {
   pending: { label: "待处理", tone: "warning" },
+  pending_review: { label: "待审批", tone: "warning" },
   approved: { label: "已批准", tone: "success" },
   rejected: { label: "已驳回", tone: "danger" },
+  converted: { label: "已转任务", tone: "info" },
+  ignored: { label: "已忽略", tone: "neutral" },
   in_progress: { label: "执行中", tone: "info" },
   completed: { label: "已完成", tone: "success" },
   failed: { label: "失败", tone: "danger" },
@@ -31,6 +34,7 @@ const PRIORITY_META: Record<string, Meta> = {
 };
 
 const RUN_TYPE_LABELS: Record<string, string> = {
+  risk_analysis: "风险扫描",
   risk_scan: "风险扫描",
   business_report: "经营日报"
 };

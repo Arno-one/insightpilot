@@ -9,14 +9,33 @@ import { formatDateTime, getPriorityMeta, getStatusMeta } from "@/lib/presentati
 
 type Task = {
   task_id: string;
+  approval_id: string | null;
   customer_id: string;
+  customer_name: string | null;
+  deal_id: string | null;
   assignee_user_id: string;
   task_type: string;
   title: string;
+  description: string | null;
+  recommended_script: string | null;
   priority: string;
   status: string;
   due_at: string | null;
+  completed_at: string | null;
+  result_note: string | null;
   created_at: string;
+};
+
+type TaskDraft = {
+  result_note: string;
+  sentiment: "positive" | "neutral" | "negative";
+  next_follow_up_at: string;
+};
+
+const EMPTY_TASK_DRAFT: TaskDraft = {
+  result_note: "",
+  sentiment: "neutral",
+  next_follow_up_at: ""
 };
 
 function isActiveTask(task: Task) {
@@ -27,19 +46,66 @@ export default function TasksPage() {
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [savingTaskId, setSavingTaskId] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, TaskDraft>>({});
+
+  function patchDraft(taskId: string, patch: Partial<TaskDraft>) {
+    setDrafts((current) => ({
+      ...current,
+      [taskId]: {
+        ...EMPTY_TASK_DRAFT,
+        ...current[taskId],
+        ...patch
+      }
+    }));
+  }
+
+  async function loadTasks() {
+    setLoading(true);
+    try {
+      const response = await apiFetch<Task[]>("/api/tasks");
+      setItems(response.data);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "任务列表加载失败。");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateTask(taskId: string, status: "in_progress" | "completed" | "cancelled") {
+    const draft = drafts[taskId] || EMPTY_TASK_DRAFT;
+    setSavingTaskId(taskId);
+    setError("");
+    setMessage("");
+    try {
+      await apiFetch(`/api/tasks/${taskId}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          status,
+          result_note:
+            draft.result_note ||
+            (status === "cancelled" ? "演示环境前端触发取消" : status === "completed" ? "演示环境前端标记完成" : "任务已开始推进"),
+          sentiment: draft.sentiment,
+          next_follow_up_at: draft.next_follow_up_at || null
+        })
+      });
+      setMessage(
+        status === "in_progress"
+          ? "任务已开始执行。"
+          : status === "completed"
+            ? "任务已完成，并已自动回写一条跟进记录。"
+            : "任务已取消。"
+      );
+      await loadTasks();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "任务状态更新失败。");
+    } finally {
+      setSavingTaskId("");
+    }
+  }
 
   useEffect(() => {
-    async function loadTasks() {
-      try {
-        const response = await apiFetch<Task[]>("/api/tasks");
-        setItems(response.data);
-      } catch (exc) {
-        setError(exc instanceof Error ? exc.message : "任务列表加载失败。");
-      } finally {
-        setLoading(false);
-      }
-    }
-
     loadTasks();
   }, []);
 
@@ -74,6 +140,7 @@ export default function TasksPage() {
         </div>
       </section>
 
+      {message ? <p className="success-text">{message}</p> : null}
       {error ? <ErrorCard message={error} detail="请确认任务接口与登录权限是否正常。" /> : null}
       {loading ? <LoadingCard detail="正在同步销售任务、负责人和截止时间。" /> : null}
       {!loading && !sortedItems.length && !error ? (
@@ -161,6 +228,7 @@ export default function TasksPage() {
                     <div>
                       <p className="eyebrow">{item.task_type}</p>
                       <h2 className="section-title">{item.title}</h2>
+                      <p className="lead">{item.customer_name || item.customer_id}</p>
                     </div>
                     <div className="task-meta">
                       <span className={`pill ${priorityMeta.toneClass}`}>{priorityMeta.label}</span>
@@ -169,13 +237,108 @@ export default function TasksPage() {
                   </div>
 
                   <div className="meta-row">
-                    <span className="meta-chip">客户 {item.customer_id}</span>
+                    <span className="meta-chip">客户 {item.customer_name || item.customer_id}</span>
                     <span className="meta-chip">负责人 {item.assignee_user_id}</span>
                     <span className={`meta-chip ${isOverdue ? "tone-danger" : ""}`}>
                       截止 {item.due_at ? formatDateTime(item.due_at) : "未设置"}
                     </span>
                     <span className="meta-chip">创建时间 {formatDateTime(item.created_at)}</span>
+                    <span className="meta-chip">完成时间 {item.completed_at ? formatDateTime(item.completed_at) : "未完成"}</span>
                   </div>
+
+                  {item.description || item.recommended_script || item.result_note ? (
+                    <div className="summary-list">
+                      {item.description ? (
+                        <div className="summary-item">
+                          <strong>任务说明</strong>
+                          <p>{item.description}</p>
+                        </div>
+                      ) : null}
+                      {item.recommended_script ? (
+                        <div className="summary-item">
+                          <strong>推荐话术</strong>
+                          <blockquote>{item.recommended_script}</blockquote>
+                        </div>
+                      ) : null}
+                      {item.result_note ? (
+                        <div className="summary-item">
+                          <strong>执行结果</strong>
+                          <p>{item.result_note}</p>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {isActiveTask(item) ? (
+                    <div className="summary-list">
+                      <div className="summary-item">
+                        <strong>执行记录</strong>
+                        <textarea
+                          className="input-like textarea-like"
+                          placeholder="补一条本次执行结果，任务完成时会自动回写为跟进记录。"
+                          rows={3}
+                          value={drafts[item.task_id]?.result_note || ""}
+                          onChange={(event) => patchDraft(item.task_id, { result_note: event.target.value })}
+                        />
+                      </div>
+                      <div className="meta-row">
+                        <label className="meta-chip">
+                          情绪
+                          <select
+                            className="input-like compact-input"
+                            value={drafts[item.task_id]?.sentiment || "neutral"}
+                            onChange={(event) =>
+                              patchDraft(item.task_id, {
+                                sentiment: event.target.value as TaskDraft["sentiment"]
+                              })
+                            }
+                          >
+                            <option value="positive">正向</option>
+                            <option value="neutral">中性</option>
+                            <option value="negative">负向</option>
+                          </select>
+                        </label>
+                        <label className="meta-chip">
+                          下次跟进
+                          <input
+                            className="input-like compact-input"
+                            type="datetime-local"
+                            value={drafts[item.task_id]?.next_follow_up_at || ""}
+                            onChange={(event) => patchDraft(item.task_id, { next_follow_up_at: event.target.value })}
+                          />
+                        </label>
+                      </div>
+
+                      <div className="action-row">
+                        {item.status === "pending" ? (
+                          <button
+                            className="button"
+                            onClick={() => updateTask(item.task_id, "in_progress")}
+                            type="button"
+                            disabled={savingTaskId === item.task_id}
+                          >
+                            开始执行
+                          </button>
+                        ) : null}
+                        <button
+                          className="button"
+                          onClick={() => updateTask(item.task_id, "completed")}
+                          type="button"
+                          disabled={savingTaskId === item.task_id}
+                        >
+                          标记完成
+                        </button>
+                        <button
+                          className="ghost-button inline"
+                          onClick={() => updateTask(item.task_id, "cancelled")}
+                          type="button"
+                          disabled={savingTaskId === item.task_id}
+                        >
+                          取消任务
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </article>
               );
             })}

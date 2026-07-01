@@ -945,6 +945,27 @@ pre {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.input-like {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.compact-input {
+  min-height: 40px;
+  margin-left: 10px;
+  padding: 0 12px;
+}
+
+.textarea-like {
+  min-height: 112px;
+  padding: 14px 16px;
+  resize: vertical;
+  line-height: 1.7;
+}
+
 .eval-scoreband {
   display: grid;
   gap: 16px;
