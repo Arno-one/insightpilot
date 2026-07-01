@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     milvus_db_name: str = Field("insightpilot_rag", validation_alias="MILVUS_DB_NAME")
     rag_document_collection: str = Field("insightpilot_document_chunks", validation_alias="RAG_DOCUMENT_COLLECTION")
     rag_qa_collection: str = Field("insightpilot_qa_pairs", validation_alias="RAG_QA_COLLECTION")
+    rag_docs_dir: str = Field("docs/insightpilot_rag_docs", validation_alias="RAG_DOCS_DIR")
+    embedding_dimension: int = Field(1024, validation_alias="EMBEDDING_DIMENSION")
+    use_real_embedding: bool = Field(True, validation_alias="USE_REAL_EMBEDDING")
+    rag_chunk_size: int = Field(500, validation_alias="RAG_CHUNK_SIZE")
+    rag_chunk_overlap: int = Field(50, validation_alias="RAG_CHUNK_OVERLAP")
 
     @property
     def mysql_url(self) -> str:

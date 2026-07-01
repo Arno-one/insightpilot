@@ -16,6 +16,10 @@ frontend/.env.local
 logs/
 *.log
 
+# Local vector DB test artifacts
+backend/tests/*.db/
+backend/tests/*_milvus.db/
+
 # Node
 node_modules/
 .next/
