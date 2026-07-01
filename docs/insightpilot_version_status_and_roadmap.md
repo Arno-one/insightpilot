@@ -122,6 +122,7 @@ CRM 客户 / 商机 / 跟进数据
 - 已实现 Agent Run 列表与详情。
 - 已实现 Agent Step 时间线。
 - 已实现 RAG Trace 与命中详情串联。
+- 已完成风险扫描 `LangGraph` 图落地，Worker 已改为转调图工作流。
 - 前端已完成以下页面接入：
   - 经营驾驶舱
   - 风险中心
@@ -133,18 +134,20 @@ CRM 客户 / 商机 / 跟进数据
 
 ## 4. 当前版本未完成但已预留的能力
 
-### 4.1 LangGraph 仍未正式接管执行链路
+### 4.1 LangGraph 已部分落地
 
-当前 `langgraph` 依赖已安装，但下面两个文件仍是占位实现：
+当前 `langgraph` 依赖已经接入并开始承接真实执行链路。
 
-- `backend/app/modules/agent/graphs/risk_analysis_graph.py`
-- `backend/app/modules/agent/graphs/business_report_graph.py`
+当前状态：
+
+- 风险扫描已经迁到 `backend/app/modules/agent/graphs/risk_analysis_graph.py`
+- `backend/app/workers/risk_jobs.py` 已缩成 Worker 入口
+- `backend/app/modules/agent/graphs/business_report_graph.py` 仍是占位
 
 也就是说：
 
-- 风险扫描目前还是 `risk_jobs.py` 顺序流
 - 经营日报目前还是 `report_jobs.py` 顺序流
-- `agent_step` 已经在记录节点，但还不是由真实图编排驱动
+- Agent Trace 已经可以直接追踪真实风险扫描图节点
 
 ### 4.2 任务执行闭环还不完整
 
@@ -164,52 +167,30 @@ CRM 客户 / 商机 / 跟进数据
 - 报表以日报为主，周报和趋势分析还没开始
 - 风险中心当前更偏列表页，还没有完整客户详情上下文页
 
-## 5. 下一版本只聚焦一件事
+## 5. 当前阶段后续候选
 
-下一版本先做：
+风险扫描图落地后，当前更值得继续推进的候选方向有三类：
 
-- `LangGraph` 风险扫描图
+### 5.1 经营日报 `LangGraph` 化
 
-本轮不同时铺开经营日报图、CSV 导入、客户详情、报表增强，原因很简单：
+目标：
 
-- 风险扫描链路已经是当前系统最核心、最可展示的 Agent 主链路
-- 前端 Agent Trace 已经依赖现有 `agent_run / agent_step / rag_traces` 结构
-- 现在最有价值的是把“已有能力”从顺序流升级为真实图编排，而不是再加新页面
+- 让日报链路也具备图级节点语义
+- 与风险扫描保持一致的可观测方式
 
-## 6. 风险扫描图的落地方向
+### 5.2 任务执行闭环
 
-下一版本的目标不是机械把顺序函数搬进图，而是边迁移边做模块化拆分。
+目标：
 
-建议节点口径如下：
+- 不只“创建任务”，还要支持执行推进、结果反馈和状态回流
 
-```text
-load_crm_data
-  -> calculate_rule_risk
-  -> retrieve_sales_knowledge
-  -> generate_risk_reason / create_approval_record
-  -> persist_agent_trace
-```
+### 5.3 全链路回归验证
 
-实际落地时需要满足以下约束：
+目标：
 
-- 保留当前接口输出结构
-- 保留现有数据库表结构
-- 保留当前审批草稿和风险快照落库行为
-- 保留 Agent Trace 页面依赖的核心节点名
-- 把 `risk_jobs.py` 拆成更清晰的状态对象、节点函数和图构建入口
+- 确认风险扫描图迁移后，审批、任务、日报、Agent Trace 和 RAG 评估继续兼容
 
-## 7. 下一版本验收标准
-
-只要满足下面 6 条，就算这一轮做成：
-
-1. 风险扫描由 Worker 调用真实 `LangGraph` 图，而不是手写顺序流。
-2. `agent_run`、`agent_step`、`rag_retrieval_trace` 的写入结果保持兼容。
-3. 前端 Agent Trace 页面无需改接口即可继续展示。
-4. 出错节点可以在图执行中被清晰定位。
-5. `risk_jobs.py` 不再维持当前这种单文件大流程堆叠。
-6. 文档与代码状态保持一致。
-
-## 8. 当前版本演示顺序
+## 6. 当前版本演示顺序
 
 如果现在要演示项目，推荐按下面顺序：
 
@@ -222,6 +203,6 @@ load_crm_data
 7. 生成日报并查看结果。
 8. 最后打开 Agent Trace，展示每一步的执行和 RAG 来源。
 
-## 9. 一句话结论
+## 7. 一句话结论
 
-当前版本的重心已经从“补骨架”切到“做真实 Agent 编排”。数据库基线、演示数据、前端工作台和可观测链路都已经具备，下一步最值得投入的就是把风险扫描正式迁到 `LangGraph`。
+当前版本的重心已经从“补骨架”切到“做真实 Agent 编排”。数据库基线、演示数据、前端工作台和可观测链路都已经具备，风险扫描图也已经落地，接下来更适合继续补经营日报图和执行闭环。
