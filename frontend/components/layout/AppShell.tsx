@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { clearSession, CurrentUser, getDefaultRoute, getStoredUser, hasAnyPermission } from "@/lib/api";
+import { clearSession, CurrentUser, fetchCurrentUser, getDefaultRoute, getStoredUser, hasAnyPermission, saveStoredUser } from "@/lib/api";
 
 type NavItem = {
   label: string;
@@ -101,13 +101,38 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const storedUser = getStoredUser();
-    if (!storedUser) {
+    const cachedUser = getStoredUser();
+    if (!cachedUser) {
       router.replace("/login");
       return;
     }
-    setUser(storedUser);
+
+    // 中文注释：先用本地登录态起屏，再主动向后端刷新一次，避免数据库真实姓名已更新但前端还停留在旧的 ???。
+    setUser(cachedUser);
     setReady(true);
+
+    let cancelled = false;
+
+    async function refreshCurrentUser() {
+      try {
+        const response = await fetchCurrentUser();
+        if (cancelled) {
+          return;
+        }
+        setUser(response.data);
+        saveStoredUser(response.data);
+      } catch {
+        if (cancelled) {
+          return;
+        }
+      }
+    }
+
+    refreshCurrentUser();
+
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   // 中文注释：导航仍然由权限控制，保证演示态和真实接口权限校验保持一致。

@@ -34,6 +34,10 @@ export function saveSession(data: LoginData) {
   localStorage.setItem(USER_KEY, JSON.stringify(data.user));
 }
 
+export function saveStoredUser(user: CurrentUser) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
 export function getToken() {
   if (typeof window === "undefined") {
     return null;
@@ -109,4 +113,8 @@ export async function login(username: string, password: string) {
     method: "POST",
     body: JSON.stringify({ username, password })
   });
+}
+
+export async function fetchCurrentUser() {
+  return apiFetch<CurrentUser>("/api/auth/me");
 }
