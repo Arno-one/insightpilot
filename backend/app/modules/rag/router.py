@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends
 
 from app.core.queue import get_default_queue
 from app.modules.auth.dependencies import require_permission
+from app.modules.rag.evaluation_service import evaluate_rag_retrieval
 from app.modules.rag.retrieval_service import search_knowledge
-from app.modules.rag.schemas import RagSearchRequest
+from app.modules.rag.schemas import RagEvaluateRequest, RagSearchRequest
 from app.shared.response import success
 
 router = APIRouter()
@@ -35,3 +36,18 @@ def search_rag(
         enable_rerank=data.enable_rerank,
     )
     return success(result.model_dump(), "检索成功", total=len(result.hits))
+
+
+@router.post("/evaluate")
+def evaluate_rag(
+    data: RagEvaluateRequest,
+    current_user: dict = Depends(require_permission("rag:ingest:run")),
+):
+    result = evaluate_rag_retrieval(
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        top_k=data.top_k,
+        limit=data.limit,
+        enable_rerank=data.enable_rerank,
+    )
+    return success(result, "评估完成", total=result["case_count"])

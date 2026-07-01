@@ -23,3 +23,9 @@ class RagSearchResponse(BaseModel):
     rewritten_query: str
     hits: list[RagHit]
     answer_context: str
+
+
+class RagEvaluateRequest(BaseModel):
+    top_k: int = Field(5, ge=1, le=20)
+    limit: int = Field(20, ge=1, le=100)
+    enable_rerank: bool = True

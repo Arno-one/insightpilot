@@ -12,6 +12,7 @@ const navItems = [
   { label: "AI 任务审批", href: "/approvals", permissions: ["approval:review:agent_task"] },
   { label: "销售任务", href: "/tasks", permissions: ["task:read:self", "task:read:team", "task:read:all"] },
   { label: "经营报告", href: "/reports", permissions: ["report:read:team", "report:read:all"] },
+  { label: "RAG 评估", href: "/rag-evaluation", permissions: ["rag:ingest:run"] },
   { label: "Agent 追踪", href: "/agent-trace", permissions: ["agent:log:read"] }
 ];
 
