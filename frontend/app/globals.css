@@ -484,6 +484,12 @@ h1 {
   gap: 18px;
 }
 
+.system-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.95fr);
+  gap: 18px;
+}
+
 .command-panel {
   display: grid;
   gap: 18px;
@@ -1130,6 +1136,61 @@ pre {
   background: rgba(57, 208, 255, 0.06);
 }
 
+.permission-module-list {
+  display: grid;
+  gap: 16px;
+}
+
+.permission-module {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.permission-module strong {
+  font-size: 16px;
+}
+
+.toggle-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.toggle-item {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.toggle-item input {
+  margin-top: 4px;
+}
+
+.toggle-item div {
+  display: grid;
+  gap: 6px;
+}
+
+.toggle-item strong {
+  font-size: 15px;
+}
+
+.toggle-item span,
+.toggle-item small {
+  color: var(--text-muted);
+  line-height: 1.65;
+  word-break: break-word;
+}
+
 @media (max-width: 1180px) {
   .metric-grid,
   .trace-overview {
@@ -1137,6 +1198,7 @@ pre {
   }
 
   .workspace-grid,
+  .system-grid,
   .auth-shell,
   .trace-layout {
     grid-template-columns: 1fr;

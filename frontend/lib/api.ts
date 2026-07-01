@@ -69,6 +69,16 @@ export function hasAnyPermission(user: CurrentUser | null, permissions: string[]
   return permissions.some((permission) => user.permission_codes.includes(permission));
 }
 
+export function getDefaultRoute(user: CurrentUser | null) {
+  if (hasAnyPermission(user, ["crm:customer:read:self"])) {
+    return "/dashboard";
+  }
+  if (hasAnyPermission(user, ["system:rbac:manage", "system:user_role:manage"])) {
+    return "/system/access-control";
+  }
+  return "/login";
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}) {
   const token = getToken();
   const headers = new Headers(init.headers);

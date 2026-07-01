@@ -5,6 +5,7 @@ VALUES ('demo_tenant', 'InsightPilot 演示公司', 1);
 
 INSERT IGNORE INTO sys_role (tenant_id, role_id, role_code, role_name, status, remark)
 VALUES
+('demo_tenant', 'role_admin', 'admin', '系统管理员', 1, '负责角色权限开关与用户角色分配'),
 ('demo_tenant', 'role_owner', 'owner', '老板', 1, '查看全局经营数据、报告与 Agent 执行链路'),
 ('demo_tenant', 'role_manager', 'manager', '销售主管', 1, '管理团队客户风险并审批 AI 任务'),
 ('demo_tenant', 'role_salesperson', 'salesperson', '销售员', 1, '跟进自己负责的客户和销售任务');
@@ -25,10 +26,13 @@ VALUES
 ('perm_task_read_all', 'task:read:all', '查看全部任务', 'task', 'read', '老板查看全部任务', 1),
 ('perm_report_read_team', 'report:read:team', '查看团队报告', 'report', 'read', '查看团队经营报告', 1),
 ('perm_report_read_all', 'report:read:all', '查看全部报告', 'report', 'read', '查看全局经营报告', 1),
+('perm_system_rbac_manage', 'system:rbac:manage', '管理角色权限', 'system', 'manage', '系统管理员维护不同角色的功能权限开关', 1),
+('perm_system_user_role_manage', 'system:user_role:manage', '管理用户角色', 'system', 'manage', '系统管理员维护用户与角色的分配关系', 1),
 ('perm_rag_ingest_run', 'rag:ingest:run', '运行 RAG 入库', 'rag', 'run', '触发 RAG 知识库入库任务', 1);
 
 INSERT IGNORE INTO sys_user (tenant_id, user_id, username, password_hash, real_name, phone, email, status, is_deleted)
 VALUES
+('demo_tenant', 'u_admin_001', 'admin', 'pbkdf2_sha256$600000$8mM3UlAApitBEmZ-dUeyUg$vbcE5u_jhNww8bIxyiRZVPtQCFPSdZeyz0wsIVwTJu0', '系统管理员', '13800000000', 'admin@insightpilot.local', 1, 0),
 ('demo_tenant', 'u_owner_001', 'owner', 'pbkdf2_sha256$600000$sw3mgBMBpcW6KR1MAw1GcQ$xbMHWUVpkYmHfQ8fYywi5gidIzgmtXiVihPFPoN9Wt4', '林总', '13800000001', 'owner@insightpilot.local', 1, 0),
 ('demo_tenant', 'u_manager_001', 'manager', 'pbkdf2_sha256$600000$smTv8qJszI0dxhM8I0HWfw$RxZ6qjmDkDpdMOGAVynrf5gZJ7tdGIfu_o_UL3p3-zk', '周主管', '13800000002', 'manager@insightpilot.local', 1, 0),
 ('demo_tenant', 'u_sales_001', 'sales01', 'pbkdf2_sha256$600000$pIfpQoqyq64eTRgmHhUMgA$ED6hUlXATYFa8Ryv0OkHf7CaAuyKpzv1rxX5Wdb0_jg', '陈晨', '13800000003', 'sales01@insightpilot.local', 1, 0),
@@ -37,6 +41,7 @@ VALUES
 
 INSERT IGNORE INTO sys_user_role (tenant_id, user_id, role_id)
 VALUES
+('demo_tenant', 'u_admin_001', 'role_admin'),
 ('demo_tenant', 'u_owner_001', 'role_owner'),
 ('demo_tenant', 'u_manager_001', 'role_manager'),
 ('demo_tenant', 'u_sales_001', 'role_salesperson'),
@@ -45,6 +50,8 @@ VALUES
 
 INSERT IGNORE INTO sys_role_permission (tenant_id, role_id, permission_id)
 VALUES
+('demo_tenant', 'role_admin', 'perm_system_rbac_manage'),
+('demo_tenant', 'role_admin', 'perm_system_user_role_manage'),
 ('demo_tenant', 'role_owner', 'perm_crm_customer_read_self'),
 ('demo_tenant', 'role_owner', 'perm_crm_customer_read_team'),
 ('demo_tenant', 'role_owner', 'perm_crm_customer_read_all'),

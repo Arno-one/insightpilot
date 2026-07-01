@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { clearSession, CurrentUser, getStoredUser, hasAnyPermission } from "@/lib/api";
+import { clearSession, CurrentUser, getDefaultRoute, getStoredUser, hasAnyPermission } from "@/lib/api";
 
 type NavItem = {
   label: string;
@@ -63,6 +63,13 @@ const navItems: NavItem[] = [
     permissions: ["agent:log:read"],
     eyebrow: "Execution Trace",
     summary: "把 Agent 节点、工具输出和 RAG 证据串成一条可审计的执行链路。"
+  },
+  {
+    label: "系统管理",
+    href: "/system/access-control",
+    permissions: ["system:rbac:manage", "system:user_role:manage"],
+    eyebrow: "Access Control",
+    summary: "集中维护角色权限开关和用户角色分配，确保系统访问边界清晰可控。"
   }
 ];
 
@@ -80,6 +87,9 @@ function roleLabel(roleCodes: string[] | undefined) {
   }
   if (role === "salesperson") {
     return "销售员";
+  }
+  if (role === "admin") {
+    return "系统管理员";
   }
   return role;
 }
@@ -103,6 +113,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // 中文注释：导航仍然由权限控制，保证演示态和真实接口权限校验保持一致。
   const visibleNav = useMemo(() => navItems.filter((item) => hasAnyPermission(user, item.permissions)), [user]);
   const currentSection = visibleNav.find((item) => pathname === item.href) || visibleNav[0] || navItems[0];
+
+  useEffect(() => {
+    if (!ready || !user || !visibleNav.length) {
+      return;
+    }
+    if (!visibleNav.some((item) => item.href === pathname)) {
+      router.replace(getDefaultRoute(user));
+    }
+  }, [pathname, ready, router, user, visibleNav]);
 
   function handleLogout() {
     clearSession();

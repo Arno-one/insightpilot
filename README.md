@@ -31,6 +31,7 @@ docs/      项目文档
 ## 演示账号
 
 ```text
+admin / Admin@123456
 owner / Owner@123456
 manager / Manager@123456
 sales01 / Sales@123456
