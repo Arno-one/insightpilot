@@ -1,5 +1,13 @@
+from pathlib import Path
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# 中文注释：兼容 PyCharm 直接运行 backend/app/main.py 的场景，同时保持项目内部统一使用 app.* 导入。
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 from app.core.config import settings
 from app.core.logging import setup_logging
@@ -48,3 +56,9 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("app.main:app", host=settings.app_host, port=settings.app_port, reload=True)
