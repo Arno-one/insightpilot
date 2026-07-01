@@ -31,11 +31,14 @@ def list_risk_snapshots(
     rows = db.execute(
         text(
             """
-            SELECT risk_snapshot_id, customer_id, owner_user_id, risk_score, risk_level,
-                   llm_reason, llm_suggestion, status, created_at
-            FROM customer_risk_snapshot
-            WHERE tenant_id = :tenant_id
-            ORDER BY risk_score DESC, created_at DESC
+            SELECT rs.risk_snapshot_id, rs.customer_id, rs.owner_user_id, owner.real_name AS owner_user_name,
+                   rs.risk_score, rs.risk_level, rs.llm_reason, rs.llm_suggestion, rs.status, rs.created_at
+            FROM customer_risk_snapshot rs
+            LEFT JOIN sys_user owner
+              ON owner.tenant_id = rs.tenant_id
+             AND owner.user_id = rs.owner_user_id
+            WHERE rs.tenant_id = :tenant_id
+            ORDER BY rs.risk_score DESC, rs.created_at DESC
             LIMIT 100
             """
         ),

@@ -44,10 +44,14 @@ def list_agent_runs(
     rows = db.execute(
         text(
             """
-            SELECT run_id, user_id, run_type, graph_name, status, total_duration_ms, started_at, finished_at
-            FROM agent_run
-            WHERE tenant_id = :tenant_id
-            ORDER BY started_at DESC
+            SELECT ar.run_id, ar.user_id, starter.real_name AS user_real_name, ar.run_type, ar.graph_name,
+                   ar.status, ar.total_duration_ms, ar.started_at, ar.finished_at
+            FROM agent_run ar
+            LEFT JOIN sys_user starter
+              ON starter.tenant_id = ar.tenant_id
+             AND starter.user_id = ar.user_id
+            WHERE ar.tenant_id = :tenant_id
+            ORDER BY ar.started_at DESC
             LIMIT 100
             """
         ),
@@ -66,10 +70,14 @@ def get_agent_run_detail(
     run = db.execute(
         text(
             """
-            SELECT run_id, user_id, run_type, graph_name, input_json, output_json,
-                   status, error_message, started_at, finished_at, total_duration_ms, created_at
-            FROM agent_run
-            WHERE tenant_id = :tenant_id AND run_id = :run_id
+            SELECT ar.run_id, ar.user_id, starter.real_name AS user_real_name, ar.run_type, ar.graph_name,
+                   ar.input_json, ar.output_json, ar.status, ar.error_message, ar.started_at, ar.finished_at,
+                   ar.total_duration_ms, ar.created_at
+            FROM agent_run ar
+            LEFT JOIN sys_user starter
+              ON starter.tenant_id = ar.tenant_id
+             AND starter.user_id = ar.user_id
+            WHERE ar.tenant_id = :tenant_id AND ar.run_id = :run_id
             LIMIT 1
             """
         ),

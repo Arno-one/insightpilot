@@ -14,6 +14,7 @@ type Task = {
   customer_name: string | null;
   deal_id: string | null;
   assignee_user_id: string;
+  assignee_user_name: string | null;
   task_type: string;
   title: string;
   description: string | null;
@@ -238,7 +239,7 @@ export default function TasksPage() {
 
                   <div className="meta-row">
                     <span className="meta-chip">客户 {item.customer_name || item.customer_id}</span>
-                    <span className="meta-chip">负责人 {item.assignee_user_id}</span>
+                    <span className="meta-chip">负责人 {item.assignee_user_name || item.assignee_user_id}</span>
                     <span className={`meta-chip ${isOverdue ? "tone-danger" : ""}`}>
                       截止 {item.due_at ? formatDateTime(item.due_at) : "未设置"}
                     </span>

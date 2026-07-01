@@ -10,6 +10,7 @@ import { formatDateTime, formatDuration, getRunTypeLabel, getStatusMeta } from "
 type AgentRun = {
   run_id: string;
   user_id: string;
+  user_real_name: string | null;
   run_type: string;
   graph_name: string;
   status: string;
@@ -185,7 +186,7 @@ export default function AgentTracePage() {
                     <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
                     <strong>{getRunTypeLabel(item.run_type)}</strong>
                     <small>{item.graph_name}</small>
-                    <small>发起人 {item.user_id}</small>
+                    <small>发起人 {item.user_real_name || item.user_id}</small>
                     <small>开始于 {formatDateTime(item.started_at)}</small>
                     <small>耗时 {formatDuration(item.total_duration_ms)}</small>
                   </button>

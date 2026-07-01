@@ -134,12 +134,16 @@ def list_tasks(
         text(
             f"""
             SELECT t.task_id, t.approval_id, t.customer_id, c.customer_name, t.deal_id, t.assignee_user_id,
+                   assignee.real_name AS assignee_user_name,
                    t.task_type, t.title, t.description, t.recommended_script, t.priority, t.status,
                    t.due_at, t.completed_at, t.result_note, t.created_at
             FROM sales_task t
             LEFT JOIN crm_customer c
               ON c.tenant_id = t.tenant_id
              AND c.customer_id = t.customer_id
+            LEFT JOIN sys_user assignee
+              ON assignee.tenant_id = t.tenant_id
+             AND assignee.user_id = t.assignee_user_id
             WHERE {where_sql}
             ORDER BY t.due_at ASC, t.created_at DESC
             LIMIT 100

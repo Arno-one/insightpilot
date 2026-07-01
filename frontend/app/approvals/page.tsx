@@ -15,7 +15,9 @@ type Approval = {
   proposed_payload_json: Record<string, string> | string;
   status: string;
   requested_by_user_id: string;
+  requested_by_user_name: string | null;
   reviewer_user_id: string | null;
+  reviewer_user_name: string | null;
   created_at: string;
 };
 
@@ -191,9 +193,9 @@ export default function ApprovalsPage() {
                   </div>
 
                   <div className="meta-row">
-                    <span className="meta-chip">发起人 {item.requested_by_user_id}</span>
+                    <span className="meta-chip">发起人 {item.requested_by_user_name || item.requested_by_user_id}</span>
                     <span className="meta-chip">审批时间 {formatDateTime(item.created_at)}</span>
-                    <span className="meta-chip">审批人 {item.reviewer_user_id || "待分配"}</span>
+                    <span className="meta-chip">审批人 {item.reviewer_user_name || item.reviewer_user_id || "待分配"}</span>
                   </div>
 
                   <div className="summary-list">

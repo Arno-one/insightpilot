@@ -22,11 +22,19 @@ def list_approvals(
     rows = db.execute(
         text(
             """
-            SELECT approval_id, approval_type, risk_snapshot_id, customer_id,
-                   proposed_payload_json, status, requested_by_user_id, reviewer_user_id, created_at
-            FROM approval_record
-            WHERE tenant_id = :tenant_id
-            ORDER BY created_at DESC
+            SELECT ar.approval_id, ar.approval_type, ar.risk_snapshot_id, ar.customer_id,
+                   ar.proposed_payload_json, ar.status, ar.requested_by_user_id, ar.reviewer_user_id, ar.created_at,
+                   requester.real_name AS requested_by_user_name,
+                   reviewer.real_name AS reviewer_user_name
+            FROM approval_record ar
+            LEFT JOIN sys_user requester
+              ON requester.tenant_id = ar.tenant_id
+             AND requester.user_id = ar.requested_by_user_id
+            LEFT JOIN sys_user reviewer
+              ON reviewer.tenant_id = ar.tenant_id
+             AND reviewer.user_id = ar.reviewer_user_id
+            WHERE ar.tenant_id = :tenant_id
+            ORDER BY ar.created_at DESC
             LIMIT 100
             """
         ),

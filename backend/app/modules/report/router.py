@@ -30,10 +30,14 @@ def list_reports(
     rows = db.execute(
         text(
             """
-            SELECT report_id, report_type, report_date, summary, suggestions, created_at
-            FROM business_report
-            WHERE tenant_id = :tenant_id
-            ORDER BY report_date DESC, created_at DESC
+            SELECT br.report_id, br.report_type, br.report_date, br.summary, br.suggestions, br.created_at,
+                   br.created_by_user_id, creator.real_name AS created_by_user_name
+            FROM business_report br
+            LEFT JOIN sys_user creator
+              ON creator.tenant_id = br.tenant_id
+             AND creator.user_id = br.created_by_user_id
+            WHERE br.tenant_id = :tenant_id
+            ORDER BY br.report_date DESC, br.created_at DESC
             LIMIT 50
             """
         ),

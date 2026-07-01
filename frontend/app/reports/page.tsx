@@ -13,6 +13,8 @@ type Report = {
   report_date: string;
   summary: string;
   suggestions: string;
+  created_by_user_id: string;
+  created_by_user_name: string | null;
   created_at: string;
 };
 
@@ -147,6 +149,7 @@ export default function ReportsPage() {
                   </div>
                   <div className="report-meta">
                     <span className="meta-chip">报告编号 {item.report_id}</span>
+                    <span className="meta-chip">归属人 {item.created_by_user_name || item.created_by_user_id}</span>
                     <span className="meta-chip">生成时间 {formatDateTime(item.created_at)}</span>
                   </div>
                 </div>

@@ -11,6 +11,7 @@ type RiskSnapshot = {
   risk_snapshot_id: string;
   customer_id: string;
   owner_user_id: string;
+  owner_user_name: string | null;
   risk_score: number;
   risk_level: string;
   llm_reason: string;
@@ -126,7 +127,7 @@ export default function RisksPage() {
                     <span className={`pill ${getRiskMeta(topRisk.risk_level).toneClass}`}>{getRiskMeta(topRisk.risk_level).label}</span>
                     <span className={`pill ${getStatusMeta(topRisk.status).toneClass}`}>{getStatusMeta(topRisk.status).label}</span>
                     <span className="meta-chip">风险分 {topRisk.risk_score}</span>
-                    <span className="meta-chip">负责人 {topRisk.owner_user_id}</span>
+                    <span className="meta-chip">负责人 {topRisk.owner_user_name || topRisk.owner_user_id}</span>
                   </div>
                 </div>
               ) : null}
@@ -171,7 +172,7 @@ export default function RisksPage() {
                   </div>
 
                   <div className="meta-row">
-                    <span className="meta-chip">负责人 {item.owner_user_id}</span>
+                    <span className="meta-chip">负责人 {item.owner_user_name || item.owner_user_id}</span>
                     <span className="meta-chip">快照时间 {formatDateTime(item.created_at)}</span>
                   </div>
 
