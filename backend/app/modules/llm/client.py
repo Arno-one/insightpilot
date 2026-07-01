@@ -20,6 +20,13 @@ class RiskAdvice(BaseModel):
     recommended_script: str = Field(..., description="推荐沟通话术")
 
 
+class ReportNarrative(BaseModel):
+    """经营日报的结构化摘要输出，便于直接写入 business_report。"""
+
+    summary: str = Field(..., description="日报摘要")
+    suggestions: str = Field(..., description="经营建议")
+
+
 def _json_schema_instruction(schema: Type[BaseModel]) -> str:
     """根据 Pydantic Schema 生成简洁 JSON 输出约束。"""
     fields = []
@@ -119,3 +126,56 @@ def generate_risk_advice(customer: dict, deal: dict | None, risk_result: dict, r
     )
     advice = structured_complete(system_prompt, user_message, RiskAdvice)
     return advice or fallback_risk_advice(customer, risk_result)
+
+
+def fallback_report_narrative(metrics: dict, risk_top: list[dict]) -> ReportNarrative:
+    """LLM 不可用时的日报降级文案，保证报表任务可稳定落库。"""
+    high_risk_count = metrics.get("high_risk_customers", 0)
+    pending_approvals = metrics.get("pending_approvals", 0)
+    overdue_tasks = metrics.get("overdue_tasks", 0)
+    open_deal_amount = metrics.get("open_deal_amount", 0)
+    risk_names = "、".join(item.get("customer_name") or item.get("customer_id", "") for item in risk_top[:3]) or "暂无"
+
+    summary = (
+        f"今日销售运营共覆盖 {metrics.get('active_customers', 0)} 个在跟客户，"
+        f"开放商机 {metrics.get('open_deals', 0)} 个，开放商机金额约 {open_deal_amount} 元。"
+        f"当前中高风险客户 {metrics.get('medium_risk_customers', 0) + high_risk_count} 个，"
+        f"其中高风险 {high_risk_count} 个；待审批 AI 任务 {pending_approvals} 条，"
+        f"逾期任务 {overdue_tasks} 条。"
+    )
+
+    suggestions = []
+    if high_risk_count:
+        suggestions.append(f"优先处理高风险客户：{risk_names}，先由主管确认是否需要介入。")
+    if pending_approvals:
+        suggestions.append(f"尽快完成 {pending_approvals} 条待审批 AI 任务，避免建议停留在草稿状态。")
+    if overdue_tasks:
+        suggestions.append(f"清理 {overdue_tasks} 条逾期任务，先确认是否仍有跟进价值，再更新下一步动作。")
+    if not suggestions:
+        suggestions.append("当前经营风险整体可控，建议保持稳定跟进节奏，并持续补齐下一次跟进时间。")
+
+    return ReportNarrative(summary=summary, suggestions=" ".join(suggestions))
+
+
+def generate_business_report_narrative(metrics: dict, risk_top: list[dict]) -> ReportNarrative:
+    """生成经营日报摘要和建议；LLM 失败时自动降级为规则模板。"""
+    system_prompt = (
+        "你是 InsightPilot 的企业运营参谋。"
+        "请基于经营指标和高风险客户列表生成简洁、可执行的经营日报。"
+        "不要编造未提供的数据，不要直接创建任务，只能提出建议。"
+    )
+    user_message = json.dumps(
+        {
+            "metrics": metrics,
+            "risk_top": risk_top,
+            "writing_rules": [
+                "摘要控制在 150 字以内",
+                "建议要可执行，优先提醒审批、风险客户和逾期任务",
+                "不要输出 Markdown",
+            ],
+        },
+        ensure_ascii=False,
+        default=str,
+    )
+    narrative = structured_complete(system_prompt, user_message, ReportNarrative)
+    return narrative or fallback_report_narrative(metrics, risk_top)
