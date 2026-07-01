@@ -1,21 +1,67 @@
 # InsightPilot 文档索引
 
-当前目录用于沉淀项目设计文档。完整交付文档最初生成在 Codex outputs 目录，后续可以复制到本目录继续维护。
+更新时间：2026-07-01
 
-建议纳入的文档：
+本目录用于沉淀 InsightPilot 的产品、技术、数据和测试文档。当前文档已按项目真实实现状态完成一次校准，后续新增功能时请优先同步这里，避免出现“代码已变、文档还停留在旧版本”的情况。
 
-- `insightpilot_prd.md`：产品需求文档。
-- `insightpilot_technical_design.md`：技术方案文档。
-- `insightpilot_er_design.md`：完整 ER 设计。
-- `RAG高级架构流程总结.md`：RAG 从切片到评估的完整流程。
+## 1. 建议阅读顺序
 
-V1 开发顺序：
+1. `insightpilot_version_status_and_roadmap.md`
+2. `insightpilot_prd.md`
+3. `insightpilot_technical_design.md`
+4. `insightpilot_er_design.md`
+5. `testing/` 下的联调与验证记录
 
-1. 后端核心配置、数据库、Redis、RQ。
-2. 初始化 SQL 和模拟数据。
-3. Auth + JWT + RBAC。
-4. CRM 查询和风险规则引擎。
-5. RAG 入库和检索。
-6. LangGraph 风险分析图。
-7. 审批、销售任务和经营日报。
-8. Next.js SaaS 工作台接入真实接口。
+## 2. 核心文档说明
+
+- `insightpilot_version_status_and_roadmap.md`
+  当前版本真实状态、已完成能力、未完成边界，以及下一版本的迭代路线。
+- `insightpilot_prd.md`
+  产品目标、用户角色、核心闭环、验收口径与阶段目标。
+- `insightpilot_technical_design.md`
+  当前技术架构、模块分层、数据库策略、RAG 与 Agent 设计、异步任务链路。
+- `insightpilot_er_design.md`
+  数据表设计、字段说明、表间关系约定与演示数据覆盖原则。
+
+## 3. 当前版本事实基线
+
+- 当前项目已经完成 V1 骨架和主演示链路，不再是纯占位工程。
+- 前端已完成 V2 工作台改造，核心页面包括：
+  - 登录页
+  - 经营驾驶舱
+  - 风险中心
+  - AI 审批台
+  - 销售任务
+  - 经营报告
+  - Agent Trace
+  - RAG 评估
+- 数据库基线已重建：
+  - `backend/scripts/init_schema.sql` 已补齐中文表注释和字段注释
+  - `backend/scripts/seed_demo_data.sql` 已替换为更真实的模拟数据
+  - `backend/alembic/versions/20260701_0001_init_schema_with_comments.py` 已作为首个 Alembic baseline revision
+- 数据库设计继续坚持两条原则：
+  - 不设置外键
+  - 仅通过同名字段做隐式关联
+- 风险扫描当前已经可跑通“规则识别 -> RAG 增强 -> LLM 建议 -> 人工审批草稿 -> Agent Trace 落库”主链路。
+- `langgraph` 依赖已经接入，但风险扫描和日报生成目前仍由 Worker 顺序流执行，图编排尚未正式落地。
+
+## 4. 下一版本边界
+
+下一版本不再泛化铺摊子，先聚焦一件事：
+
+- 优先把风险扫描流程迁移到真实 `LangGraph` 风险扫描图。
+
+本阶段约束如下：
+
+- 只先落 `风险扫描图`
+- 保留现有接口返回结构
+- 保留 `agent_run`、`agent_step`、`rag_retrieval_trace` 等落库行为
+- 保留前端 Agent Trace 页面当前依赖的节点展示方式
+- 同时把 `backend/app/workers/risk_jobs.py` 做模块化拆分，避免继续堆大函数
+
+## 5. 文档维护约定
+
+- 任何影响用户理解的变更，都要同步更新 PRD 或版本路线图。
+- 任何影响架构认知的变更，都要同步更新技术方案文档。
+- 任何影响表结构、字段含义、初始化方式的变更，都要同步更新 ER 文档或初始化说明。
+- 如果实现和文档不一致，以代码为准，但要尽快把文档补齐。
