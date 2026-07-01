@@ -98,8 +98,91 @@ def _approval_due_policy(risk_level: str) -> str:
     return "tomorrow" if risk_level == "high" else "in_2_days"
 
 
-def _insert_risk_and_approval(db, tenant_id: str, run_id: str, requester_user_id: str, customer: dict, deal: dict | None, risk_result: dict) -> dict:
-    advice = generate_risk_advice(customer, deal, risk_result)
+def _build_rag_question(customer: dict, deal: dict | None, risk_result: dict) -> str:
+    """把结构化风险结果改写成知识库检索问题，避免直接把整包 JSON 扔给向量库。"""
+    rule_names = "、".join(hit["rule_name"] for hit in risk_result["rule_hits"]) or "暂无明显规则命中"
+    parts = [
+        f"客户{customer.get('customer_name', customer.get('customer_id'))}当前风险等级为{risk_result['risk_level']}，命中规则：{rule_names}。",
+        "请检索适合的销售SOP、报价跟进策略、异议处理话术和下一步行动建议。",
+    ]
+    if deal:
+        parts.append(f"商机阶段为{deal.get('deal_stage')}，金额为{deal.get('amount')}。")
+    if customer.get("competitor_involved"):
+        parts.append("客户已出现竞品介入，需要竞品异议处理建议。")
+    if customer.get("last_sentiment") == "negative":
+        parts.append("客户最近沟通情绪偏负面，需要更稳妥的话术。")
+    return " ".join(parts)
+
+
+def _retrieve_rag_context(tenant_id: str, user_id: str, customer: dict, deal: dict | None, risk_result: dict) -> dict:
+    """检索销售知识库；RAG 是增强链路，失败时必须降级，不能阻断规则扫描和人工审批。"""
+    question = _build_rag_question(customer, deal, risk_result)
+    try:
+        # 中文注释：延迟导入 RAG，避免 Worker 启动时因向量库依赖问题影响其他任务。
+        from app.modules.rag.retrieval_service import search_knowledge
+
+        response = search_knowledge(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            question=question,
+            top_k=3,
+            enable_rerank=True,
+        )
+        return {
+            "status": "success",
+            "question": question,
+            "trace_id": response.trace_id,
+            "hit_count": len(response.hits),
+            "context": response.answer_context,
+            "sources": [
+                {
+                    "source_type": hit.source_type,
+                    "doc_id": hit.doc_id,
+                    "section_id": hit.section_id,
+                    "rank_no": hit.rank_no,
+                }
+                for hit in response.hits
+            ],
+        }
+    except Exception as exc:
+        logger.warning("RAG 检索失败，风险扫描自动降级: customer_id=%s, error=%s", customer.get("customer_id"), exc)
+        return {
+            "status": "failed",
+            "question": question,
+            "trace_id": None,
+            "hit_count": 0,
+            "context": "",
+            "sources": [],
+            "error": str(exc),
+        }
+
+
+def _with_rag_evidence(risk_result: dict, rag_result: dict) -> dict:
+    """把 RAG 检索元信息写入风险证据，便于后续审计和前端追踪。"""
+    evidence = {
+        **risk_result.get("evidence", {}),
+        "rag_trace_id": rag_result.get("trace_id"),
+        "rag_hit_count": rag_result.get("hit_count", 0),
+        "rag_status": rag_result.get("status"),
+        "rag_sources": rag_result.get("sources", []),
+    }
+    if rag_result.get("error"):
+        evidence["rag_error"] = rag_result["error"][:500]
+    return {**risk_result, "evidence": evidence}
+
+
+def _insert_risk_and_approval(
+    db,
+    tenant_id: str,
+    run_id: str,
+    requester_user_id: str,
+    customer: dict,
+    deal: dict | None,
+    risk_result: dict,
+    rag_result: dict,
+) -> dict:
+    enriched_risk_result = _with_rag_evidence(risk_result, rag_result)
+    advice = generate_risk_advice(customer, deal, enriched_risk_result, rag_context=rag_result.get("context", ""))
     risk_snapshot_id = new_id("risk")
     approval_id = new_id("appr")
 
@@ -134,10 +217,10 @@ def _insert_risk_and_approval(db, tenant_id: str, run_id: str, requester_user_id
             "customer_id": customer["customer_id"],
             "deal_id": deal["deal_id"] if deal else None,
             "owner_user_id": customer["owner_user_id"],
-            "risk_score": risk_result["risk_score"],
-            "risk_level": risk_result["risk_level"],
-            "rule_hits_json": _dumps(risk_result["rule_hits"]),
-            "evidence_json": _dumps(risk_result["evidence"]),
+            "risk_score": enriched_risk_result["risk_score"],
+            "risk_level": enriched_risk_result["risk_level"],
+            "rule_hits_json": _dumps(enriched_risk_result["rule_hits"]),
+            "evidence_json": _dumps(enriched_risk_result["evidence"]),
             "llm_reason": advice.reason,
             "llm_suggestion": advice.suggestion,
             "suggested_task_json": _dumps(suggested_task),
@@ -173,8 +256,10 @@ def _insert_risk_and_approval(db, tenant_id: str, run_id: str, requester_user_id
         "risk_snapshot_id": risk_snapshot_id,
         "approval_id": approval_id,
         "customer_id": customer["customer_id"],
-        "risk_score": risk_result["risk_score"],
-        "risk_level": risk_result["risk_level"],
+        "risk_score": enriched_risk_result["risk_score"],
+        "risk_level": enriched_risk_result["risk_level"],
+        "rag_trace_id": rag_result.get("trace_id"),
+        "rag_hit_count": rag_result.get("hit_count", 0),
     }
 
 
@@ -222,9 +307,29 @@ def run_risk_scan(tenant_id: str, user_id: str) -> dict:
         _insert_step(db, tenant_id, run_id, "calculate_rule_risk", "success", t0, {"candidate_count": len(risk_candidates)}, "risk_rule_tool")
 
         t0 = time.time()
-        created = []
+        rag_results = []
         for customer, deal, risk_result in risk_candidates:
-            created.append(_insert_risk_and_approval(db, tenant_id, run_id, user_id, customer, deal, risk_result))
+            rag_results.append(_retrieve_rag_context(tenant_id, user_id, customer, deal, risk_result))
+        _insert_step(
+            db,
+            tenant_id,
+            run_id,
+            "retrieve_sales_knowledge",
+            "success",
+            t0,
+            {
+                "retrieval_count": len(rag_results),
+                "success_count": sum(1 for item in rag_results if item["status"] == "success"),
+                "failed_count": sum(1 for item in rag_results if item["status"] != "success"),
+                "trace_ids": [item["trace_id"] for item in rag_results if item.get("trace_id")],
+            },
+            "rag_retrieval_tool",
+        )
+
+        t0 = time.time()
+        created = []
+        for (customer, deal, risk_result), rag_result in zip(risk_candidates, rag_results, strict=True):
+            created.append(_insert_risk_and_approval(db, tenant_id, run_id, user_id, customer, deal, risk_result, rag_result))
         _insert_step(db, tenant_id, run_id, "generate_task_draft", "success", t0, {"created_count": len(created)}, "llm_risk_advice_tool")
 
         finished_at = datetime.now()
