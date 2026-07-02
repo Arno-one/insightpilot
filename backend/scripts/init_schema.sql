@@ -264,6 +264,29 @@ CREATE TABLE IF NOT EXISTS sales_task (
   KEY idx_approval_id (approval_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='销售任务表';
 
+CREATE TABLE IF NOT EXISTS approval_task_event (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '数据库自增主键',
+  tenant_id VARCHAR(64) NOT NULL COMMENT '所属租户 ID',
+  event_id VARCHAR(64) NOT NULL COMMENT '事件业务主键',
+  entity_type VARCHAR(20) NOT NULL COMMENT '事件主体类型：approval / task',
+  entity_id VARCHAR(64) NOT NULL COMMENT '事件主体业务 ID',
+  approval_id VARCHAR(64) NULL COMMENT '关联审批 ID',
+  task_id VARCHAR(64) NULL COMMENT '关联任务 ID',
+  customer_id VARCHAR(64) NOT NULL COMMENT '所属客户 ID',
+  risk_snapshot_id VARCHAR(64) NULL COMMENT '关联风险快照 ID',
+  action_type VARCHAR(50) NOT NULL COMMENT '动作类型，例如 approval_created / task_completed',
+  operator_user_id VARCHAR(64) NOT NULL COMMENT '操作人用户 ID',
+  note TEXT NULL COMMENT '动作说明或备注',
+  detail_json JSON NULL COMMENT '动作补充细节 JSON',
+  happened_at DATETIME NOT NULL COMMENT '动作发生时间',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  UNIQUE KEY uk_event_id (event_id),
+  KEY idx_tenant_customer_time (tenant_id, customer_id, happened_at),
+  KEY idx_tenant_approval_time (tenant_id, approval_id, happened_at),
+  KEY idx_tenant_task_time (tenant_id, task_id, happened_at),
+  KEY idx_tenant_entity_time (tenant_id, entity_type, entity_id, happened_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='审批与任务关键动作留痕表';
+
 CREATE TABLE IF NOT EXISTS agent_run (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '数据库自增主键',
   tenant_id VARCHAR(64) NOT NULL COMMENT '所属租户 ID',

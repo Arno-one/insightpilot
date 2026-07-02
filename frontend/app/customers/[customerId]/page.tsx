@@ -7,7 +7,14 @@ import { useEffect, useMemo, useState } from "react";
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
 import { apiFetch } from "@/lib/api";
-import { formatDate, formatDateTime, getPriorityMeta, getReportTypeLabel, getRiskMeta, getStatusMeta } from "@/lib/presentation";
+import {
+  formatDate,
+  formatDateTime,
+  getPriorityMeta,
+  getReportTypeLabel,
+  getRiskMeta,
+  getStatusMeta
+} from "@/lib/presentation";
 
 type Customer = {
   customer_id: string;
@@ -86,6 +93,22 @@ type FollowUp = {
   occurred_at: string;
 };
 
+type WorkflowEvent = {
+  event_id: string;
+  entity_type: "approval" | "task";
+  entity_id: string;
+  approval_id: string | null;
+  task_id: string | null;
+  customer_id: string;
+  risk_snapshot_id: string | null;
+  action_type: string;
+  operator_user_id: string;
+  operator_user_name: string | null;
+  note: string | null;
+  detail_json: Record<string, unknown>;
+  happened_at: string;
+};
+
 type Approval = {
   approval_id: string;
   approval_type: string;
@@ -104,6 +127,7 @@ type Approval = {
     recommended_script?: string;
     priority?: string;
   };
+  events: WorkflowEvent[];
 };
 
 type Task = {
@@ -122,6 +146,7 @@ type Task = {
   completed_at: string | null;
   result_note: string | null;
   created_at: string;
+  events: WorkflowEvent[];
 };
 
 type ReportRef = {
@@ -153,7 +178,7 @@ function formatCurrency(value: number | null | undefined) {
   return new Intl.NumberFormat("zh-CN", {
     style: "currency",
     currency: "CNY",
-    maximumFractionDigits: 0,
+    maximumFractionDigits: 0
   }).format(value);
 }
 
@@ -165,7 +190,23 @@ function labelValue(value: string | number | null | undefined) {
 }
 
 function evidenceEntries(evidence: Record<string, unknown>) {
-  return Object.entries(evidence).filter(([, value]) => value !== null && value !== "" && typeof value !== "object").slice(0, 6);
+  return Object.entries(evidence)
+    .filter(([, value]) => value !== null && value !== "" && typeof value !== "object")
+    .slice(0, 6);
+}
+
+function getWorkflowEventLabel(actionType: string) {
+  const labels: Record<string, string> = {
+    approval_created: "提交审批",
+    approval_approved: "审批通过",
+    approval_rejected: "审批驳回",
+    approval_approved_with_changes: "修改后通过",
+    task_created: "创建任务",
+    task_in_progress: "开始执行",
+    task_completed: "执行完成",
+    task_cancelled: "取消任务"
+  };
+  return labels[actionType] || actionType;
 }
 
 export default function CustomerDetailPage() {
@@ -205,7 +246,9 @@ export default function CustomerDetailPage() {
     setMessage("");
     setError("");
     try {
-      const response = await apiFetch<{ job_id: string }>(`/api/risk/customers/${customerId}/scan`, { method: "POST" });
+      const response = await apiFetch<{ job_id: string }>(`/api/risk/customers/${customerId}/scan`, {
+        method: "POST"
+      });
       setMessage(`当前客户风险重算任务已提交，任务号：${response.data.job_id}`);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "客户风险重算提交失败。");
@@ -257,7 +300,9 @@ export default function CustomerDetailPage() {
       {message ? <p className="success-text">{message}</p> : null}
       {error ? <ErrorCard message={error} detail="请确认客户权限、后端接口与 Worker 链路是否正常。" /> : null}
       {loading ? <LoadingCard detail="正在汇总客户基础信息、风险快照、跟进、审批和任务摘要。" /> : null}
-      {!loading && !detail && !error ? <EmptyCard text="未找到客户详情。" detail="请从风险中心重新进入，或确认当前账号是否有该客户查看权限。" /> : null}
+      {!loading && !detail && !error ? (
+        <EmptyCard text="未找到客户详情。" detail="请从风险中心重新进入，或确认当前账号是否有该客户查看权限。" />
+      ) : null}
 
       {detail ? (
         <>
@@ -265,7 +310,9 @@ export default function CustomerDetailPage() {
             <article className="metric-card">
               <strong className="metric-value">{latestRiskMeta.label}</strong>
               <span className="metric-label">当前风险等级</span>
-              <p className="metric-detail">{selectedRisk ? `风险分快照为 ${selectedRisk.risk_score}` : "当前还没有生成风险快照。"}</p>
+              <p className="metric-detail">
+                {selectedRisk ? `风险分数快照为 ${selectedRisk.risk_score}` : "当前还没有生成风险快照。"}
+              </p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{detail.risk_snapshots.length}</strong>
@@ -275,7 +322,7 @@ export default function CustomerDetailPage() {
             <article className="metric-card">
               <strong className="metric-value">{pendingApprovalCount}</strong>
               <span className="metric-label">待审批动作</span>
-              <p className="metric-detail">AI 建议是否真正进入执行，关键就卡在这里。</p>
+              <p className="metric-detail">AI 建议是否真正进入执行，关键就在这里。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{activeTaskCount}</strong>
@@ -321,7 +368,9 @@ export default function CustomerDetailPage() {
                       <strong>命中规则</strong>
                       <p>
                         {selectedRisk.rule_hits_json.length
-                          ? selectedRisk.rule_hits_json.map((item) => `${item.rule_name || "未命名规则"}${item.score ? `（+${item.score}）` : ""}`).join("、")
+                          ? selectedRisk.rule_hits_json
+                              .map((item) => `${item.rule_name || "未命名规则"}${item.score ? `（${item.score}）` : ""}`)
+                              .join("、")
                           : "当前没有结构化规则命中明细。"}
                       </p>
                     </div>
@@ -329,7 +378,9 @@ export default function CustomerDetailPage() {
                       <strong>证据线索</strong>
                       <p>
                         {evidenceEntries(selectedRisk.evidence_json).length
-                          ? evidenceEntries(selectedRisk.evidence_json).map(([key, value]) => `${key}: ${String(value)}`).join("；")
+                          ? evidenceEntries(selectedRisk.evidence_json)
+                              .map(([key, value]) => `${key}: ${String(value)}`)
+                              .join("；")
                           : "当前没有可直接展示的证据摘要。"}
                       </p>
                     </div>
@@ -433,8 +484,8 @@ export default function CustomerDetailPage() {
                     <div className="summary-item" key={item.deal_id}>
                       <strong>{item.deal_name}</strong>
                       <p>
-                        阶段 {labelValue(item.stage)}，金额 {formatCurrency(item.amount)}，报价 {formatCurrency(item.quote_amount)}，关闭结果{" "}
-                        {labelValue(item.close_result)}。
+                        阶段 {labelValue(item.stage)}，金额 {formatCurrency(item.amount)}，报价 {formatCurrency(item.quote_amount)}，
+                        关闭结果 {labelValue(item.close_result)}。
                       </p>
                       <div className="meta-row">
                         <span className="meta-chip">负责人 {item.owner_user_name || item.owner_user_id}</span>
@@ -488,7 +539,7 @@ export default function CustomerDetailPage() {
               <div className="panel-header">
                 <div>
                   <p className="eyebrow">Approvals & Tasks</p>
-                  <h2>审批和执行摘要</h2>
+                  <h2>审批与执行摘要</h2>
                 </div>
                 <div className="page-actions">
                   <Link className="button-secondary" href={`/approvals?customerId=${customerId}`}>
@@ -513,13 +564,33 @@ export default function CustomerDetailPage() {
                           <span className="meta-chip">发起人 {item.requested_by_user_name || item.requested_by_user_id}</span>
                           <span className="meta-chip">审批时间 {formatDateTime(item.created_at)}</span>
                         </div>
+                        {item.events.length ? (
+                          <div className="detail-list">
+                            {item.events.map((event) => (
+                              <div className="detail-item" key={event.event_id}>
+                                <strong>
+                                  {getWorkflowEventLabel(event.action_type)} · {event.operator_user_name || event.operator_user_id}
+                                </strong>
+                                <p>{event.note || "当前动作没有补充说明。"}</p>
+                                <span className="meta-chip">发生时间 {formatDateTime(event.happened_at)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="detail-list">
+                            <div className="detail-item">
+                              <strong>暂时没有操作留痕</strong>
+                              <p>这条审批多半是历史数据，后续一旦继续被处理，新的操作会自动补进轨迹。</p>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })
                 ) : (
                   <div className="summary-item">
                     <strong>当前没有审批记录</strong>
-                    <p>说明该客户的风险建议还没进入人工决策环节，或者之前的风险已被处理干净。</p>
+                    <p>说明该客户的风险建议还没进入人工决策环节，或者之前的风险已经被处理干净。</p>
                   </div>
                 )}
 
@@ -534,6 +605,26 @@ export default function CustomerDetailPage() {
                         <span className="meta-chip">负责人 {item.assignee_user_name || item.assignee_user_id}</span>
                         <span className="meta-chip">截止时间 {formatDateTime(item.due_at)}</span>
                       </div>
+                      {item.events.length ? (
+                        <div className="detail-list">
+                          {item.events.map((event) => (
+                            <div className="detail-item" key={event.event_id}>
+                              <strong>
+                                {getWorkflowEventLabel(event.action_type)} · {event.operator_user_name || event.operator_user_id}
+                              </strong>
+                              <p>{event.note || "当前动作没有补充说明。"}</p>
+                              <span className="meta-chip">发生时间 {formatDateTime(event.happened_at)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="detail-list">
+                          <div className="detail-item">
+                            <strong>暂时没有操作留痕</strong>
+                            <p>如果这是旧任务数据，后续开始执行、完成或取消时，会自动把轨迹补齐。</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))
                 ) : (

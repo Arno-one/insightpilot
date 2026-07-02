@@ -14,6 +14,7 @@ from app.core.database import SessionLocal
 from app.modules.llm.client import generate_risk_advice
 from app.modules.risk.rules import calculate_risk_score
 from app.shared.ids import new_id
+from app.shared.workflow_event import log_workflow_event
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,24 @@ def _insert_risk_and_approval(
             "customer_id": customer["customer_id"],
             "proposed_payload_json": _dumps(suggested_task),
             "requested_by_user_id": requester_user_id,
+        },
+    )
+    log_workflow_event(
+        db,
+        tenant_id=tenant_id,
+        entity_type="approval",
+        entity_id=approval_id,
+        approval_id=approval_id,
+        customer_id=customer["customer_id"],
+        risk_snapshot_id=risk_snapshot_id,
+        action_type="approval_created",
+        operator_user_id=requester_user_id,
+        note="AI 风险建议已进入人工审批队列",
+        detail={
+            "approval_type": "agent_task_draft",
+            "title": advice.task_title,
+            "priority": advice.priority,
+            "assignee_user_id": customer["owner_user_id"],
         },
     )
 

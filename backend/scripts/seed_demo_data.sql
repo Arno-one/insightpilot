@@ -200,6 +200,22 @@ VALUES
 ('demo_tenant','task_007',NULL,'c_007','d_007','u_sales_001','u_manager_001','delivery_handoff','青木物流成交后交付衔接','确认交付负责人、启动会时间和上线前准备事项。','我们已经进入交付阶段，这次主要想把启动会参与人和业务目标先对齐好。','medium','in_progress',DATE_ADD(NOW(), INTERVAL 3 DAY)),
 ('demo_tenant','task_012',NULL,'c_012','d_012','u_sales_003','u_manager_001','solution_follow','橙子科技技术评估资料准备','整理接口说明、权限控制和安全机制说明。','我先把技术评估需要的接口和权限材料整理给您，方便技术团队快速判断。','medium','pending',DATE_ADD(NOW(), INTERVAL 4 DAY));
 
+INSERT IGNORE INTO approval_task_event (
+  tenant_id, event_id, entity_type, entity_id, approval_id, task_id, customer_id,
+  risk_snapshot_id, action_type, operator_user_id, note, detail_json, happened_at
+)
+VALUES
+('demo_tenant','evt_seed_appr_001_created','approval','appr_001','appr_001',NULL,'c_001','risk_001','approval_created','u_manager_001','AI 风险建议已进入人工审批队列','{"approval_type":"agent_task_draft","priority":"urgent"}',DATE_SUB(NOW(), INTERVAL 62 MINUTE)),
+('demo_tenant','evt_seed_appr_003_created','approval','appr_003','appr_003',NULL,'c_003','risk_003','approval_created','u_manager_001','AI 风险建议已进入人工审批队列','{"approval_type":"agent_task_draft","priority":"medium"}',DATE_SUB(NOW(), INTERVAL 62 MINUTE)),
+('demo_tenant','evt_seed_appr_003_approved','approval','appr_003','appr_003',NULL,'c_003','risk_003','approval_approved','u_manager_001','同意先由销售低压力跟进，暂不需要主管出面','{"review_comment":"同意先由销售低压力跟进，暂不需要主管出面"}',DATE_SUB(NOW(), INTERVAL 20 MINUTE)),
+('demo_tenant','evt_seed_appr_006_created','approval','appr_006','appr_006',NULL,'c_006','risk_006','approval_created','u_manager_001','AI 风险建议已进入人工审批队列','{"approval_type":"agent_task_draft","priority":"urgent"}',DATE_SUB(NOW(), INTERVAL 62 MINUTE)),
+('demo_tenant','evt_seed_appr_011_created','approval','appr_011','appr_011',NULL,'c_011','risk_011','approval_created','u_manager_001','AI 风险建议已进入人工审批队列','{"approval_type":"agent_task_draft","priority":"urgent"}',DATE_SUB(NOW(), INTERVAL 62 MINUTE)),
+('demo_tenant','evt_seed_appr_011_rejected','approval','appr_011','appr_011',NULL,'c_011','risk_011','approval_rejected','u_manager_001','先补齐客户组织关系图和历史报价对比，再安排高层会谈','{"review_comment":"先补齐客户组织关系图和历史报价对比，再安排高层会谈"}',DATE_SUB(NOW(), INTERVAL 10 MINUTE)),
+('demo_tenant','evt_seed_task_003_created','task','task_003','appr_003','task_003','c_003','risk_003','task_created','u_manager_001','审批通过后已创建正式销售任务','{"title":"跟进南和商贸报价反馈","priority":"medium"}',DATE_SUB(NOW(), INTERVAL 20 MINUTE)),
+('demo_tenant','evt_seed_task_007_created','task','task_007',NULL,'task_007','c_007',NULL,'task_created','u_manager_001','任务已创建，等待执行','{"title":"青木物流成交后交付衔接","priority":"medium"}',DATE_SUB(NOW(), INTERVAL 2 DAY)),
+('demo_tenant','evt_seed_task_007_progress','task','task_007',NULL,'task_007','c_007',NULL,'task_in_progress','u_sales_001','任务已开始执行','{"status":"in_progress"}',DATE_SUB(NOW(), INTERVAL 1 DAY)),
+('demo_tenant','evt_seed_task_012_created','task','task_012',NULL,'task_012','c_012',NULL,'task_created','u_manager_001','任务已创建，等待执行','{"title":"橙子科技技术评估资料准备","priority":"medium"}',DATE_SUB(NOW(), INTERVAL 4 DAY));
+
 INSERT IGNORE INTO business_report (
   tenant_id, report_id, run_id, report_type, report_date, summary, metrics_json,
   risk_top_json, suggestions, created_by_user_id

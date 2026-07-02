@@ -9,6 +9,7 @@ from app.modules.auth.dependencies import require_permission
 from app.modules.task.schemas import UpdateTaskStatusRequest
 from app.shared.ids import new_id
 from app.shared.response import success
+from app.shared.workflow_event import log_workflow_event
 
 router = APIRouter()
 
@@ -69,10 +70,10 @@ def _create_follow_up_from_task(
     current_user: dict,
     task: dict,
     data: UpdateTaskStatusRequest,
+    happened_at: datetime,
 ) -> str:
     """任务完成时自动回写一条跟进记录，保证执行结果能回流到 CRM。"""
     follow_up_id = new_id("fu")
-    occurred_at = datetime.now()
     result_note = data.result_note or "已按任务要求完成本次跟进。"
     follow_up_content = data.follow_up_content or f"完成任务《{task['title']}》：{result_note}"
 
@@ -101,7 +102,7 @@ def _create_follow_up_from_task(
             "customer_feedback": data.customer_feedback,
             "next_action": data.next_action or result_note[:255],
             "next_follow_up_at": data.next_follow_up_at,
-            "occurred_at": occurred_at,
+            "occurred_at": happened_at,
         },
     )
 
@@ -118,7 +119,7 @@ def _create_follow_up_from_task(
         {
             "tenant_id": current_user["tenant_id"],
             "customer_id": task["customer_id"],
-            "last_follow_up_at": occurred_at,
+            "last_follow_up_at": happened_at,
             "next_follow_up_at": data.next_follow_up_at,
             "last_sentiment": data.sentiment or "neutral",
         },
@@ -207,7 +208,7 @@ def update_task_status(
     result_note = data.result_note or task.get("result_note")
 
     if data.status == "completed":
-        follow_up_id = _create_follow_up_from_task(db, current_user, task, data)
+        follow_up_id = _create_follow_up_from_task(db, current_user, task, data, happened_at=now)
         completed_at = now
 
     db.execute(
@@ -251,6 +252,38 @@ def update_task_status(
                     "status": risk_status,
                 },
             )
+
+    action_type = {
+        "in_progress": "task_in_progress",
+        "completed": "task_completed",
+        "cancelled": "task_cancelled",
+    }[data.status]
+    action_note = {
+        "in_progress": "任务已开始执行",
+        "completed": "任务已完成，并已回写跟进记录",
+        "cancelled": "任务已取消",
+    }[data.status]
+    log_workflow_event(
+        db,
+        tenant_id=current_user["tenant_id"],
+        entity_type="task",
+        entity_id=task_id,
+        approval_id=task.get("approval_id"),
+        task_id=task_id,
+        customer_id=task["customer_id"],
+        risk_snapshot_id=task.get("risk_snapshot_id"),
+        action_type=action_type,
+        operator_user_id=current_user["user_id"],
+        note=result_note or action_note,
+        detail={
+            "status": data.status,
+            "result_note": result_note,
+            "follow_up_id": follow_up_id,
+            "sentiment": data.sentiment,
+            "next_follow_up_at": data.next_follow_up_at,
+        },
+        happened_at=now,
+    )
 
     db.commit()
     return success(

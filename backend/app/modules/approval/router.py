@@ -6,10 +6,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.auth.dependencies import require_permission
 from app.modules.approval.schemas import ApproveWithChangesRequest, RejectApprovalRequest
+from app.modules.auth.dependencies import require_permission
 from app.shared.ids import new_id
 from app.shared.response import success
+from app.shared.workflow_event import log_workflow_event
 
 router = APIRouter()
 
@@ -113,8 +114,14 @@ def _resolve_due_at(policy: str | None):
     return now + timedelta(days=2)
 
 
-def _create_task_from_approval(db: Session, approval: dict, payload: dict, reviewer_user_id: str) -> str:
-    """审批通过后创建正式销售任务；AI 草稿本身不直接落任务。"""
+def _create_task_from_approval(
+    db: Session,
+    approval: dict,
+    payload: dict,
+    reviewer_user_id: str,
+    happened_at: datetime | None = None,
+) -> str:
+    """审批通过后创建正式销售任务，避免同一条审批重复落任务。"""
     existing = db.execute(
         text(
             """
@@ -161,6 +168,26 @@ def _create_task_from_approval(db: Session, approval: dict, payload: dict, revie
             "due_at": _resolve_due_at(payload.get("due_at")),
         },
     )
+    log_workflow_event(
+        db,
+        tenant_id=approval["tenant_id"],
+        entity_type="task",
+        entity_id=task_id,
+        approval_id=approval["approval_id"],
+        task_id=task_id,
+        customer_id=approval["customer_id"],
+        risk_snapshot_id=approval.get("risk_snapshot_id"),
+        action_type="task_created",
+        operator_user_id=reviewer_user_id,
+        note="审批通过后已创建正式销售任务",
+        detail={
+            "task_type": payload.get("task_type", "quote_follow"),
+            "title": payload.get("title", "AI 风险跟进任务"),
+            "priority": payload.get("priority", "medium"),
+            "assignee_user_id": payload.get("assignee_user_id"),
+        },
+        happened_at=happened_at,
+    )
     return task_id
 
 
@@ -191,7 +218,8 @@ def approve(
 ):
     approval = _get_pending_approval(db, current_user["tenant_id"], approval_id)
     payload = _loads_json(approval["proposed_payload_json"])
-    task_id = _create_task_from_approval(db, approval, payload, current_user["user_id"])
+    reviewed_at = datetime.now()
+    review_comment = "审批通过，已创建正式销售任务"
 
     db.execute(
         text(
@@ -208,9 +236,30 @@ def approve(
             "tenant_id": current_user["tenant_id"],
             "approval_id": approval_id,
             "reviewer_user_id": current_user["user_id"],
-            "reviewed_at": datetime.now(),
-            "review_comment": "审批通过，已创建正式销售任务",
+            "reviewed_at": reviewed_at,
+            "review_comment": review_comment,
         },
+    )
+    log_workflow_event(
+        db,
+        tenant_id=current_user["tenant_id"],
+        entity_type="approval",
+        entity_id=approval_id,
+        approval_id=approval_id,
+        customer_id=approval["customer_id"],
+        risk_snapshot_id=approval.get("risk_snapshot_id"),
+        action_type="approval_approved",
+        operator_user_id=current_user["user_id"],
+        note="审批通过，已进入正式执行",
+        detail={"review_comment": review_comment},
+        happened_at=reviewed_at,
+    )
+    task_id = _create_task_from_approval(
+        db,
+        approval,
+        payload,
+        current_user["user_id"],
+        happened_at=reviewed_at,
     )
     if approval.get("risk_snapshot_id"):
         db.execute(
@@ -224,7 +273,7 @@ def approve(
             {"tenant_id": current_user["tenant_id"], "risk_snapshot_id": approval["risk_snapshot_id"]},
         )
     db.commit()
-    return success({"task_id": task_id}, "审批通过，已创建销售任务")
+    return success({"task_id": task_id}, review_comment)
 
 
 @router.post("/{approval_id}/reject")
@@ -235,6 +284,9 @@ def reject(
     db: Session = Depends(get_db),
 ):
     approval = _get_pending_approval(db, current_user["tenant_id"], approval_id)
+    reviewed_at = datetime.now()
+    review_comment = data.review_comment or "审批驳回"
+
     db.execute(
         text(
             """
@@ -250,9 +302,23 @@ def reject(
             "tenant_id": current_user["tenant_id"],
             "approval_id": approval_id,
             "reviewer_user_id": current_user["user_id"],
-            "reviewed_at": datetime.now(),
-            "review_comment": data.review_comment or "审批驳回",
+            "reviewed_at": reviewed_at,
+            "review_comment": review_comment,
         },
+    )
+    log_workflow_event(
+        db,
+        tenant_id=current_user["tenant_id"],
+        entity_type="approval",
+        entity_id=approval_id,
+        approval_id=approval_id,
+        customer_id=approval["customer_id"],
+        risk_snapshot_id=approval.get("risk_snapshot_id"),
+        action_type="approval_rejected",
+        operator_user_id=current_user["user_id"],
+        note=review_comment,
+        detail={"review_comment": review_comment},
+        happened_at=reviewed_at,
     )
     if approval.get("risk_snapshot_id"):
         db.execute(
@@ -279,9 +345,9 @@ def approve_with_changes(
     approval = _get_pending_approval(db, current_user["tenant_id"], approval_id)
     payload = _loads_json(approval["proposed_payload_json"])
     changes = data.model_dump(exclude_none=True)
-    review_comment = changes.pop("review_comment", None)
+    review_comment = changes.pop("review_comment", None) or "修改后审批通过"
     payload.update(changes)
-    task_id = _create_task_from_approval(db, approval, payload, current_user["user_id"])
+    reviewed_at = datetime.now()
 
     db.execute(
         text(
@@ -300,9 +366,30 @@ def approve_with_changes(
             "approval_id": approval_id,
             "proposed_payload_json": json.dumps(payload, ensure_ascii=False),
             "reviewer_user_id": current_user["user_id"],
-            "reviewed_at": datetime.now(),
-            "review_comment": review_comment or "修改后审批通过",
+            "reviewed_at": reviewed_at,
+            "review_comment": review_comment,
         },
+    )
+    log_workflow_event(
+        db,
+        tenant_id=current_user["tenant_id"],
+        entity_type="approval",
+        entity_id=approval_id,
+        approval_id=approval_id,
+        customer_id=approval["customer_id"],
+        risk_snapshot_id=approval.get("risk_snapshot_id"),
+        action_type="approval_approved_with_changes",
+        operator_user_id=current_user["user_id"],
+        note=review_comment,
+        detail={"review_comment": review_comment, "changes": changes},
+        happened_at=reviewed_at,
+    )
+    task_id = _create_task_from_approval(
+        db,
+        approval,
+        payload,
+        current_user["user_id"],
+        happened_at=reviewed_at,
     )
     if approval.get("risk_snapshot_id"):
         db.execute(

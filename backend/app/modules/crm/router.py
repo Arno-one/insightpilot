@@ -44,6 +44,12 @@ def _serialize_approval(row: dict) -> dict:
     return item
 
 
+def _serialize_workflow_event(row: dict) -> dict:
+    item = dict(row)
+    item["detail_json"] = _loads_json(item.get("detail_json")) or {}
+    return item
+
+
 def _load_customer_or_404(db: Session, current_user: dict, customer_id: str) -> dict:
     params = {
         "tenant_id": current_user["tenant_id"],
@@ -265,6 +271,39 @@ def get_customer_detail(
         ),
         {"tenant_id": current_user["tenant_id"], "customer_id": customer_id},
     ).mappings().all()
+    tasks = [dict(row) for row in task_rows]
+
+    event_rows = db.execute(
+        text(
+            """
+            SELECT e.event_id, e.entity_type, e.entity_id, e.approval_id, e.task_id, e.customer_id,
+                   e.risk_snapshot_id, e.action_type, e.operator_user_id, operator.real_name AS operator_user_name,
+                   e.note, e.detail_json, e.happened_at
+            FROM approval_task_event e
+            LEFT JOIN sys_user operator
+              ON operator.tenant_id = e.tenant_id
+             AND operator.user_id = e.operator_user_id
+            WHERE e.tenant_id = :tenant_id
+              AND e.customer_id = :customer_id
+            ORDER BY e.happened_at ASC, e.id ASC
+            LIMIT 100
+            """
+        ),
+        {"tenant_id": current_user["tenant_id"], "customer_id": customer_id},
+    ).mappings().all()
+    workflow_events = [_serialize_workflow_event(row) for row in event_rows]
+    approval_events: dict[str, list[dict]] = {}
+    task_events: dict[str, list[dict]] = {}
+    for item in workflow_events:
+        if item.get("approval_id"):
+            approval_events.setdefault(item["approval_id"], []).append(item)
+        if item.get("task_id"):
+            task_events.setdefault(item["task_id"], []).append(item)
+
+    for item in approvals:
+        item["events"] = approval_events.get(item["approval_id"], [])
+    for item in tasks:
+        item["events"] = task_events.get(item["task_id"], [])
 
     report_rows = db.execute(
         text(
@@ -295,7 +334,7 @@ def get_customer_detail(
             "deals": list(deal_rows),
             "follow_ups": list(follow_up_rows),
             "approvals": approvals,
-            "tasks": list(task_rows),
+            "tasks": tasks,
             "report_refs": list(report_rows),
         },
         "查询成功",
