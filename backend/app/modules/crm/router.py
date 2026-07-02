@@ -1,11 +1,12 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.auth.dependencies import require_permission
+from app.modules.crm.import_service import build_template_csv, import_csv_file
 from app.shared.response import success
 
 router = APIRouter()
@@ -74,12 +75,38 @@ def _load_customer_or_404(db: Session, current_user: dict, customer_id: str) -> 
     return dict(row)
 
 
+@router.get("/import/templates/{entity}.csv")
+def download_import_template(
+    entity: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+):
+    """下载三类 CRM 数据的最小必需字段模板。"""
+    file_name, csv_content = build_template_csv(entity)
+    return Response(
+        content=csv_content.encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
+
+
+@router.post("/import/{entity}")
+async def import_crm_csv(
+    entity: str,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """统一处理客户、商机、跟进记录三类 CSV 导入。"""
+    result = await import_csv_file(entity, file, current_user, db)
+    return success(result, "导入完成")
+
+
 @router.get("/customers")
 def list_customers(
     current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
-    """客户列表；V1 先按角色决定数据范围，后续可下沉到策略对象。"""
+    """客户列表，V1 先按角色决定数据范围，后续可下沉到策略对象。"""
     params = {"tenant_id": current_user["tenant_id"], "user_id": current_user["user_id"]}
     where_sql = _customer_scope_where(current_user, "c")
 
@@ -110,7 +137,7 @@ def get_customer_detail(
     current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
-    """客户详情聚合接口：围绕一个客户把风险、执行和经营引用汇总到同一个入口。"""
+    """客户详情聚合接口，围绕一个客户把风险、执行和经营引用汇总到同一个入口。"""
     customer = _load_customer_or_404(db, current_user, customer_id)
 
     risk_rows = db.execute(
@@ -162,8 +189,8 @@ def get_customer_detail(
     deal_rows = db.execute(
         text(
             """
-            SELECT deal_id, owner_user_id, owner.real_name AS owner_user_name, deal_name, stage,
-                   amount, quote_amount, quoted_at, expected_close_at, closed_at, close_result, updated_at
+            SELECT d.deal_id, d.owner_user_id, owner.real_name AS owner_user_name, d.deal_name, d.stage,
+                   d.amount, d.quote_amount, d.quoted_at, d.expected_close_at, d.closed_at, d.close_result, d.updated_at
             FROM crm_deal d
             LEFT JOIN sys_user owner
               ON owner.tenant_id = d.tenant_id
@@ -256,7 +283,7 @@ def get_customer_detail(
         ),
         {
             "tenant_id": current_user["tenant_id"],
-            "customer_pattern": f'%{customer_id}%',
+            "customer_pattern": f"%{customer_id}%",
         },
     ).mappings().all()
 

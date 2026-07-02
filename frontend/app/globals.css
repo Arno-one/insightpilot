@@ -959,6 +959,32 @@ pre {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.import-upload-box {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.import-file-field {
+  display: grid;
+  gap: 10px;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.import-file-field input {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 16px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .compact-input {
   min-height: 40px;
   margin-left: 10px;

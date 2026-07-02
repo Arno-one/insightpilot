@@ -23,6 +23,13 @@ const navItems: NavItem[] = [
     summary: "汇总今日风险、审批、执行与日报信号，给管理层一个可立即行动的全景面板。"
   },
   {
+    label: "数据导入",
+    href: "/imports",
+    permissions: ["crm:customer:read:self"],
+    eyebrow: "CRM Intake",
+    summary: "把客户、商机和跟进记录按统一模板导入系统，并在入库前就拿到清晰校验反馈。"
+  },
+  {
     label: "客户风险中心",
     href: "/risks",
     permissions: ["crm:risk:read:team", "crm:risk:read:all"],

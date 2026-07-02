@@ -83,10 +83,23 @@ export function getDefaultRoute(user: CurrentUser | null) {
   return "/login";
 }
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}) {
+function shouldUseJsonContentType(body: BodyInit | null | undefined) {
+  if (!body) {
+    return false;
+  }
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    return false;
+  }
+  return true;
+}
+
+async function requestWithAuth(path: string, init: RequestInit = {}) {
   const token = getToken();
   const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
+  // 中文注释：只有普通 JSON 请求才补 Content-Type，FormData 要交给浏览器自动追加 boundary。
+  if (!headers.has("Content-Type") && shouldUseJsonContentType(init.body)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -101,11 +114,34 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}) {
     clearSession();
   }
 
+  return response;
+}
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}) {
+  const response = await requestWithAuth(path, init);
+
   const body = (await response.json().catch(() => null)) as ApiResponse<T> | null;
   if (!response.ok || !body || body.code !== 200) {
     throw new Error(body?.msg || `请求失败：${response.status}`);
   }
   return body;
+}
+
+export async function apiFetchBlob(path: string, init: RequestInit = {}) {
+  const response = await requestWithAuth(path, init);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as ApiResponse<null> | null;
+    throw new Error(body?.msg || `请求失败：${response.status}`);
+  }
+
+  const fileName = response.headers
+    .get("Content-Disposition")
+    ?.match(/filename="?([^"]+)"?/)?.[1] || "download.csv";
+
+  return {
+    blob: await response.blob(),
+    fileName
+  };
 }
 
 export async function login(username: string, password: string) {
