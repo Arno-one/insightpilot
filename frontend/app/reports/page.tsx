@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
@@ -18,7 +20,10 @@ type Report = {
   created_at: string;
 };
 
-export default function ReportsPage() {
+function ReportsPageContent() {
+  const searchParams = useSearchParams();
+  const customerFilter = searchParams.get("customerId");
+
   const [items, setItems] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -28,7 +33,8 @@ export default function ReportsPage() {
     setLoading(true);
     setError("");
     try {
-      const response = await apiFetch<Report[]>("/api/reports");
+      const query = customerFilter ? `?customer_id=${encodeURIComponent(customerFilter)}` : "";
+      const response = await apiFetch<Report[]>(`/api/reports${query}`);
       setItems(response.data);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "经营报告加载失败。");
@@ -50,7 +56,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     loadReports();
-  }, []);
+  }, [customerFilter]);
 
   // 中文注释：默认把最新报告抬到最上面，先满足老板和主管“今天发生了什么”的阅读路径。
   const latestReport = useMemo(() => items[0], [items]);
@@ -61,9 +67,22 @@ export default function ReportsPage() {
         <div>
           <p className="eyebrow">Executive Brief</p>
           <h1>把风险、审批和执行压缩成一份老板能在几分钟内读完的简报。</h1>
-          <p className="lead">日报不是流水账，它应该帮助管理层快速看到风险重心、执行节奏与下一步经营动作。</p>
+          <p className="lead">
+            日报不是流水账，它应该帮助管理层快速看到风险重心、执行节奏与下一步经营动作。
+            {customerFilter ? ` 当前已聚焦客户 ${customerFilter}。` : ""}
+          </p>
         </div>
         <div className="page-actions">
+          {customerFilter ? (
+            <>
+              <Link className="button-secondary" href={`/customers/${customerFilter}`}>
+                返回客户详情
+              </Link>
+              <Link className="ghost-button inline" href="/reports">
+                查看全部报告
+              </Link>
+            </>
+          ) : null}
           <button className="button" onClick={generateReport} type="button">
             生成最新日报
           </button>
@@ -77,7 +96,10 @@ export default function ReportsPage() {
       {error ? <ErrorCard message={error} detail="如果生成失败，请优先检查 Worker、Redis 与经营日报任务链路。" /> : null}
       {loading ? <LoadingCard detail="正在拉取历史日报与经营摘要。" /> : null}
       {!loading && !items.length && !error ? (
-        <EmptyCard text="当前还没有经营报告。" detail="建议先完成一轮风险扫描，再生成日报，内容会更完整。" />
+        <EmptyCard
+          text={customerFilter ? "当前客户还没有被经营报告引用。" : "当前还没有经营报告。"}
+          detail={customerFilter ? "这通常说明该客户还没进入最近几期的重点风险客户名单。" : "建议先完成一轮风险扫描，再生成日报，内容会更完整。"}
+        />
       ) : null}
 
       {items.length ? (
@@ -85,8 +107,8 @@ export default function ReportsPage() {
           <section className="metric-grid">
             <article className="metric-card">
               <strong className="metric-value">{items.length}</strong>
-              <span className="metric-label">累计报告</span>
-              <p className="metric-detail">可以快速展示系统已经具备持续输出经营简报的能力。</p>
+              <span className="metric-label">{customerFilter ? "关联报告" : "累计报告"}</span>
+              <p className="metric-detail">{customerFilter ? "当前客户最近被哪些经营报告提及，一眼就能看出来。" : "可以快速展示系统已经具备持续输出经营简报的能力。"}</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{formatDate(latestReport?.report_date)}</strong>
@@ -101,7 +123,7 @@ export default function ReportsPage() {
             <article className="metric-card">
               <strong className="metric-value">{latestReport ? "已同步" : "待生成"}</strong>
               <span className="metric-label">今日态势</span>
-              <p className="metric-detail">生成成功后，建议同时去 Trace 页面核验执行链路。</p>
+              <p className="metric-detail">{customerFilter ? "可以快速确认这个客户是否持续出现在管理层视角里。" : "生成成功后，建议同时去 Trace 页面核验执行链路。"}</p>
             </article>
           </section>
 
@@ -110,7 +132,7 @@ export default function ReportsPage() {
               <div className="panel-header">
                 <div>
                   <p className="eyebrow">Latest Summary</p>
-                  <h2>最新一份报告最值得看的内容</h2>
+                  <h2>{customerFilter ? "这位客户最近一次被报告提到的内容" : "最新一份报告最值得看的内容"}</h2>
                 </div>
               </div>
               <div className="summary-item">
@@ -170,5 +192,13 @@ export default function ReportsPage() {
         </>
       ) : null}
     </AppShell>
+  );
+}
+
+export default function ReportsPage() {
+  return (
+    <Suspense fallback={<AppShell><LoadingCard detail="正在拉取历史日报与经营摘要。" /></AppShell>}>
+      <ReportsPageContent />
+    </Suspense>
   );
 }

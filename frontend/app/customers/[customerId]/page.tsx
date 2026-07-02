@@ -553,8 +553,8 @@ export default function CustomerDetailPage() {
                   <p className="eyebrow">Report References</p>
                   <h2>最近被哪些经营报告提到</h2>
                 </div>
-                <Link className="button-secondary" href="/reports">
-                  打开经营报告
+                <Link className="button-secondary" href={`/reports?customerId=${customerId}`}>
+                  查看该客户报告
                 </Link>
               </div>
               <div className="summary-list">
