@@ -229,6 +229,54 @@ def _with_rag_evidence(risk_result: dict[str, Any], rag_result: dict[str, Any]) 
     return {**risk_result, "evidence": evidence}
 
 
+def _build_additional_advice_context(payload: dict[str, Any]) -> str:
+    """把内部工具补充到的客户经营上下文压缩成文本，供建议生成阶段直接消费。"""
+    parts: list[str] = []
+
+    customer_detail = payload.get("customer_detail")
+    if isinstance(customer_detail, dict):
+        follow_ups = customer_detail.get("follow_ups", [])
+        approvals = customer_detail.get("approvals", [])
+        tasks = customer_detail.get("tasks", [])
+        report_refs = customer_detail.get("report_refs", [])
+        risk_snapshots = customer_detail.get("risk_snapshots", [])
+        if follow_ups:
+            latest_follow_up = follow_ups[0]
+            parts.append(
+                "最近跟进："
+                f"{latest_follow_up.get('follow_up_type', 'unknown')}，"
+                f"时间 {latest_follow_up.get('occurred_at', 'unknown')}。"
+            )
+        if approvals:
+            pending_approvals = sum(1 for item in approvals if item.get("status") == "pending")
+            parts.append(f"客户近期待审批草稿 {pending_approvals} 条，审批记录总计 {len(approvals)} 条。")
+        if tasks:
+            active_tasks = sum(1 for item in tasks if item.get("status") in {"pending", "in_progress"})
+            parts.append(f"客户当前活跃任务 {active_tasks} 条，任务记录总计 {len(tasks)} 条。")
+        if risk_snapshots:
+            latest_snapshot = risk_snapshots[0]
+            parts.append(
+                f"最近风险快照等级 {latest_snapshot.get('risk_level', 'unknown')}，"
+                f"分数 {latest_snapshot.get('risk_score', 'unknown')}。"
+            )
+        if report_refs:
+            latest_report = report_refs[0]
+            parts.append(
+                f"最近关联报告 {latest_report.get('report_type', 'unknown')} / "
+                f"{latest_report.get('report_date', 'unknown')}。"
+            )
+
+    report_items = payload.get("related_reports")
+    if isinstance(report_items, list) and report_items:
+        latest_report = report_items[0]
+        parts.append(
+            "经营报告摘要："
+            f"{str(latest_report.get('summary') or '')[:120]}"
+        )
+
+    return "\n".join(part for part in parts if part).strip()
+
+
 def _insert_risk_and_approval(
     db: Session,
     tenant_id: str,
@@ -366,17 +414,21 @@ def _build_risk_tool_registry() -> InternalToolRegistry:
                 "sources": [],
             },
         )
+        additional_context = _build_additional_advice_context(payload)
+        rag_context = rag_result.get("context", "")
+        merged_context = "\n\n".join(part for part in [rag_context, additional_context] if part).strip()
         enriched_risk_result = _with_rag_evidence(payload["risk_result"], rag_result)
         advice = generate_risk_advice(
             payload["customer"],
             payload.get("deal"),
             enriched_risk_result,
-            rag_context=rag_result.get("context", ""),
+            rag_context=merged_context,
         )
         return {
             "advice": advice.model_dump(),
             "rag_status": rag_result.get("status"),
             "rag_hit_count": rag_result.get("hit_count", 0),
+            "context_summary": additional_context,
         }
 
     def create_risk_draft_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
@@ -506,7 +558,7 @@ def build_risk_analysis_graph(db: Session):
             planner_tools = [
                 tool
                 for tool in tool_registry.list_tool_specs()
-                if tool["name"] in {"rag.retrieve_sales_context", "risk.generate_advice"}
+                if tool["name"] in {"crm.get_customer_detail", "report.query", "rag.retrieve_sales_context", "risk.generate_advice"}
             ]
             planned_actions = []
             total_steps = 0
@@ -553,6 +605,8 @@ def build_risk_analysis_graph(db: Session):
                     "customer": item["customer"],
                     "deal": item["deal"],
                     "risk_result": item["risk_result"],
+                    "customer_id": item["customer"]["customer_id"],
+                    "owner_user_id": item["customer"].get("owner_user_id"),
                 }
                 execution_records = []
                 for step in item["plan"]["steps"]:
@@ -565,7 +619,11 @@ def build_risk_analysis_graph(db: Session):
                         }
                     )
                     total_calls += 1
-                    if step["tool_name"] == "rag.retrieve_sales_context":
+                    if step["tool_name"] == "crm.get_customer_detail":
+                        payload["customer_detail"] = execution["output"]
+                    elif step["tool_name"] == "report.query":
+                        payload["related_reports"] = execution["output"].get("items", [])
+                    elif step["tool_name"] == "rag.retrieve_sales_context":
                         payload["rag_result"] = execution["output"]
                     elif step["tool_name"] == "risk.generate_advice":
                         payload["advice"] = execution["output"]["advice"]
@@ -586,7 +644,14 @@ def build_risk_analysis_graph(db: Session):
                             "customer_id": item["customer"]["customer_id"],
                             "customer_name": item["customer"].get("customer_name"),
                             "tools": [record["tool_name"] for record in item["tool_executions"]],
+                            "context_tools": [
+                                record["tool_name"]
+                                for record in item["tool_executions"]
+                                if record["tool_name"] in {"crm.get_customer_detail", "report.query"}
+                            ],
                             "rag_trace_id": item.get("rag_result", {}).get("trace_id"),
+                            "report_count": len(item.get("related_reports", [])),
+                            "detail_loaded": bool(item.get("customer_detail")),
                             "advice_ready": bool(item.get("advice")),
                         }
                         for item in executed_actions[:5]

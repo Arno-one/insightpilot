@@ -282,6 +282,62 @@ def test_build_shared_internal_tools_supports_second_batch_handlers(monkeypatch)
     ]
 
 
+def test_customer_detail_and_report_query_tools_can_reuse_customer_payload(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(
+        internal_tools,
+        "_load_current_user_context",
+        lambda context: {
+            "tenant_id": context.tenant_id,
+            "user_id": context.user_id,
+            "permission_codes": ["crm:customer:read:self", "report:read:team"],
+        },
+    )
+    monkeypatch.setattr(
+        internal_tools,
+        "load_customer_detail_bundle",
+        lambda db, current_user, customer_id, **kwargs: calls.append(
+            ("crm.get_customer_detail", {"customer_id": customer_id, **kwargs})
+        )
+        or {"customer": {"customer_id": customer_id}},
+    )
+    monkeypatch.setattr(
+        internal_tools,
+        "query_reports",
+        lambda db, current_user, **kwargs: calls.append(("report.query", kwargs)) or [{"report_id": "report_001"}],
+    )
+
+    registry = InternalToolRegistry(build_shared_internal_tools())
+    context = _tool_context()
+    payload = {
+        "customer": {
+            "customer_id": "cust_001",
+            "owner_user_id": "u_sales_001",
+        }
+    }
+
+    detail_result = registry.execute("crm.get_customer_detail", context, payload)
+    report_result = registry.execute("report.query", context, payload)
+
+    assert detail_result["output"]["customer"]["customer_id"] == "cust_001"
+    assert report_result["output"]["total"] == 1
+    assert calls == [
+        ("crm.get_customer_detail", {"customer_id": "cust_001", "risk_snapshot_id": None}),
+        (
+            "report.query",
+            {
+                "customer_id": "cust_001",
+                "owner_user_id": "u_sales_001",
+                "report_type": None,
+                "date_from": None,
+                "date_to": None,
+                "limit": 20,
+            },
+        ),
+    ]
+
+
 def test_report_generate_tool_supports_iso_date_payload(monkeypatch):
     class _DummyJob:
         id = "job_demo_002"

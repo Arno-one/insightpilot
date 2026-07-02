@@ -49,6 +49,56 @@ class ReportNarrative(BaseModel):
     suggestions: str = Field(..., description="经营建议")
 
 
+def _risk_tool_names(available_tools: list[dict[str, str]]) -> set[str]:
+    return {tool["name"] for tool in available_tools}
+
+
+def _has_customer_follow_up_gap(customer: dict) -> bool:
+    return not customer.get("last_follow_up_at") or not customer.get("next_follow_up_at")
+
+
+def _deal_amount_value(deal: dict | None) -> float:
+    if not deal:
+        return 0.0
+    for field_name in ("amount", "quote_amount"):
+        value = deal.get(field_name)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def _finalize_risk_plan_steps(
+    steps: list[RiskToolPlanStep],
+    available_tools: list[dict[str, str]],
+) -> list[RiskToolPlanStep]:
+    """统一清洗 Planner 步骤，确保工具合法、去重且最终会生成结构化建议。"""
+    available_tool_names = _risk_tool_names(available_tools)
+    deduped_steps: list[RiskToolPlanStep] = []
+    seen_tools: set[str] = set()
+    for step in steps:
+        if step.tool_name not in available_tool_names or step.tool_name in seen_tools:
+            continue
+        deduped_steps.append(step)
+        seen_tools.add(step.tool_name)
+
+    if "risk.generate_advice" in available_tool_names and "risk.generate_advice" not in seen_tools:
+        deduped_steps.append(
+            RiskToolPlanStep(
+                tool_name="risk.generate_advice",
+                reason="在上下文补齐后生成结构化风险建议，供 Reviewer 判断是否进入人工审批。",
+            )
+        )
+    elif "risk.generate_advice" in seen_tools:
+        advice_step = next(step for step in deduped_steps if step.tool_name == "risk.generate_advice")
+        deduped_steps = [step for step in deduped_steps if step.tool_name != "risk.generate_advice"] + [advice_step]
+
+    return deduped_steps
+
+
 def _json_schema_instruction(schema: Type[BaseModel]) -> str:
     """直接输出 Pydantic 的 JSON Schema，方便嵌套结构稳定返回。"""
     return json.dumps(schema.model_json_schema(), ensure_ascii=False, indent=2)
@@ -118,10 +168,39 @@ def fallback_risk_advice(customer: dict, risk_result: dict) -> RiskAdvice:
     )
 
 
-def fallback_risk_tool_plan(available_tools: list[dict[str, str]]) -> RiskToolPlan:
-    """LLM 不可用时的保底规划，先查知识，再生成建议。"""
-    available_tool_names = {tool["name"] for tool in available_tools}
+def fallback_risk_tool_plan(
+    customer: dict,
+    deal: dict | None,
+    risk_result: dict,
+    available_tools: list[dict[str, str]],
+) -> RiskToolPlan:
+    """LLM 不可用时的保底规划，也尽量按风险场景动态选择最合适的工具。"""
+    available_tool_names = _risk_tool_names(available_tools)
     steps: list[RiskToolPlanStep] = []
+    needs_customer_detail = bool(
+        risk_result.get("risk_level") == "high"
+        or customer.get("competitor_involved")
+        or _has_customer_follow_up_gap(customer)
+    )
+    needs_report_context = bool(
+        risk_result.get("risk_score", 0) >= 60
+        or _deal_amount_value(deal) >= 50000
+    )
+
+    if needs_customer_detail and "crm.get_customer_detail" in available_tool_names:
+        steps.append(
+            RiskToolPlanStep(
+                tool_name="crm.get_customer_detail",
+                reason="先补齐该客户最近的风险、审批、任务和跟进上下文，避免建议只看当前快照。",
+            )
+        )
+    if needs_report_context and "report.query" in available_tool_names:
+        steps.append(
+            RiskToolPlanStep(
+                tool_name="report.query",
+                reason="补充近期经营报告和风险趋势，判断当前客户问题是否已连续出现。",
+            )
+        )
     if "rag.retrieve_sales_context" in available_tool_names:
         steps.append(
             RiskToolPlanStep(
@@ -129,22 +208,21 @@ def fallback_risk_tool_plan(available_tools: list[dict[str, str]]) -> RiskToolPl
                 reason="先补销售知识和历史话术上下文，避免只靠规则分数给建议。",
             )
         )
-    if "risk.generate_advice" in available_tool_names:
-        steps.append(
-            RiskToolPlanStep(
-                tool_name="risk.generate_advice",
-                reason="基于规则命中和知识上下文生成可进入审批的人审建议草稿。",
-            )
-        )
+    steps = _finalize_risk_plan_steps(steps, available_tools)
     if not steps:
-        steps.append(
+        steps = [
             RiskToolPlanStep(
                 tool_name="risk.generate_advice",
                 reason="当前没有其他可用工具时，至少生成结构化风险建议。",
             )
-        )
+        ]
+    selected_tool_names = [step.tool_name for step in steps]
     return RiskToolPlan(
-        thinking="先补充可用上下文，再生成结构化建议，最后交给 Reviewer 判定是否进入人工审批。",
+        thinking=(
+            "先按风险等级补齐客户经营上下文，再生成结构化建议，最后交给 Reviewer 判定是否进入人工审批。"
+            if any(tool_name in selected_tool_names for tool_name in ("crm.get_customer_detail", "report.query"))
+            else "先补充可用上下文，再生成结构化建议，最后交给 Reviewer 判定是否进入人工审批。"
+        ),
         steps=steps,
     )
 
@@ -160,6 +238,7 @@ def plan_risk_tool_calls(
         "你是 InsightPilot 风险 Agent 的 Planner。"
         "你只能从给定内部工具里挑选最少步骤，不能创建正式任务，不能跳过人工审批。"
         "当前阶段只允许规划 Review 之前的分析工具，不要输出审批创建动作。"
+        "如果客户风险较高、跟进缺口明显或需要历史经营视角，可以优先选择 CRM / Report 工具补充上下文。"
     )
     user_message = json.dumps(
         {
@@ -169,6 +248,8 @@ def plan_risk_tool_calls(
             "available_tools": available_tools,
             "planning_rules": [
                 "优先选择能补齐上下文和生成结构化建议的工具",
+                "当客户跟进缺口明显、审批任务较多或高风险时，可以先用 crm.get_customer_detail",
+                "当需要近期经营趋势、历史风险摘要或高金额商机背景时，可以用 report.query",
                 "步骤按实际执行顺序输出",
                 "不要输出未提供的工具名",
                 "不要输出 review 或审批创建动作",
@@ -179,12 +260,11 @@ def plan_risk_tool_calls(
     )
     plan = structured_complete(system_prompt, user_message, RiskToolPlan)
     if not plan:
-        return fallback_risk_tool_plan(available_tools)
+        return fallback_risk_tool_plan(customer, deal, risk_result, available_tools)
 
-    available_tool_names = {tool["name"] for tool in available_tools}
-    valid_steps = [step for step in plan.steps if step.tool_name in available_tool_names]
+    valid_steps = _finalize_risk_plan_steps(plan.steps, available_tools)
     if not valid_steps:
-        return fallback_risk_tool_plan(available_tools)
+        return fallback_risk_tool_plan(customer, deal, risk_result, available_tools)
     return RiskToolPlan(thinking=plan.thinking, steps=valid_steps)
 
 

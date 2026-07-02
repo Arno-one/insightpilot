@@ -78,6 +78,78 @@ def test_plan_risk_tool_calls_falls_back_to_internal_minimal_sequence(monkeypatc
     ]
 
 
+def test_plan_risk_tool_calls_fallback_expands_to_customer_and_report_context(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
+
+    plan = llm_client.plan_risk_tool_calls(
+        customer={
+            "customer_id": "cust_001",
+            "customer_name": "上海样例客户",
+            "owner_user_id": "u_sales_001",
+            "competitor_involved": 1,
+            "last_follow_up_at": None,
+            "next_follow_up_at": None,
+        },
+        deal={"deal_id": "deal_001", "stage": "quotation", "amount": 88000},
+        risk_result={
+            "risk_score": 76,
+            "risk_level": "high",
+            "rule_hits": [{"rule_name": "连续14天未跟进"}],
+            "evidence": {},
+        },
+        available_tools=[
+            {"name": "crm.get_customer_detail", "description": "拉取客户聚合详情"},
+            {"name": "report.query", "description": "查询历史经营报告"},
+            {"name": "rag.retrieve_sales_context", "description": "检索销售知识"},
+            {"name": "risk.generate_advice", "description": "生成风险建议"},
+        ],
+    )
+
+    assert [step.tool_name for step in plan.steps] == [
+        "crm.get_customer_detail",
+        "report.query",
+        "rag.retrieve_sales_context",
+        "risk.generate_advice",
+    ]
+    assert "上下文" in plan.thinking
+
+
+def test_plan_risk_tool_calls_ensures_generate_advice_as_last_step(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "demo-key")
+
+    def fake_structured_complete(system_prompt: str, user_message: str, schema):
+        return llm_client.RiskToolPlan(
+            thinking="先查，再给建议。",
+            steps=[
+                llm_client.RiskToolPlanStep(tool_name="risk.generate_advice", reason="先生成"),
+                llm_client.RiskToolPlanStep(tool_name="crm.get_customer_detail", reason="再补详情"),
+                llm_client.RiskToolPlanStep(tool_name="risk.generate_advice", reason="重复步骤"),
+            ],
+        )
+
+    monkeypatch.setattr(llm_client, "structured_complete", fake_structured_complete)
+
+    plan = llm_client.plan_risk_tool_calls(
+        customer={"customer_id": "cust_001", "customer_name": "上海样例客户"},
+        deal=None,
+        risk_result={
+            "risk_score": 55,
+            "risk_level": "medium",
+            "rule_hits": [{"rule_name": "客户沉默"}],
+            "evidence": {},
+        },
+        available_tools=[
+            {"name": "crm.get_customer_detail", "description": "拉取客户聚合详情"},
+            {"name": "risk.generate_advice", "description": "生成风险建议"},
+        ],
+    )
+
+    assert [step.tool_name for step in plan.steps] == [
+        "crm.get_customer_detail",
+        "risk.generate_advice",
+    ]
+
+
 def test_review_risk_tool_results_fallback_blocks_incomplete_advice(monkeypatch):
     monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
 

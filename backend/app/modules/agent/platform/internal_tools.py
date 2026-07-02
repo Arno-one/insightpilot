@@ -61,6 +61,11 @@ def _require_payload_value(payload: dict, key: str):
     return value
 
 
+def _payload_customer(payload: dict) -> dict:
+    customer = payload.get("customer")
+    return customer if isinstance(customer, dict) else {}
+
+
 def _parse_report_date(value) -> date | None:
     if value in (None, ""):
         return None
@@ -92,7 +97,10 @@ def build_shared_internal_tools() -> list[ToolDefinition]:
     def crm_detail_tool(context: ToolExecutionContext, payload: dict) -> dict:
         current_user = _load_current_user_context(context)
         _require_permission(current_user, "crm:customer:read:self")
-        customer_id = _require_payload_value(payload, "customer_id")
+        customer = _payload_customer(payload)
+        customer_id = payload.get("customer_id") or customer.get("customer_id")
+        if not customer_id:
+            raise ValueError("内部工具缺少必要字段: customer_id")
         return load_customer_detail_bundle(
             context.db,
             current_user,
@@ -103,11 +111,12 @@ def build_shared_internal_tools() -> list[ToolDefinition]:
     def report_query_tool(context: ToolExecutionContext, payload: dict) -> dict:
         current_user = _load_current_user_context(context)
         _require_permission(current_user, "report:read:team")
+        customer = _payload_customer(payload)
         items = query_reports(
             context.db,
             current_user,
-            customer_id=payload.get("customer_id"),
-            owner_user_id=payload.get("owner_user_id"),
+            customer_id=payload.get("customer_id") or customer.get("customer_id"),
+            owner_user_id=payload.get("owner_user_id") or customer.get("owner_user_id"),
             report_type=payload.get("report_type"),
             date_from=payload.get("date_from"),
             date_to=payload.get("date_to"),
