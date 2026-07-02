@@ -499,8 +499,8 @@ function ReportsPageContent() {
 
   return (
     <AppShell>
-      <section className="page-hero">
-        <div>
+      <section className="page-hero report-hero">
+        <div className="report-hero-copy">
           <p className="eyebrow">Executive Brief Upgrade</p>
           <h1>把周报、月报、趋势指标和归属人视角压缩成一块能直接读懂经营节奏的摘要看板。</h1>
           <p className="lead">
@@ -509,7 +509,7 @@ function ReportsPageContent() {
             {isOwnerDrilldown ? ` 现在正在按负责人 ${activeOwnerName || drilledOwnerUserId} 继续下钻。` : ""}
           </p>
         </div>
-        <div className="page-actions">
+        <div className="page-actions report-hero-actions">
           {customerFilter ? (
             <>
               <Link className="button-secondary" href={`/customers/${customerFilter}`}>
@@ -541,7 +541,7 @@ function ReportsPageContent() {
       {error ? <ErrorCard detail="如果生成失败，请优先检查 Worker、Redis 与经营报告任务链路。" message={error} /> : null}
       {loading ? <LoadingCard detail="正在拉取周报、月报、趋势指标与归属人摘要。" /> : null}
 
-      <section className="command-panel">
+      <section className="command-panel report-filter-panel">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Report Filters</p>
@@ -583,7 +583,7 @@ function ReportsPageContent() {
           </label>
           <label>
             当前聚焦
-            <div className="input-like compact-input" style={{ display: "flex", alignItems: "center" }}>
+            <div className="input-like compact-input readonly-field">
               {customerFilter ? `客户 ${customerFilter}` : "全局经营视角"}
             </div>
           </label>
@@ -699,42 +699,42 @@ function ReportsPageContent() {
         <>
           {isOwnerDrilldown && latestOwnerSnapshot ? (
             <section className="metric-grid">
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{visibleItems.length}</strong>
                 <span className="metric-label">{reportCountLabel(customerFilter, drilledOwnerUserId)}</span>
                 <p className="metric-detail">当前负责人最近出现在哪些经营报告里，可以快速判断这位同学是否持续处在管理层关注范围内。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestOwnerSnapshot.total_customers}</strong>
                 <span className="metric-label">名下客户总数</span>
                 <p className="metric-detail">这是负责人当前盘子大小，也是后续风险、任务和商机金额判断的底座。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestOwnerSnapshot.active_customers}</strong>
                 <span className="metric-label">活跃客户</span>
                 <p className="metric-detail">活跃客户越多，说明这位负责人当前推进中的经营任务越重，也更值得持续观察节奏变化。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestOwnerSnapshot.high_risk_customers}</strong>
                 <span className="metric-label">高风险客户</span>
                 <p className="metric-detail">如果高风险客户持续堆积，就需要优先判断是客户问题、任务执行问题还是负责人带宽问题。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestOwnerSnapshot.active_tasks}</strong>
                 <span className="metric-label">执行中任务</span>
                 <p className="metric-detail">这张卡用来判断这位负责人手上正在推进多少动作，防止建议已经生成但没人真正执行。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestOwnerSnapshot.overdue_tasks}</strong>
                 <span className="metric-label">逾期任务</span>
                 <p className="metric-detail">逾期任务越多，越说明这位负责人当前执行负荷或优先级管理出了问题，需要尽快介入。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{formatCurrency(latestOwnerSnapshot.open_deal_amount)}</strong>
                 <span className="metric-label">开放商机金额</span>
                 <p className="metric-detail">这位负责人手上的机会盘子值多少钱，决定了这条下钻线索是否值得管理层优先跟进。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestOwnerSnapshot.won_current}</strong>
                 <span className="metric-label">本周期赢单数</span>
                 <p className="metric-detail">用最直白的结果指标判断这位负责人最近是否已经把前面的跟进和任务转成了业务结果。</p>
@@ -742,42 +742,42 @@ function ReportsPageContent() {
             </section>
           ) : (
             <section className="metric-grid">
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{visibleItems.length}</strong>
                 <span className="metric-label">{reportCountLabel(customerFilter, drilledOwnerUserId)}</span>
                 <p className="metric-detail">当前筛选结果里一共命中了多少份报告，方便快速判断经营复盘的时间覆盖度。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{getReportTypeLabel(latestReport?.report_type || "daily")}</strong>
                 <span className="metric-label">最新报告类型</span>
                 <p className="metric-detail">当前摘要看板默认读取最新一份报告，周报、月报和日报会走同一套聚合口径。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{periodText(latestMetrics, latestReport?.report_date || "")}</strong>
                 <span className="metric-label">当前观察周期</span>
                 <p className="metric-detail">同一张卡里统一展示周期标签，避免老板在日报、周报和月报间切换时重新理解时间口径。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{formatCurrency(latestTotals?.open_deal_amount)}</strong>
                 <span className="metric-label">开放商机金额</span>
                 <p className="metric-detail">用一张卡先看盘子大小，判断当前经营机会池是否足够支撑后续成交节奏。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestTotals?.high_risk_customers || 0}</strong>
                 <span className="metric-label">高风险客户</span>
                 <p className="metric-detail">风险客户数量直接影响管理层的关注重心，也是后续审批和任务压力的前置指标。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestTotals?.pending_approvals || 0}</strong>
                 <span className="metric-label">待审批事项</span>
                 <p className="metric-detail">审批积压过多会拖慢执行闭环，所以这张卡帮助主管判断是否需要优先清队列。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestTotals?.overdue_tasks || 0}</strong>
                 <span className="metric-label">逾期任务</span>
                 <p className="metric-detail">如果逾期任务抬头，就说明风险和建议没有顺利落地到执行动作，需要马上追踪责任人。</p>
               </article>
-              <article className="metric-card">
+              <article className="metric-card report-metric-card">
                 <strong className="metric-value">{latestTeamOwners.length}</strong>
                 <span className="metric-label">归属人样本</span>
                 <p className="metric-detail">当前版本先展示最需要管理层关注的前几位负责人，让问题聚焦到可行动的人和客户盘子上。</p>
@@ -786,7 +786,7 @@ function ReportsPageContent() {
           )}
 
           <section className="workspace-grid">
-            <article className="command-panel">
+            <article className="command-panel report-brief-panel">
               <div className="panel-header">
                 <div>
                   <p className="eyebrow">Latest Brief</p>
@@ -798,7 +798,7 @@ function ReportsPageContent() {
                   <span className="meta-chip">生成于 {formatDateTime(latestReport.created_at)}</span>
                 </div>
               </div>
-              <div className="summary-list">
+              <div className="summary-list report-summary-grid">
                 {isOwnerDrilldown ? (
                   <>
                     <div className="summary-item">
@@ -827,7 +827,7 @@ function ReportsPageContent() {
                   </>
                 )}
               </div>
-              <div className="highlight-strip">
+              <div className="highlight-strip report-highlight-strip">
                 {isOwnerDrilldown && latestOwnerSnapshot ? (
                   <>
                     <div className="highlight-card">
