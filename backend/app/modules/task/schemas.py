@@ -13,3 +13,12 @@ class UpdateTaskStatusRequest(BaseModel):
     customer_feedback: str | None = Field(None, max_length=255, description="客户反馈摘要")
     next_action: str | None = Field(None, max_length=255, description="下一步动作")
     next_follow_up_at: datetime | None = Field(None, description="下一次建议跟进时间")
+
+
+class BatchUpdateTaskStatusRequest(UpdateTaskStatusRequest):
+    task_ids: list[str] = Field(..., min_length=1, max_length=100, description="需要批量更新的任务 ID 列表")
+
+
+class BatchAssignTaskRequest(BaseModel):
+    task_ids: list[str] = Field(..., min_length=1, max_length=100, description="需要批量分配的任务 ID 列表")
+    assignee_user_id: str = Field(..., min_length=1, max_length=64, description="新的负责人用户 ID")

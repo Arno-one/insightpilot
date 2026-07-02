@@ -67,6 +67,9 @@ function ApprovalsPageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [savingApprovalId, setSavingApprovalId] = useState("");
+  const [batchAction, setBatchAction] = useState<"" | "approve" | "reject">("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
   const [quickView, setQuickView] = useState<"all" | "pending" | "approved" | "rejected" | "mine">("all");
@@ -105,17 +108,46 @@ function ApprovalsPageContent() {
   }
 
   async function review(approvalId: string, action: "approve" | "reject") {
+    setSavingApprovalId(approvalId);
     setMessage("");
     setError("");
     try {
-      await apiFetch(`/api/approvals/${approvalId}/${action}`, {
+      const response = await apiFetch(`/api/approvals/${approvalId}/${action}`, {
         method: "POST",
-        body: action === "reject" ? JSON.stringify({ review_comment: "演示环境前端触发驳回" }) : undefined
+        body: action === "reject" ? JSON.stringify({ review_comment: "前端手动驳回该条建议" }) : undefined
       });
-      setMessage(action === "approve" ? "审批已通过，正式销售任务已创建。" : "审批已驳回。");
+      setMessage(response.msg);
       await loadApprovals();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "审批操作失败。");
+    } finally {
+      setSavingApprovalId("");
+    }
+  }
+
+  async function batchReview(action: "approve" | "reject") {
+    if (!selectedIds.length) {
+      return;
+    }
+    setBatchAction(action);
+    setMessage("");
+    setError("");
+    try {
+      const response = await apiFetch("/api/approvals/batch-review", {
+        method: "POST",
+        body: JSON.stringify({
+          approval_ids: selectedIds,
+          action,
+          review_comment: action === "reject" ? "前端批量驳回该批建议" : undefined
+        })
+      });
+      setMessage(response.msg);
+      setSelectedIds([]);
+      await loadApprovals();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "批量审批失败。");
+    } finally {
+      setBatchAction("");
     }
   }
 
@@ -139,7 +171,22 @@ function ApprovalsPageContent() {
     return items;
   }, [currentUser, items, quickView]);
 
-  // 中文注释：审批页核心是把队列状态显性化，让“AI 建议是否落地”一眼可见。
+  const selectableIds = useMemo(
+    () => filteredItems.filter((item) => item.status === "pending").map((item) => item.approval_id),
+    [filteredItems]
+  );
+
+  useEffect(() => {
+    const selectableIdSet = new Set(selectableIds);
+    setSelectedIds((current) => {
+      const next = current.filter((id) => selectableIdSet.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [selectableIds]);
+
+  const allSelectableChecked =
+    selectableIds.length > 0 && selectableIds.every((approvalId) => selectedIds.includes(approvalId));
+
   const overview = useMemo(() => {
     return {
       pending: filteredItems.filter((item) => item.status === "pending").length,
@@ -147,6 +194,16 @@ function ApprovalsPageContent() {
       rejected: filteredItems.filter((item) => item.status === "rejected").length
     };
   }, [filteredItems]);
+
+  function toggleSelected(approvalId: string) {
+    setSelectedIds((current) =>
+      current.includes(approvalId) ? current.filter((id) => id !== approvalId) : [...current, approvalId]
+    );
+  }
+
+  function toggleAllSelectable() {
+    setSelectedIds(allSelectableChecked ? [] : selectableIds);
+  }
 
   return (
     <AppShell>
@@ -229,7 +286,9 @@ function ApprovalsPageContent() {
                 <input
                   placeholder="输入审批人姓名或 ID"
                   value={draftFilters.reviewerKeyword}
-                  onChange={(event) => setDraftFilters((current) => ({ ...current, reviewerKeyword: event.target.value }))}
+                  onChange={(event) =>
+                    setDraftFilters((current) => ({ ...current, reviewerKeyword: event.target.value }))
+                  }
                 />
               </label>
               <label>
@@ -237,7 +296,9 @@ function ApprovalsPageContent() {
                 <input
                   placeholder="输入发起人姓名或 ID"
                   value={draftFilters.requesterKeyword}
-                  onChange={(event) => setDraftFilters((current) => ({ ...current, requesterKeyword: event.target.value }))}
+                  onChange={(event) =>
+                    setDraftFilters((current) => ({ ...current, requesterKeyword: event.target.value }))
+                  }
                 />
               </label>
               <label>
@@ -292,6 +353,38 @@ function ApprovalsPageContent() {
             </div>
           </section>
 
+          {selectableIds.length ? (
+            <section className="command-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Batch Review</p>
+                  <h2>批量审批工具条</h2>
+                </div>
+                <span className="meta-chip">当前选中 {selectedIds.length} / {selectableIds.length}</span>
+              </div>
+              <p className="lead">只允许勾选当前视图中的待审批记录，避免把已处理记录误带进批量动作。</p>
+              <div className="page-actions">
+                <button className="button-secondary" onClick={toggleAllSelectable} type="button">
+                  {allSelectableChecked ? "清空当前页选择" : "全选当前页待审批"}
+                </button>
+                <button className="button-secondary" onClick={() => setSelectedIds([])} type="button" disabled={!selectedIds.length}>
+                  清空选择
+                </button>
+                <button className="button" onClick={() => batchReview("approve")} type="button" disabled={!selectedIds.length || Boolean(batchAction)}>
+                  {batchAction === "approve" ? "批量通过中..." : "批量通过并创建任务"}
+                </button>
+                <button
+                  className="ghost-button inline"
+                  onClick={() => batchReview("reject")}
+                  type="button"
+                  disabled={!selectedIds.length || Boolean(batchAction)}
+                >
+                  {batchAction === "reject" ? "批量驳回中..." : "批量驳回建议"}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           <section className="workspace-grid">
             <article className="command-panel">
               <div className="panel-header">
@@ -330,7 +423,7 @@ function ApprovalsPageContent() {
                 </div>
                 <div className="summary-item">
                   <strong>批准越快，执行越闭环。</strong>
-                  <p>如果高价值动作在待审批里堆积，前端看起来“很聪明”，但业务上仍然没有发生任何事。</p>
+                  <p>如果高价值动作在待审批里堆积，前端看起来很聪明，但业务上仍然没有真正发生任何事。</p>
                 </div>
               </div>
             </article>
@@ -341,6 +434,7 @@ function ApprovalsPageContent() {
               const payload = payloadOf(item);
               const statusMeta = getStatusMeta(item.status);
               const priorityMeta = getPriorityMeta(payload.priority || "medium");
+              const checked = selectedIds.includes(item.approval_id);
 
               return (
                 <article className="approval-card" key={item.approval_id}>
@@ -351,6 +445,16 @@ function ApprovalsPageContent() {
                       <p className="lead">{item.customer_name || item.customer_id}</p>
                     </div>
                     <div className="approval-meta">
+                      {item.status === "pending" ? (
+                        <label className="meta-chip">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleSelected(item.approval_id)}
+                          />
+                          批量选择
+                        </label>
+                      ) : null}
                       <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
                       <span className={`pill ${priorityMeta.toneClass}`}>{priorityMeta.label}</span>
                     </div>
@@ -377,10 +481,20 @@ function ApprovalsPageContent() {
 
                   {item.status === "pending" ? (
                     <div className="action-row">
-                      <button className="button" onClick={() => review(item.approval_id, "approve")} type="button">
-                        批准并创建任务
+                      <button
+                        className="button"
+                        onClick={() => review(item.approval_id, "approve")}
+                        type="button"
+                        disabled={Boolean(batchAction) || savingApprovalId === item.approval_id}
+                      >
+                        {savingApprovalId === item.approval_id ? "处理中..." : "批准并创建任务"}
                       </button>
-                      <button className="ghost-button inline" onClick={() => review(item.approval_id, "reject")} type="button">
+                      <button
+                        className="ghost-button inline"
+                        onClick={() => review(item.approval_id, "reject")}
+                        type="button"
+                        disabled={Boolean(batchAction) || savingApprovalId === item.approval_id}
+                      >
                         驳回建议
                       </button>
                     </div>
@@ -397,7 +511,13 @@ function ApprovalsPageContent() {
 
 export default function ApprovalsPage() {
   return (
-    <Suspense fallback={<AppShell><LoadingCard detail="正在同步审批队列、建议 payload 与当前状态。" /></AppShell>}>
+    <Suspense
+      fallback={
+        <AppShell>
+          <LoadingCard detail="正在同步审批队列、建议 payload 与当前状态。" />
+        </AppShell>
+      }
+    >
       <ApprovalsPageContent />
     </Suspense>
   );

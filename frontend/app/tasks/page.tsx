@@ -6,7 +6,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
-import { apiFetch, getStoredUser } from "@/lib/api";
+import { apiFetch, getStoredUser, hasAnyPermission } from "@/lib/api";
 import { formatDateTime, getPriorityMeta, getStatusMeta } from "@/lib/presentation";
 
 type Task = {
@@ -35,6 +35,13 @@ type TaskDraft = {
   next_follow_up_at: string;
 };
 
+type BatchTaskDraft = {
+  result_note: string;
+  sentiment: "positive" | "neutral" | "negative";
+  next_follow_up_at: string;
+  assignee_user_id: string;
+};
+
 type TaskFilters = {
   status: string;
   priority: string;
@@ -42,10 +49,23 @@ type TaskFilters = {
   overdueOnly: boolean;
 };
 
+type AssigneeOption = {
+  user_id: string;
+  username: string;
+  real_name: string | null;
+};
+
 const EMPTY_TASK_DRAFT: TaskDraft = {
   result_note: "",
   sentiment: "neutral",
   next_follow_up_at: ""
+};
+
+const EMPTY_BATCH_DRAFT: BatchTaskDraft = {
+  result_note: "",
+  sentiment: "neutral",
+  next_follow_up_at: "",
+  assignee_user_id: ""
 };
 
 const EMPTY_FILTERS: TaskFilters = {
@@ -67,12 +87,21 @@ function TasksPageContent() {
   const searchParams = useSearchParams();
   const customerFilter = searchParams.get("customerId");
   const currentUser = useMemo(() => getStoredUser(), []);
+  const canManageAssignment = useMemo(
+    () => hasAnyPermission(currentUser, ["task:read:team", "task:read:all"]),
+    [currentUser]
+  );
   const [items, setItems] = useState<Task[]>([]);
+  const [assignees, setAssignees] = useState<AssigneeOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingAssignees, setLoadingAssignees] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [savingTaskId, setSavingTaskId] = useState("");
+  const [batchAction, setBatchAction] = useState<"" | "in_progress" | "completed" | "cancelled" | "assignee">("");
   const [drafts, setDrafts] = useState<Record<string, TaskDraft>>({});
+  const [batchDraft, setBatchDraft] = useState<BatchTaskDraft>(EMPTY_BATCH_DRAFT);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<TaskFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<TaskFilters>(EMPTY_FILTERS);
   const [quickView, setQuickView] = useState<"all" | "pending" | "overdue" | "highPriorityOpen" | "mine">("all");
@@ -92,7 +121,6 @@ function TasksPageContent() {
     setLoading(true);
     setError("");
     try {
-      // 中文注释：查询参数由后端正式承接，前端只负责把用户筛选条件清晰地拼出来。
       const query = new URLSearchParams();
       if (customerFilter) {
         query.set("customer_id", customerFilter);
@@ -119,34 +147,44 @@ function TasksPageContent() {
     }
   }
 
+  async function loadAssignees() {
+    if (!canManageAssignment) {
+      setAssignees([]);
+      return;
+    }
+    setLoadingAssignees(true);
+    try {
+      const response = await apiFetch<AssigneeOption[]>("/api/tasks/assignees");
+      setAssignees(response.data);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "负责人列表加载失败。");
+    } finally {
+      setLoadingAssignees(false);
+    }
+  }
+
   async function updateTask(taskId: string, status: "in_progress" | "completed" | "cancelled") {
     const draft = drafts[taskId] || EMPTY_TASK_DRAFT;
     setSavingTaskId(taskId);
     setError("");
     setMessage("");
     try {
-      await apiFetch(`/api/tasks/${taskId}/status`, {
+      const response = await apiFetch(`/api/tasks/${taskId}/status`, {
         method: "PATCH",
         body: JSON.stringify({
           status,
           result_note:
             draft.result_note ||
             (status === "cancelled"
-              ? "演示环境前端触发取消"
+              ? "前端手动取消该任务"
               : status === "completed"
-                ? "演示环境前端标记完成"
+                ? "前端标记该任务完成"
                 : "任务已开始推进"),
           sentiment: draft.sentiment,
           next_follow_up_at: draft.next_follow_up_at || null
         })
       });
-      setMessage(
-        status === "in_progress"
-          ? "任务已开始执行。"
-          : status === "completed"
-            ? "任务已完成，并已自动回写一条跟进记录。"
-            : "任务已取消。"
-      );
+      setMessage(response.msg);
       await loadTasks();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "任务状态更新失败。");
@@ -155,9 +193,73 @@ function TasksPageContent() {
     }
   }
 
+  async function batchUpdateTasks(status: "in_progress" | "completed" | "cancelled") {
+    if (!selectedIds.length) {
+      return;
+    }
+    setBatchAction(status);
+    setError("");
+    setMessage("");
+    try {
+      const response = await apiFetch("/api/tasks/batch/status", {
+        method: "PATCH",
+        body: JSON.stringify({
+          task_ids: selectedIds,
+          status,
+          result_note:
+            batchDraft.result_note ||
+            (status === "cancelled"
+              ? "前端批量取消任务"
+              : status === "completed"
+                ? "前端批量标记任务完成"
+                : "前端批量开始推进任务"),
+          sentiment: batchDraft.sentiment,
+          next_follow_up_at: batchDraft.next_follow_up_at || null
+        })
+      });
+      setMessage(response.msg);
+      setSelectedIds([]);
+      await loadTasks();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "批量更新任务状态失败。");
+    } finally {
+      setBatchAction("");
+    }
+  }
+
+  async function batchAssignTasks() {
+    if (!selectedIds.length || !batchDraft.assignee_user_id) {
+      return;
+    }
+    setBatchAction("assignee");
+    setError("");
+    setMessage("");
+    try {
+      const response = await apiFetch("/api/tasks/batch/assignee", {
+        method: "PATCH",
+        body: JSON.stringify({
+          task_ids: selectedIds,
+          assignee_user_id: batchDraft.assignee_user_id
+        })
+      });
+      setMessage(response.msg);
+      setSelectedIds([]);
+      setBatchDraft((current) => ({ ...current, assignee_user_id: "" }));
+      await loadTasks();
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "批量分配负责人失败。");
+    } finally {
+      setBatchAction("");
+    }
+  }
+
   useEffect(() => {
     loadTasks();
   }, [customerFilter, filters]);
+
+  useEffect(() => {
+    loadAssignees();
+  }, [canManageAssignment]);
 
   const quickFilteredItems = useMemo(() => {
     if (quickView === "pending") {
@@ -176,7 +278,7 @@ function TasksPageContent() {
   }, [currentUser, items, quickView]);
 
   const sortedItems = useMemo(() => {
-    // 中文注释：先按截止时间排，能让“快逾期”和“已逾期”的任务自然浮到前面。
+    // 中文注释：先按截止时间排，让“快到期”和“已逾期”的任务自然浮到前面。
     return [...quickFilteredItems].sort((a, b) => {
       if (!a.due_at && !b.due_at) {
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -191,10 +293,32 @@ function TasksPageContent() {
     });
   }, [quickFilteredItems]);
 
+  const selectableIds = useMemo(
+    () => sortedItems.filter(isActiveTask).map((item) => item.task_id),
+    [sortedItems]
+  );
+
+  useEffect(() => {
+    const selectableIdSet = new Set(selectableIds);
+    setSelectedIds((current) => {
+      const next = current.filter((id) => selectableIdSet.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [selectableIds]);
+
+  const allSelectableChecked = selectableIds.length > 0 && selectableIds.every((taskId) => selectedIds.includes(taskId));
   const activeCount = sortedItems.filter(isActiveTask).length;
   const inProgressCount = sortedItems.filter((item) => item.status === "in_progress").length;
   const completedCount = sortedItems.filter((item) => item.status === "completed").length;
   const overdueCount = sortedItems.filter(isOverdueTask).length;
+
+  function toggleSelected(taskId: string) {
+    setSelectedIds((current) => (current.includes(taskId) ? current.filter((id) => id !== taskId) : [...current, taskId]));
+  }
+
+  function toggleAllSelectable() {
+    setSelectedIds(allSelectableChecked ? [] : selectableIds);
+  }
 
   return (
     <AppShell>
@@ -220,7 +344,7 @@ function TasksPageContent() {
       </section>
 
       {message ? <p className="success-text">{message}</p> : null}
-      {error ? <ErrorCard message={error} detail="请确认任务接口、登录权限与后端服务是否正常。" /> : null}
+      {error ? <ErrorCard message={error} detail="请确认任务接口、权限与后端服务是否运行正常。" /> : null}
       {loading ? <LoadingCard detail="正在同步销售任务、负责人和截止时间。" /> : null}
       {!loading && !sortedItems.length && !error ? (
         <EmptyCard text="当前还没有销售任务。" detail="可以先从审批台通过一条 AI 建议，再回到这里查看任务落地情况。" />
@@ -327,18 +451,10 @@ function TasksPageContent() {
               <button className={quickView === "all" ? "button" : "button-secondary"} onClick={() => setQuickView("all")} type="button">
                 全部任务
               </button>
-              <button
-                className={quickView === "pending" ? "button" : "button-secondary"}
-                onClick={() => setQuickView("pending")}
-                type="button"
-              >
+              <button className={quickView === "pending" ? "button" : "button-secondary"} onClick={() => setQuickView("pending")} type="button">
                 待跟进
               </button>
-              <button
-                className={quickView === "overdue" ? "button" : "button-secondary"}
-                onClick={() => setQuickView("overdue")}
-                type="button"
-              >
+              <button className={quickView === "overdue" ? "button" : "button-secondary"} onClick={() => setQuickView("overdue")} type="button">
                 逾期任务
               </button>
               <button
@@ -349,10 +465,125 @@ function TasksPageContent() {
                 高优先级未完成
               </button>
               <button className={quickView === "mine" ? "button" : "button-secondary"} onClick={() => setQuickView("mine")} type="button">
-                我负责
+                我负责的
               </button>
             </div>
           </section>
+
+          {selectableIds.length ? (
+            <section className="command-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Batch Action</p>
+                  <h2>批量推进工具条</h2>
+                </div>
+                <span className="meta-chip">当前选中 {selectedIds.length} / {selectableIds.length}</span>
+              </div>
+              <div className="summary-list">
+                <div className="summary-item">
+                  <strong>批量执行备注</strong>
+                  <textarea
+                    className="input-like textarea-like"
+                    placeholder="批量完成时会自动把备注回写到跟进记录；开始执行或取消时则会写入任务留痕。"
+                    rows={3}
+                    value={batchDraft.result_note}
+                    onChange={(event) => setBatchDraft((current) => ({ ...current, result_note: event.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="meta-row">
+                <label className="meta-chip">
+                  情绪
+                  <select
+                    className="input-like compact-input"
+                    value={batchDraft.sentiment}
+                    onChange={(event) =>
+                      setBatchDraft((current) => ({
+                        ...current,
+                        sentiment: event.target.value as BatchTaskDraft["sentiment"]
+                      }))
+                    }
+                  >
+                    <option value="positive">正向</option>
+                    <option value="neutral">中性</option>
+                    <option value="negative">负向</option>
+                  </select>
+                </label>
+                <label className="meta-chip">
+                  下次跟进
+                  <input
+                    className="input-like compact-input"
+                    type="datetime-local"
+                    value={batchDraft.next_follow_up_at}
+                    onChange={(event) =>
+                      setBatchDraft((current) => ({ ...current, next_follow_up_at: event.target.value }))
+                    }
+                  />
+                </label>
+              </div>
+              <div className="page-actions">
+                <button className="button-secondary" onClick={toggleAllSelectable} type="button">
+                  {allSelectableChecked ? "清空当前页选择" : "全选当前页可操作任务"}
+                </button>
+                <button className="button-secondary" onClick={() => setSelectedIds([])} type="button" disabled={!selectedIds.length}>
+                  清空选择
+                </button>
+                <button
+                  className="button"
+                  onClick={() => batchUpdateTasks("in_progress")}
+                  type="button"
+                  disabled={!selectedIds.length || Boolean(batchAction)}
+                >
+                  {batchAction === "in_progress" ? "批量开始中..." : "批量开始执行"}
+                </button>
+                <button
+                  className="button"
+                  onClick={() => batchUpdateTasks("completed")}
+                  type="button"
+                  disabled={!selectedIds.length || Boolean(batchAction)}
+                >
+                  {batchAction === "completed" ? "批量完成中..." : "批量标记完成"}
+                </button>
+                <button
+                  className="ghost-button inline"
+                  onClick={() => batchUpdateTasks("cancelled")}
+                  type="button"
+                  disabled={!selectedIds.length || Boolean(batchAction)}
+                >
+                  {batchAction === "cancelled" ? "批量取消中..." : "批量取消任务"}
+                </button>
+              </div>
+              {canManageAssignment ? (
+                <div className="page-actions">
+                  <select
+                    className="input-like compact-input"
+                    value={batchDraft.assignee_user_id}
+                    onChange={(event) =>
+                      setBatchDraft((current) => ({ ...current, assignee_user_id: event.target.value }))
+                    }
+                    disabled={loadingAssignees || Boolean(batchAction)}
+                  >
+                    <option value="">{loadingAssignees ? "正在加载负责人..." : "选择新的负责人"}</option>
+                    {assignees.map((assignee) => (
+                      <option key={assignee.user_id} value={assignee.user_id}>
+                        {(assignee.real_name || assignee.username) + ` (${assignee.user_id})`}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="button-secondary"
+                    onClick={batchAssignTasks}
+                    type="button"
+                    disabled={!selectedIds.length || !batchDraft.assignee_user_id || Boolean(batchAction)}
+                  >
+                    {batchAction === "assignee" ? "分配中..." : "批量分配负责人"}
+                  </button>
+                </div>
+              ) : (
+                <p className="lead">当前账号仅具备个人任务视图权限，所以这里不展示批量分配负责人能力。</p>
+              )}
+            </section>
+          ) : null}
 
           <section className="workspace-grid">
             <article className="command-panel">
@@ -403,6 +634,7 @@ function TasksPageContent() {
               const statusMeta = getStatusMeta(item.status);
               const priorityMeta = getPriorityMeta(item.priority);
               const overdue = isOverdueTask(item);
+              const checked = selectedIds.includes(item.task_id);
 
               return (
                 <article className="task-card" key={item.task_id}>
@@ -413,6 +645,12 @@ function TasksPageContent() {
                       <p className="lead">{item.customer_name || item.customer_id}</p>
                     </div>
                     <div className="task-meta">
+                      {isActiveTask(item) ? (
+                        <label className="meta-chip">
+                          <input type="checkbox" checked={checked} onChange={() => toggleSelected(item.task_id)} />
+                          批量选择
+                        </label>
+                      ) : null}
                       <span className={`pill ${priorityMeta.toneClass}`}>{priorityMeta.label}</span>
                       <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
                     </div>
@@ -497,24 +735,24 @@ function TasksPageContent() {
                             className="button"
                             onClick={() => updateTask(item.task_id, "in_progress")}
                             type="button"
-                            disabled={savingTaskId === item.task_id}
+                            disabled={savingTaskId === item.task_id || Boolean(batchAction)}
                           >
-                            开始执行
+                            {savingTaskId === item.task_id ? "处理中..." : "开始执行"}
                           </button>
                         ) : null}
                         <button
                           className="button"
                           onClick={() => updateTask(item.task_id, "completed")}
                           type="button"
-                          disabled={savingTaskId === item.task_id}
+                          disabled={savingTaskId === item.task_id || Boolean(batchAction)}
                         >
-                          标记完成
+                          {savingTaskId === item.task_id ? "处理中..." : "标记完成"}
                         </button>
                         <button
                           className="ghost-button inline"
                           onClick={() => updateTask(item.task_id, "cancelled")}
                           type="button"
-                          disabled={savingTaskId === item.task_id}
+                          disabled={savingTaskId === item.task_id || Boolean(batchAction)}
                         >
                           取消任务
                         </button>
