@@ -32,6 +32,12 @@ type ImportConfig = {
   eyebrow: string;
   lead: string;
   requiredFields: string[];
+  fieldGuides: Array<{
+    key: string;
+    formatExample?: string;
+    enumOptions?: string[];
+    note?: string;
+  }>;
   validationRules: string[];
 };
 
@@ -40,6 +46,12 @@ type RetryRow = {
   originalRowNo: number;
   originalReason: string;
   rowData: Record<string, string>;
+};
+
+type FilePrecheck = {
+  headers: string[];
+  missingHeaders: string[];
+  extraHeaders: string[];
 };
 
 const importConfigs: ImportConfig[] = [
@@ -59,6 +71,18 @@ const importConfigs: ImportConfig[] = [
       "region",
       "next_follow_up_at",
       "remark"
+    ],
+    fieldGuides: [
+      { key: "customer_id", formatExample: "cust_001", note: "建议使用稳定业务主键，避免后续重复导入时难以识别。" },
+      { key: "customer_name", formatExample: "上海云帆科技" },
+      { key: "owner_user_id", formatExample: "u_sales_001", note: "必须是系统内已启用用户。" },
+      { key: "lifecycle_stage", enumOptions: ["new_lead", "communicated", "solution", "quotation", "won", "lost"] },
+      { key: "intent_level", enumOptions: ["low", "medium", "high"] },
+      { key: "customer_level", enumOptions: ["A", "B", "C"] },
+      { key: "industry", formatExample: "软件服务" },
+      { key: "region", formatExample: "上海" },
+      { key: "next_follow_up_at", formatExample: "2026-07-20 10:00:00", note: "时间格式使用 YYYY-MM-DD HH:MM:SS。" },
+      { key: "remark", formatExample: "客户已进入报价阶段，等待下周复盘。" }
     ],
     validationRules: [
       "customer_id 只新增不覆盖，重复主键会直接拦下。",
@@ -83,6 +107,18 @@ const importConfigs: ImportConfig[] = [
       "expected_close_at",
       "close_result"
     ],
+    fieldGuides: [
+      { key: "deal_id", formatExample: "deal_001" },
+      { key: "customer_id", formatExample: "cust_001" },
+      { key: "owner_user_id", formatExample: "u_sales_001" },
+      { key: "deal_name", formatExample: "华东区试点项目" },
+      { key: "stage", enumOptions: ["communicated", "solution", "quotation", "won", "lost"] },
+      { key: "amount", formatExample: "88000", note: "金额字段使用纯数字，不要带千分位逗号或货币符号。" },
+      { key: "quote_amount", formatExample: "92000" },
+      { key: "quoted_at", formatExample: "2026-07-02 09:30:00", note: "时间格式使用 YYYY-MM-DD HH:MM:SS。" },
+      { key: "expected_close_at", formatExample: "2026-07-31", note: "日期格式使用 YYYY-MM-DD。" },
+      { key: "close_result", enumOptions: ["open", "won", "lost"] }
+    ],
     validationRules: [
       "customer_id 必须已经存在，并且当前账号对该客户有可见权限。",
       "amount 和 quote_amount 会校验为数字格式。",
@@ -105,6 +141,18 @@ const importConfigs: ImportConfig[] = [
       "next_action",
       "next_follow_up_at",
       "occurred_at"
+    ],
+    fieldGuides: [
+      { key: "follow_up_id", formatExample: "fu_001" },
+      { key: "customer_id", formatExample: "cust_001" },
+      { key: "deal_id", formatExample: "deal_001", note: "允许为空，但如果有值，必须属于同一个客户。" },
+      { key: "owner_user_id", formatExample: "u_sales_001" },
+      { key: "follow_up_type", enumOptions: ["phone", "wechat", "meeting", "email"] },
+      { key: "content", formatExample: "客户确认下周继续推进试点范围。" },
+      { key: "sentiment", enumOptions: ["positive", "neutral", "negative"] },
+      { key: "next_action", formatExample: "整理试点清单并确认参会人" },
+      { key: "next_follow_up_at", formatExample: "2026-07-12 15:00:00", note: "时间格式使用 YYYY-MM-DD HH:MM:SS。" },
+      { key: "occurred_at", formatExample: "2026-07-02 11:00:00", note: "时间格式使用 YYYY-MM-DD HH:MM:SS。" }
     ],
     validationRules: [
       "customer_id 必须已存在且当前账号可见。",
@@ -139,6 +187,61 @@ function buildCsvContent(headers: string[], rows: Record<string, string>[]) {
   return lines.join("\n");
 }
 
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const nextChar = line[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && nextChar === "\"") {
+        current += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells.map((cell) => cell.replace(/^\ufeff/, ""));
+}
+
+async function buildFilePrecheck(file: File, requiredFields: string[]): Promise<FilePrecheck> {
+  const content = await file.text();
+  const firstNonEmptyLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  if (!firstNonEmptyLine) {
+    return {
+      headers: [],
+      missingHeaders: requiredFields,
+      extraHeaders: []
+    };
+  }
+
+  const headers = parseCsvLine(firstNonEmptyLine);
+  return {
+    headers,
+    missingHeaders: requiredFields.filter((field) => !headers.includes(field)),
+    extraHeaders: headers.filter((field) => !requiredFields.includes(field))
+  };
+}
+
 function createRetryRows(failures: ImportFailure[]) {
   return failures.map((failure, index) => ({
     id: `${failure.row_no}-${failure.business_key || "empty"}-${index}`,
@@ -151,6 +254,7 @@ function createRetryRows(failures: ImportFailure[]) {
 export default function ImportsPage() {
   const [selectedEntity, setSelectedEntity] = useState<ImportEntity>("customer");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePrecheck, setFilePrecheck] = useState<FilePrecheck | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [retryRows, setRetryRows] = useState<RetryRow[]>([]);
   const [message, setMessage] = useState("");
@@ -165,6 +269,28 @@ export default function ImportsPage() {
   );
 
   const retryHeaders = currentConfig.requiredFields;
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    setSelectedFile(file);
+    setResult(null);
+    setRetryRows([]);
+    setMessage("");
+
+    if (!file) {
+      setFilePrecheck(null);
+      return;
+    }
+
+    try {
+      // 中文注释：预检只看表头，不占用后端接口，目的是让用户在点击导入前先看到缺什么、格式该怎么填。
+      const precheck = await buildFilePrecheck(file, currentConfig.requiredFields);
+      setFilePrecheck(precheck);
+    } catch {
+      setFilePrecheck(null);
+      setError("文件预检失败，请确认 CSV 编码和内容是否正常。");
+    }
+  }
 
   async function handleTemplateDownload() {
     setDownloadingTemplate(true);
@@ -284,6 +410,7 @@ export default function ImportsPage() {
   function handleEntityChange(entity: ImportEntity) {
     setSelectedEntity(entity);
     setSelectedFile(null);
+    setFilePrecheck(null);
     setResult(null);
     setRetryRows([]);
     setMessage("");
@@ -357,13 +484,32 @@ export default function ImportsPage() {
               <span>选择 CSV 文件</span>
               <input
                 accept=".csv,text/csv"
-                onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                onChange={handleFileChange}
                 type="file"
               />
             </label>
             <p className="muted-text">
               {selectedFile ? `已选择文件：${selectedFile.name}` : "还没有选择文件，建议先下载模板再补数据。"}
             </p>
+            {filePrecheck ? (
+              <div className="import-precheck-box">
+                <strong>上传前预检</strong>
+                <div className="detail-list">
+                  <div className="detail-item">
+                    <strong>识别到的表头</strong>
+                    <p>{filePrecheck.headers.length ? filePrecheck.headers.join("、") : "当前没有识别到有效表头。"}</p>
+                  </div>
+                  <div className="detail-item">
+                    <strong>缺失表头</strong>
+                    <p>{filePrecheck.missingHeaders.length ? filePrecheck.missingHeaders.join("、") : "没有缺失字段，可以直接继续导入。"}</p>
+                  </div>
+                  <div className="detail-item">
+                    <strong>额外表头</strong>
+                    <p>{filePrecheck.extraHeaders.length ? filePrecheck.extraHeaders.join("、") : "没有检测到多余字段。"}</p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="page-actions">
@@ -377,6 +523,7 @@ export default function ImportsPage() {
               className="ghost-button"
               onClick={() => {
                 setSelectedFile(null);
+                setFilePrecheck(null);
                 setResult(null);
                 setRetryRows([]);
                 setMessage("");
@@ -403,6 +550,51 @@ export default function ImportsPage() {
                 <p>{rule}</p>
               </div>
             ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="workspace-grid">
+        <article className="command-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Format Examples</p>
+              <h2>字段格式示例</h2>
+            </div>
+          </div>
+          <div className="detail-list">
+            {currentConfig.fieldGuides.map((field) => (
+              <div className="detail-item" key={`format-${field.key}`}>
+                <strong>{field.key}</strong>
+                <p>{field.formatExample ? `示例：${field.formatExample}` : "当前字段没有固定格式示例。"}</p>
+                {field.note ? <p>{field.note}</p> : null}
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="command-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Enum Options</p>
+              <h2>枚举可选值提示</h2>
+            </div>
+          </div>
+          <div className="detail-list">
+            {currentConfig.fieldGuides
+              .filter((field) => field.enumOptions?.length)
+              .map((field) => (
+                <div className="detail-item" key={`enum-${field.key}`}>
+                  <strong>{field.key}</strong>
+                  <p>{field.enumOptions?.join("、")}</p>
+                </div>
+              ))}
+            {!currentConfig.fieldGuides.some((field) => field.enumOptions?.length) ? (
+              <div className="detail-item">
+                <strong>当前没有枚举字段</strong>
+                <p>这一类导入目前不需要固定枚举值。</p>
+              </div>
+            ) : null}
           </div>
         </article>
       </section>
