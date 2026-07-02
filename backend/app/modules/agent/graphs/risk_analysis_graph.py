@@ -11,7 +11,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
-from app.modules.llm.client import generate_risk_advice
+from app.modules.agent.platform import InternalToolRegistry, ToolDefinition, ToolExecutionContext
+from app.modules.llm.client import RiskAdvice, generate_risk_advice, plan_risk_tool_calls, review_risk_tool_results
 from app.modules.risk.rules import calculate_risk_score
 from app.shared.ids import new_id
 from app.shared.workflow_event import log_workflow_event
@@ -35,7 +36,9 @@ class RiskAnalysisState(TypedDict, total=False):
     customers: list[dict[str, Any]]
     deals_by_customer: dict[str, dict[str, Any]]
     risk_candidates: list[RiskCandidate]
-    rag_results: list[dict[str, Any]]
+    planned_actions: list[dict[str, Any]]
+    executed_actions: list[dict[str, Any]]
+    reviewed_actions: list[dict[str, Any]]
     created: list[dict[str, Any]]
     status: str
     output: dict[str, Any]
@@ -64,7 +67,7 @@ def _insert_step(
     tool_name: str | None = None,
     error_message: str | None = None,
 ):
-    """记录 Agent 节点执行情况，前端直接复用这里展示 Trace。"""
+    """记录 Agent 节点执行情况，前端 Trace 直接复用这里的结果。"""
     finished = time.time()
     db.execute(
         text(
@@ -149,7 +152,7 @@ def _approval_due_policy(risk_level: str) -> str:
 
 
 def _build_rag_question(customer: dict[str, Any], deal: dict[str, Any] | None, risk_result: dict[str, Any]) -> str:
-    """把结构化风险结果改写成自然语言问题，避免直接把整包 JSON 扔给向量库。"""
+    """把结构化风险结果改写成自然语言问题，避免把整包 JSON 直接扔给向量库。"""
     rule_names = "、".join(hit["rule_name"] for hit in risk_result["rule_hits"]) or "暂无明显规则命中"
     parts = [
         f"客户{customer.get('customer_name', customer.get('customer_id'))}当前风险等级为{risk_result['risk_level']}，命中规则：{rule_names}。",
@@ -236,9 +239,13 @@ def _insert_risk_and_approval(
     deal: dict[str, Any] | None,
     risk_result: dict[str, Any],
     rag_result: dict[str, Any],
+    advice_data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     enriched_risk_result = _with_rag_evidence(risk_result, rag_result)
-    advice = generate_risk_advice(customer, deal, enriched_risk_result, rag_context=rag_result.get("context", ""))
+    if advice_data:
+        advice = RiskAdvice.model_validate(advice_data)
+    else:
+        advice = generate_risk_advice(customer, deal, enriched_risk_result, rag_context=rag_result.get("context", ""))
     risk_snapshot_id = new_id("risk")
     approval_id = new_id("appr")
 
@@ -337,6 +344,85 @@ def _insert_risk_and_approval(
     }
 
 
+def _build_risk_tool_registry() -> InternalToolRegistry:
+    """统一注册风险 Agent 第一阶段可调用的内部工具。"""
+
+    def rag_retrieval_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
+        return _retrieve_rag_context(
+            context.tenant_id,
+            context.user_id,
+            payload["customer"],
+            payload.get("deal"),
+            payload["risk_result"],
+        )
+
+    def risk_advice_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
+        rag_result = payload.get(
+            "rag_result",
+            {
+                "status": "skipped",
+                "trace_id": None,
+                "hit_count": 0,
+                "context": "",
+                "sources": [],
+            },
+        )
+        enriched_risk_result = _with_rag_evidence(payload["risk_result"], rag_result)
+        advice = generate_risk_advice(
+            payload["customer"],
+            payload.get("deal"),
+            enriched_risk_result,
+            rag_context=rag_result.get("context", ""),
+        )
+        return {
+            "advice": advice.model_dump(),
+            "rag_status": rag_result.get("status"),
+            "rag_hit_count": rag_result.get("hit_count", 0),
+        }
+
+    def create_risk_draft_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
+        return _insert_risk_and_approval(
+            context.db,
+            context.tenant_id,
+            context.run_id,
+            context.user_id,
+            payload["customer"],
+            payload.get("deal"),
+            payload["risk_result"],
+            payload.get(
+                "rag_result",
+                {
+                    "status": "skipped",
+                    "trace_id": None,
+                    "hit_count": 0,
+                    "context": "",
+                    "sources": [],
+                },
+            ),
+            advice_data=payload.get("advice"),
+        )
+
+    return InternalToolRegistry(
+        [
+            ToolDefinition(
+                name="rag.retrieve_sales_context",
+                description="从销售知识库检索当前客户风险处置所需的 SOP、话术和案例上下文。",
+                handler=rag_retrieval_tool,
+            ),
+            ToolDefinition(
+                name="risk.generate_advice",
+                description="基于规则命中和知识上下文生成结构化风险建议。",
+                handler=risk_advice_tool,
+            ),
+            ToolDefinition(
+                name="approval.create_risk_draft",
+                description="把已通过复核的风险建议写入风险快照和人工审批草稿。",
+                handler=create_risk_draft_tool,
+            ),
+        ]
+    )
+
+
 def _update_failed_run(db: Session, tenant_id: str, run_id: str, exc: Exception, started_ts: float):
     db.execute(
         text(
@@ -360,7 +446,8 @@ def _update_failed_run(db: Session, tenant_id: str, run_id: str, exc: Exception,
 
 
 def build_risk_analysis_graph(db: Session):
-    """构建风险扫描图，把原来的 Worker 顺序流拆成显式节点。"""
+    """构建风险扫描图，把中间处理升级成 Planner / Tool Calling / Reviewer 闭环。"""
+    tool_registry = _build_risk_tool_registry()
 
     def run_node(
         state: RiskAnalysisState,
@@ -414,55 +501,166 @@ def build_risk_analysis_graph(db: Session):
 
         return run_node(state, "calculate_rule_risk", "risk_rule_tool", handler)
 
-    def retrieve_sales_knowledge(state: RiskAnalysisState) -> dict[str, Any]:
+    def plan_risk_actions(state: RiskAnalysisState) -> dict[str, Any]:
         def handler(current_state: RiskAnalysisState):
-            rag_results = [
-                _retrieve_rag_context(
-                    current_state["tenant_id"],
-                    current_state["user_id"],
+            planner_tools = [
+                tool
+                for tool in tool_registry.list_tool_specs()
+                if tool["name"] in {"rag.retrieve_sales_context", "risk.generate_advice"}
+            ]
+            planned_actions = []
+            total_steps = 0
+            for candidate in current_state.get("risk_candidates", []):
+                plan = plan_risk_tool_calls(
                     candidate["customer"],
                     candidate["deal"],
                     candidate["risk_result"],
+                    planner_tools,
                 )
-                for candidate in current_state.get("risk_candidates", [])
-            ]
+                planned_actions.append({**candidate, "plan": plan.model_dump()})
+                total_steps += len(plan.steps)
             return (
                 {
-                    "retrieval_count": len(rag_results),
-                    "success_count": sum(1 for item in rag_results if item["status"] == "success"),
-                    "failed_count": sum(1 for item in rag_results if item["status"] != "success"),
-                    "trace_ids": [item["trace_id"] for item in rag_results if item.get("trace_id")],
+                    "plan_count": len(planned_actions),
+                    "total_steps": total_steps,
                 },
-                {"rag_results": rag_results},
+                {"planned_actions": planned_actions},
             )
 
-        return run_node(state, "retrieve_sales_knowledge", "rag_retrieval_tool", handler)
+        return run_node(state, "plan_risk_actions", "agent_planner", handler)
 
-    def generate_task_draft(state: RiskAnalysisState) -> dict[str, Any]:
+    def execute_risk_tools(state: RiskAnalysisState) -> dict[str, Any]:
         def handler(current_state: RiskAnalysisState):
-            created = [
-                _insert_risk_and_approval(
-                    db,
-                    current_state["tenant_id"],
-                    current_state["run_id"],
-                    current_state["user_id"],
-                    candidate["customer"],
-                    candidate["deal"],
-                    candidate["risk_result"],
-                    rag_result,
-                )
-                for candidate, rag_result in zip(
-                    current_state.get("risk_candidates", []),
-                    current_state.get("rag_results", []),
-                    strict=True,
-                )
-            ]
+            context = ToolExecutionContext(
+                tenant_id=current_state["tenant_id"],
+                user_id=current_state["user_id"],
+                run_id=current_state["run_id"],
+                db=db,
+            )
+            executed_actions = []
+            total_calls = 0
+            for item in current_state.get("planned_actions", []):
+                payload = {
+                    "customer": item["customer"],
+                    "deal": item["deal"],
+                    "risk_result": item["risk_result"],
+                }
+                execution_records = []
+                for step in item["plan"]["steps"]:
+                    execution = tool_registry.execute(step["tool_name"], context, payload)
+                    execution_records.append(
+                        {
+                            "tool_name": execution["tool_name"],
+                            "reason": step["reason"],
+                            "output": execution["output"],
+                        }
+                    )
+                    total_calls += 1
+                    if step["tool_name"] == "rag.retrieve_sales_context":
+                        payload["rag_result"] = execution["output"]
+                    elif step["tool_name"] == "risk.generate_advice":
+                        payload["advice"] = execution["output"]["advice"]
+                executed_actions.append({**item, **payload, "tool_executions": execution_records})
+
+            trace_ids = []
+            for item in executed_actions:
+                rag_result = item.get("rag_result", {})
+                if rag_result.get("trace_id"):
+                    trace_ids.append(rag_result["trace_id"])
             return (
-                {"created_count": len(created)},
+                {
+                    "execution_count": len(executed_actions),
+                    "tool_call_count": total_calls,
+                    "trace_ids": trace_ids,
+                },
+                {"executed_actions": executed_actions},
+            )
+
+        return run_node(state, "execute_risk_tools", "tool_executor", handler)
+
+    def review_risk_actions(state: RiskAnalysisState) -> dict[str, Any]:
+        def handler(current_state: RiskAnalysisState):
+            reviewed_actions = []
+            approved_count = 0
+            for item in current_state.get("executed_actions", []):
+                review = review_risk_tool_results(
+                    item["customer"],
+                    item["deal"],
+                    item["risk_result"],
+                    item.get(
+                        "rag_result",
+                        {
+                            "status": "skipped",
+                            "trace_id": None,
+                            "hit_count": 0,
+                        },
+                    ),
+                    item.get("advice"),
+                )
+                reviewed_actions.append({**item, "review": review.model_dump()})
+                if review.approved:
+                    approved_count += 1
+            return (
+                {
+                    "review_count": len(reviewed_actions),
+                    "approved_count": approved_count,
+                    "rejected_count": len(reviewed_actions) - approved_count,
+                },
+                {"reviewed_actions": reviewed_actions},
+            )
+
+        return run_node(state, "review_risk_actions", "agent_reviewer", handler)
+
+    def create_approval_drafts(state: RiskAnalysisState) -> dict[str, Any]:
+        def handler(current_state: RiskAnalysisState):
+            context = ToolExecutionContext(
+                tenant_id=current_state["tenant_id"],
+                user_id=current_state["user_id"],
+                run_id=current_state["run_id"],
+                db=db,
+            )
+            created = []
+            skipped_reviews = []
+            for item in current_state.get("reviewed_actions", []):
+                review = item["review"]
+                if not review["approved"]:
+                    skipped_reviews.append(
+                        {
+                            "customer_id": item["customer"]["customer_id"],
+                            "review_note": review["review_note"],
+                        }
+                    )
+                    continue
+                created_record = tool_registry.execute(
+                    "approval.create_risk_draft",
+                    context,
+                    {
+                        "customer": item["customer"],
+                        "deal": item["deal"],
+                        "risk_result": item["risk_result"],
+                        "rag_result": item.get(
+                            "rag_result",
+                            {
+                                "status": "skipped",
+                                "trace_id": None,
+                                "hit_count": 0,
+                                "context": "",
+                                "sources": [],
+                            },
+                        ),
+                        "advice": item.get("advice"),
+                    },
+                )
+                created.append(created_record["output"])
+            return (
+                {
+                    "created_count": len(created),
+                    "skipped_count": len(skipped_reviews),
+                },
                 {"created": created},
             )
 
-        return run_node(state, "generate_task_draft", "llm_risk_advice_tool", handler)
+        return run_node(state, "create_approval_drafts", "approval.create_risk_draft", handler)
 
     def persist_agent_trace(state: RiskAnalysisState) -> dict[str, Any]:
         def handler(current_state: RiskAnalysisState):
@@ -503,15 +701,19 @@ def build_risk_analysis_graph(db: Session):
     graph = StateGraph(RiskAnalysisState)
     graph.add_node("load_crm_data", load_crm_data)
     graph.add_node("calculate_rule_risk", calculate_rule_risk_node)
-    graph.add_node("retrieve_sales_knowledge", retrieve_sales_knowledge)
-    graph.add_node("generate_task_draft", generate_task_draft)
+    graph.add_node("plan_risk_actions", plan_risk_actions)
+    graph.add_node("execute_risk_tools", execute_risk_tools)
+    graph.add_node("review_risk_actions", review_risk_actions)
+    graph.add_node("create_approval_drafts", create_approval_drafts)
     graph.add_node("persist_agent_trace", persist_agent_trace)
 
     graph.add_edge(START, "load_crm_data")
     graph.add_edge("load_crm_data", "calculate_rule_risk")
-    graph.add_edge("calculate_rule_risk", "retrieve_sales_knowledge")
-    graph.add_edge("retrieve_sales_knowledge", "generate_task_draft")
-    graph.add_edge("generate_task_draft", "persist_agent_trace")
+    graph.add_edge("calculate_rule_risk", "plan_risk_actions")
+    graph.add_edge("plan_risk_actions", "execute_risk_tools")
+    graph.add_edge("execute_risk_tools", "review_risk_actions")
+    graph.add_edge("review_risk_actions", "create_approval_drafts")
+    graph.add_edge("create_approval_drafts", "persist_agent_trace")
     graph.add_edge("persist_agent_trace", END)
     return graph.compile()
 
