@@ -277,6 +277,49 @@ def _build_additional_advice_context(payload: dict[str, Any]) -> str:
     return "\n".join(part for part in parts if part).strip()
 
 
+def _build_review_driven_approval_payload(
+    customer: dict[str, Any],
+    risk_result: dict[str, Any],
+    advice: RiskAdvice,
+    *,
+    rag_result: dict[str, Any],
+    review_data: dict[str, Any] | None = None,
+    related_reports: list[dict[str, Any]] | None = None,
+    tool_executions: list[dict[str, Any]] | None = None,
+    context_summary: str = "",
+) -> dict[str, Any]:
+    """把 Reviewer 结论和执行证据写进审批草稿，方便人工审核直接看到 Agent 判断依据。"""
+    tool_executions = tool_executions or []
+    related_reports = related_reports or []
+
+    payload = {
+        "task_type": advice.task_type,
+        "title": advice.task_title,
+        "assignee_user_id": customer["owner_user_id"],
+        "priority": advice.priority,
+        "due_at": _approval_due_policy(risk_result["risk_level"]),
+        "recommended_script": advice.recommended_script,
+        "description": advice.suggestion,
+        "agent_review": {
+            "approved": bool((review_data or {}).get("approved", True)),
+            "summary": (review_data or {}).get("summary", ""),
+            "review_note": (review_data or {}).get("review_note", ""),
+            "evidence_used": list((review_data or {}).get("evidence_used", [])),
+        },
+        "agent_context": {
+            "risk_score": risk_result.get("risk_score"),
+            "risk_level": risk_result.get("risk_level"),
+            "rag_status": rag_result.get("status"),
+            "rag_trace_id": rag_result.get("trace_id"),
+            "rag_hit_count": rag_result.get("hit_count", 0),
+            "report_count": len(related_reports),
+            "tool_names": [item.get("tool_name") for item in tool_executions if item.get("tool_name")],
+            "context_summary": context_summary,
+        },
+    }
+    return payload
+
+
 def _insert_risk_and_approval(
     db: Session,
     tenant_id: str,
@@ -287,6 +330,10 @@ def _insert_risk_and_approval(
     risk_result: dict[str, Any],
     rag_result: dict[str, Any],
     advice_data: dict[str, Any] | None = None,
+    review_data: dict[str, Any] | None = None,
+    related_reports: list[dict[str, Any]] | None = None,
+    tool_executions: list[dict[str, Any]] | None = None,
+    context_summary: str = "",
 ) -> dict[str, Any]:
     enriched_risk_result = _with_rag_evidence(risk_result, rag_result)
     if advice_data:
@@ -296,15 +343,16 @@ def _insert_risk_and_approval(
     risk_snapshot_id = new_id("risk")
     approval_id = new_id("appr")
 
-    suggested_task = {
-        "task_type": advice.task_type,
-        "title": advice.task_title,
-        "assignee_user_id": customer["owner_user_id"],
-        "priority": advice.priority,
-        "due_at": _approval_due_policy(risk_result["risk_level"]),
-        "recommended_script": advice.recommended_script,
-        "description": advice.suggestion,
-    }
+    suggested_task = _build_review_driven_approval_payload(
+        customer,
+        enriched_risk_result,
+        advice,
+        rag_result=rag_result,
+        review_data=review_data,
+        related_reports=related_reports,
+        tool_executions=tool_executions,
+        context_summary=context_summary,
+    )
 
     db.execute(
         text(
@@ -388,6 +436,9 @@ def _insert_risk_and_approval(
         "risk_level": enriched_risk_result["risk_level"],
         "rag_trace_id": rag_result.get("trace_id"),
         "rag_hit_count": rag_result.get("hit_count", 0),
+        "review_summary": (review_data or {}).get("summary", ""),
+        "evidence_used": list((review_data or {}).get("evidence_used", [])),
+        "proposed_payload_json": suggested_task,
     }
 
 
@@ -451,6 +502,10 @@ def _build_risk_tool_registry() -> InternalToolRegistry:
                 },
             ),
             advice_data=payload.get("advice"),
+            review_data=payload.get("review"),
+            related_reports=payload.get("related_reports"),
+            tool_executions=payload.get("tool_executions"),
+            context_summary=payload.get("context_summary", ""),
         )
 
     return InternalToolRegistry(
@@ -627,6 +682,7 @@ def build_risk_analysis_graph(db: Session):
                         payload["rag_result"] = execution["output"]
                     elif step["tool_name"] == "risk.generate_advice":
                         payload["advice"] = execution["output"]["advice"]
+                        payload["context_summary"] = execution["output"].get("context_summary", "")
                 executed_actions.append({**item, **payload, "tool_executions": execution_records})
 
             trace_ids = []
@@ -746,6 +802,10 @@ def build_risk_analysis_graph(db: Session):
                             },
                         ),
                         "advice": item.get("advice"),
+                        "review": review,
+                        "related_reports": item.get("related_reports", []),
+                        "tool_executions": item.get("tool_executions", []),
+                        "context_summary": item.get("context_summary", ""),
                     },
                 )
                 created.append(created_record["output"])

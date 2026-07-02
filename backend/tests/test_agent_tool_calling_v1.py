@@ -1,4 +1,5 @@
 from app.modules.agent.platform.tool_registry import InternalToolRegistry, ToolDefinition, ToolExecutionContext
+from app.modules.agent.graphs import risk_analysis_graph
 from app.modules.llm import client as llm_client
 
 
@@ -146,6 +147,54 @@ def test_plan_risk_tool_calls_ensures_generate_advice_as_last_step(monkeypatch):
 
     assert [step.tool_name for step in plan.steps] == [
         "crm.get_customer_detail",
+        "risk.generate_advice",
+    ]
+
+
+def test_build_review_driven_approval_payload_keeps_reviewer_summary_and_evidence():
+    advice = llm_client.RiskAdvice(
+        reason="客户长期未推进。",
+        suggestion="建议主管介入确认真实阻塞点。",
+        task_type="manager_intervention",
+        task_title="主管介入高风险客户",
+        priority="urgent",
+        recommended_script="先确认项目优先级和采购时间。",
+    )
+
+    payload = risk_analysis_graph._build_review_driven_approval_payload(
+        {"customer_id": "cust_001", "owner_user_id": "u_sales_001"},
+        {"risk_score": 82, "risk_level": "high"},
+        advice,
+        rag_result={"status": "success", "trace_id": "trace_001", "hit_count": 3},
+        review_data={
+            "approved": True,
+            "summary": "证据充分，可以进入审批。",
+            "review_note": "CRM、报告与 RAG 证据一致。",
+            "evidence_used": ["crm.get_customer_detail", "report.query", "rag.retrieve_sales_context"],
+        },
+        related_reports=[{"report_id": "report_001"}],
+        tool_executions=[
+            {"tool_name": "crm.get_customer_detail"},
+            {"tool_name": "report.query"},
+            {"tool_name": "rag.retrieve_sales_context"},
+            {"tool_name": "risk.generate_advice"},
+        ],
+        context_summary="最近两周客户推进速度明显放缓，且已有历史风险记录。",
+    )
+
+    assert payload["title"] == "主管介入高风险客户"
+    assert payload["agent_review"]["summary"] == "证据充分，可以进入审批。"
+    assert payload["agent_review"]["evidence_used"] == [
+        "crm.get_customer_detail",
+        "report.query",
+        "rag.retrieve_sales_context",
+    ]
+    assert payload["agent_context"]["report_count"] == 1
+    assert payload["agent_context"]["rag_trace_id"] == "trace_001"
+    assert payload["agent_context"]["tool_names"] == [
+        "crm.get_customer_detail",
+        "report.query",
+        "rag.retrieve_sales_context",
         "risk.generate_advice",
     ]
 

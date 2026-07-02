@@ -6,6 +6,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
+import { ThemedSelect } from "@/components/ui/ThemedSelect";
 import { apiFetch, getStoredUser } from "@/lib/api";
 import { formatDateTime, getPriorityMeta, getStatusMeta } from "@/lib/presentation";
 
@@ -29,6 +30,22 @@ type ApprovalPayload = {
   description?: string;
   recommended_script?: string;
   priority?: string;
+  agent_review?: {
+    approved?: boolean;
+    summary?: string;
+    review_note?: string;
+    evidence_used?: string[];
+  };
+  agent_context?: {
+    risk_score?: number | string;
+    risk_level?: string;
+    rag_status?: string;
+    rag_trace_id?: string | null;
+    rag_hit_count?: number;
+    report_count?: number;
+    tool_names?: string[];
+    context_summary?: string;
+  };
 };
 
 type ApprovalFilters = {
@@ -88,6 +105,7 @@ function ApprovalsPageContent() {
   const [filters, setFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
   const [quickView, setQuickView] = useState<"all" | "pending" | "approved" | "rejected" | "mine">("all");
+  const [approvalView, setApprovalView] = useState<"queue" | "batch">("queue");
 
   async function loadApprovals() {
     setLoading(true);
@@ -238,16 +256,8 @@ function ApprovalsPageContent() {
 
   return (
     <AppShell>
-      <section className="page-hero">
-        <div>
-          <p className="eyebrow">Human Checkpoint</p>
-          <h1>AI 可以提建议，但真正进入执行队列之前，必须先过人这一关。</h1>
-          <p className="lead">
-            审批页负责把 AI 的速度和业务的安全感平衡起来，避免错误动作直接打到客户一线。
-            {customerFilter ? ` 当前已聚焦客户 ${customerFilter}。` : ""}
-          </p>
-        </div>
-        {customerFilter ? (
+      {customerFilter ? (
+        <section className="command-panel">
           <div className="page-actions">
             <Link className="button-secondary" href={`/customers/${customerFilter}`}>
               返回客户详情
@@ -256,8 +266,8 @@ function ApprovalsPageContent() {
               查看全部审批
             </Link>
           </div>
-        ) : null}
-      </section>
+        </section>
+      ) : null}
 
       {relatedUserFilter ? (
         <section className="command-panel">
@@ -291,294 +301,341 @@ function ApprovalsPageContent() {
             <article className="metric-card">
               <strong className="metric-value">{overview.pending}</strong>
               <span className="metric-label">待确认</span>
-              <p className="metric-detail">主管还没拍板的动作数量，决定系统建议能否继续向下游流动。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overview.approved}</strong>
               <span className="metric-label">已批准</span>
-              <p className="metric-detail">这些建议已经转成正式销售任务，可以去任务页继续追踪。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overview.rejected}</strong>
               <span className="metric-label">已驳回</span>
-              <p className="metric-detail">被驳回的动作值得回看规则命中与建议质量是否合理。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{filteredItems.length}</strong>
-              <span className="metric-label">当前视图记录</span>
-              <p className="metric-detail">可以快速确认当前筛选条件下还有多少条审批需要回看或处理。</p>
+              <span className="metric-label">当前视图</span>
             </article>
           </section>
 
-          <section className="command-panel">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Queue Filters</p>
-                <h2>审批筛选与快捷视图</h2>
-              </div>
-            </div>
-            <div className="eval-control-bar">
-              <label>
-                状态
-                <select
-                  className="input-like compact-input"
-                  value={draftFilters.status}
-                  onChange={(event) => setDraftFilters((current) => ({ ...current, status: event.target.value }))}
-                >
-                  <option value="">全部状态</option>
-                  <option value="pending">待审批</option>
-                  <option value="approved">已通过</option>
-                  <option value="rejected">已驳回</option>
-                </select>
-              </label>
-              <label>
-                审批人
-                <input
-                  placeholder="输入审批人姓名或 ID"
-                  value={draftFilters.reviewerKeyword}
-                  onChange={(event) =>
-                    setDraftFilters((current) => ({ ...current, reviewerKeyword: event.target.value }))
-                  }
-                />
-              </label>
-              <label>
-                发起人
-                <input
-                  placeholder="输入发起人姓名或 ID"
-                  value={draftFilters.requesterKeyword}
-                  onChange={(event) =>
-                    setDraftFilters((current) => ({ ...current, requesterKeyword: event.target.value }))
-                  }
-                />
-              </label>
-              <label>
-                开始日期
-                <input
-                  type="date"
-                  value={draftFilters.dateFrom}
-                  onChange={(event) => setDraftFilters((current) => ({ ...current, dateFrom: event.target.value }))}
-                />
-              </label>
-              <label>
-                结束日期
-                <input
-                  type="date"
-                  value={draftFilters.dateTo}
-                  onChange={(event) => setDraftFilters((current) => ({ ...current, dateTo: event.target.value }))}
-                />
-              </label>
-            </div>
-            <div className="page-actions">
-              <button className="button" onClick={() => setFilters(draftFilters)} type="button">
-                应用筛选
-              </button>
+          <div className="section-eyebrow-row">
+            <p className="eyebrow">Workspace</p>
+            <div className="workspace-tabs">
               <button
-                className="button-secondary"
-                onClick={() => {
-                  setDraftFilters(EMPTY_FILTERS);
-                  setFilters(EMPTY_FILTERS);
-                  setQuickView("all");
-                }}
+                className={`workspace-tab ${approvalView === "queue" ? "workspace-tab-active" : ""}`}
+                onClick={() => setApprovalView("queue")}
                 type="button"
               >
-                重置筛选
+                <span className="workspace-tab-dot" />
+                审批队列
+              </button>
+              <button
+                className={`workspace-tab ${approvalView === "batch" ? "workspace-tab-active" : ""}`}
+                onClick={() => setApprovalView("batch")}
+                type="button"
+              >
+                <span className="workspace-tab-dot" />
+                批量处理
               </button>
             </div>
-            <div className="page-actions">
-              <button className={quickView === "all" ? "button" : "button-secondary"} onClick={() => setQuickView("all")} type="button">
-                全部记录
-              </button>
-              <button className={quickView === "pending" ? "button" : "button-secondary"} onClick={() => setQuickView("pending")} type="button">
-                待处理
-              </button>
-              <button className={quickView === "approved" ? "button" : "button-secondary"} onClick={() => setQuickView("approved")} type="button">
-                已通过
-              </button>
-              <button className={quickView === "rejected" ? "button" : "button-secondary"} onClick={() => setQuickView("rejected")} type="button">
-                已驳回
-              </button>
-              <button className={quickView === "mine" ? "button" : "button-secondary"} onClick={() => setQuickView("mine")} type="button">
-                与我相关
-              </button>
-            </div>
-          </section>
+          </div>
 
-          {selectableIds.length ? (
-            <section className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Batch Review</p>
-                  <h2>批量审批工具条</h2>
+          {approvalView === "queue" ? (
+            <>
+              <section className="command-panel">
+                <div className="eval-control-bar">
+                  <label>
+                    状态
+                    <ThemedSelect
+                      onChange={(value) => setDraftFilters((current) => ({ ...current, status: value }))}
+                      options={[
+                        { value: "", label: "全部状态" },
+                        { value: "pending", label: "待审批" },
+                        { value: "approved", label: "已通过" },
+                        { value: "rejected", label: "已驳回" },
+                      ]}
+                      value={draftFilters.status}
+                    />
+                  </label>
+                  <label>
+                    审批人
+                    <input
+                      placeholder="输入审批人姓名或 ID"
+                      value={draftFilters.reviewerKeyword}
+                      onChange={(event) =>
+                        setDraftFilters((current) => ({ ...current, reviewerKeyword: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    发起人
+                    <input
+                      placeholder="输入发起人姓名或 ID"
+                      value={draftFilters.requesterKeyword}
+                      onChange={(event) =>
+                        setDraftFilters((current) => ({ ...current, requesterKeyword: event.target.value }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    开始日期
+                    <input
+                      type="date"
+                      value={draftFilters.dateFrom}
+                      onChange={(event) => setDraftFilters((current) => ({ ...current, dateFrom: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    结束日期
+                    <input
+                      type="date"
+                      value={draftFilters.dateTo}
+                      onChange={(event) => setDraftFilters((current) => ({ ...current, dateTo: event.target.value }))}
+                    />
+                  </label>
                 </div>
-                <span className="meta-chip">当前选中 {selectedIds.length} / {selectableIds.length}</span>
-              </div>
-              <p className="lead">只允许勾选当前视图中的待审批记录，避免把已处理记录误带进批量动作。</p>
-              <div className="page-actions">
-                <button className="button-secondary" onClick={toggleAllSelectable} type="button">
-                  {allSelectableChecked ? "清空当前页选择" : "全选当前页待审批"}
-                </button>
-                <button className="button-secondary" onClick={() => setSelectedIds([])} type="button" disabled={!selectedIds.length}>
-                  清空选择
-                </button>
-                <button className="button" onClick={() => batchReview("approve")} type="button" disabled={!selectedIds.length || Boolean(batchAction)}>
-                  {batchAction === "approve" ? "批量通过中..." : "批量通过并创建任务"}
-                </button>
-                <button
-                  className="ghost-button inline"
-                  onClick={() => batchReview("reject")}
-                  type="button"
-                  disabled={!selectedIds.length || Boolean(batchAction)}
-                >
-                  {batchAction === "reject" ? "批量驳回中..." : "批量驳回建议"}
-                </button>
-              </div>
-            </section>
-          ) : null}
+                <div className="page-actions">
+                  <button className="button" onClick={() => setFilters(draftFilters)} type="button">
+                    应用筛选
+                  </button>
+                  <button
+                    className="button-secondary"
+                    onClick={() => {
+                      setDraftFilters(EMPTY_FILTERS);
+                      setFilters(EMPTY_FILTERS);
+                      setQuickView("all");
+                    }}
+                    type="button"
+                  >
+                    重置筛选
+                  </button>
+                </div>
+                <div className="page-actions">
+                  <button className={quickView === "all" ? "button" : "button-secondary"} onClick={() => setQuickView("all")} type="button">
+                    全部记录
+                  </button>
+                  <button className={quickView === "pending" ? "button" : "button-secondary"} onClick={() => setQuickView("pending")} type="button">
+                    待处理
+                  </button>
+                  <button className={quickView === "approved" ? "button" : "button-secondary"} onClick={() => setQuickView("approved")} type="button">
+                    已通过
+                  </button>
+                  <button className={quickView === "rejected" ? "button" : "button-secondary"} onClick={() => setQuickView("rejected")} type="button">
+                    已驳回
+                  </button>
+                  <button className={quickView === "mine" ? "button" : "button-secondary"} onClick={() => setQuickView("mine")} type="button">
+                    与我相关
+                  </button>
+                </div>
+              </section>
 
-          {batchResult ? (
-            <section className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Batch Result</p>
-                  <h2>上次批量审批结果</h2>
-                </div>
-                <span className="meta-chip">
-                  {batchResult.actionLabel}：成功 {batchResult.successCount} 条，失败 {batchResult.failedCount} 条
-                </span>
-              </div>
-              {batchResult.failedItems.length ? (
-                <div className="detail-list">
-                  {batchResult.failedItems.map((item) => (
-                    <div className="detail-item" key={`${item.approval_id}-${item.message}`}>
-                      <strong>审批 {item.approval_id}</strong>
-                      <p>{item.message}</p>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="lead">本次批量审批没有失败项，可以直接继续处理下一批记录。</p>
-              )}
-            </section>
-          ) : null}
-
-          <section className="workspace-grid">
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Approval Standard</p>
-                  <h2>审批时建议优先看三件事</h2>
-                </div>
-              </div>
-              <div className="detail-list">
-                <div className="detail-item">
-                  <strong>建议是不是对准了真实风险</strong>
-                  <p>如果风险原因本身判断偏了，再好的任务标题也会把销售带离正确方向。</p>
-                </div>
-                <div className="detail-item">
-                  <strong>动作有没有明确负责人和价值</strong>
-                  <p>审批通过后会直接进入任务页，因此建议应尽量可执行、可衡量、可交付。</p>
-                </div>
-                <div className="detail-item">
-                  <strong>推荐话术是否适合当前客户关系</strong>
-                  <p>话术可以给销售参考，但是否直接使用，仍然需要业务负责人二次判断。</p>
-                </div>
-              </div>
-            </article>
-
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Queue Reminder</p>
-                  <h2>这页的核心价值</h2>
-                </div>
-              </div>
-              <div className="summary-list">
-                <div className="summary-item">
-                  <strong>不是为了拖慢 AI，而是为了保证方向正确。</strong>
-                  <p>审批机制让系统更像真实企业工程，而不是一个只会吐建议的聊天机器人。</p>
-                </div>
-                <div className="summary-item">
-                  <strong>批准越快，执行越闭环。</strong>
-                  <p>如果高价值动作在待审批里堆积，前端看起来很聪明，但业务上仍然没有真正发生任何事。</p>
-                </div>
-              </div>
-            </article>
-          </section>
-
-          <section className="approval-stack">
-            {filteredItems.map((item) => {
-              const payload = payloadOf(item);
-              const statusMeta = getStatusMeta(item.status);
-              const priorityMeta = getPriorityMeta(payload.priority || "medium");
-              const checked = selectedIds.includes(item.approval_id);
-
-              return (
-                <article className="approval-card" key={item.approval_id}>
-                  <div className="approval-card-header">
-                    <div>
-                      <p className="eyebrow">Customer {item.customer_id}</p>
-                      <h2 className="section-title">{payload.title || item.approval_type}</h2>
-                      <p className="lead">{item.customer_name || item.customer_id}</p>
-                    </div>
-                    <div className="approval-meta">
-                      {item.status === "pending" ? (
-                        <label className="meta-chip">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleSelected(item.approval_id)}
-                          />
-                          批量选择
-                        </label>
-                      ) : null}
-                      <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
-                      <span className={`pill ${priorityMeta.toneClass}`}>{priorityMeta.label}</span>
-                    </div>
+              {selectableIds.length ? (
+                <section className="command-panel">
+                  <div className="section-eyebrow-row">
+                    <p className="eyebrow">Quick Batch</p>
+                    <span className="meta-chip">{selectedIds.length} / {selectableIds.length} 已选</span>
                   </div>
-
-                  <div className="meta-row">
-                    <span className="meta-chip">发起人 {item.requested_by_user_name || item.requested_by_user_id}</span>
-                    <span className="meta-chip">审批时间 {formatDateTime(item.created_at)}</span>
-                    <span className="meta-chip">审批人 {item.reviewer_user_name || item.reviewer_user_id || "待分配"}</span>
+                  <div className="page-actions">
+                    <button className="button-secondary" onClick={toggleAllSelectable} type="button">
+                      {allSelectableChecked ? "清空当前页" : "全选待审批"}
+                    </button>
+                    <button className="button-secondary" onClick={() => setSelectedIds([])} type="button" disabled={!selectedIds.length}>
+                      清空选择
+                    </button>
+                    <button className="button" onClick={() => batchReview("approve")} type="button" disabled={!selectedIds.length || Boolean(batchAction)}>
+                      {batchAction === "approve" ? "批量通过中..." : "批量通过"}
+                    </button>
+                    <button
+                      className="ghost-button inline"
+                      onClick={() => batchReview("reject")}
+                      type="button"
+                      disabled={!selectedIds.length || Boolean(batchAction)}
+                    >
+                      {batchAction === "reject" ? "批量驳回中..." : "批量驳回"}
+                    </button>
                   </div>
+                </section>
+              ) : null}
 
-                  <div className="summary-list">
-                    <div className="summary-item">
-                      <strong>动作描述</strong>
-                      <p>{payload.description || "等待主管确认这条 AI 建议是否值得转成正式销售任务。"}</p>
-                    </div>
-                    {payload.recommended_script ? (
-                      <div className="summary-item">
-                        <strong>推荐话术</strong>
-                        <blockquote>{payload.recommended_script}</blockquote>
+              <section className="card-stack card-stack-lg">
+                {filteredItems.map((item) => {
+                  const payload = payloadOf(item);
+                  const statusMeta = getStatusMeta(item.status);
+                  const priorityMeta = getPriorityMeta(payload.priority || "medium");
+                  const checked = selectedIds.includes(item.approval_id);
+
+	                  return (
+	                    <article className="approval-card" key={item.approval_id}>
+                      <div className="approval-card-header">
+                        <div>
+                          <p className="eyebrow">Customer {item.customer_id}</p>
+                          <h2 className="section-title">{payload.title || item.approval_type}</h2>
+                          <p className="lead">{item.customer_name || item.customer_id}</p>
+                        </div>
+                        <div className="approval-meta">
+                          {item.status === "pending" ? (
+                            <label className="meta-chip">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleSelected(item.approval_id)}
+                              />
+                              批量选择
+                            </label>
+                          ) : null}
+                          <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
+                          <span className={`pill ${priorityMeta.toneClass}`}>{priorityMeta.label}</span>
+                        </div>
                       </div>
-                    ) : null}
-                  </div>
 
-                  {item.status === "pending" ? (
-                    <div className="action-row">
-                      <button
-                        className="button"
-                        onClick={() => review(item.approval_id, "approve")}
-                        type="button"
-                        disabled={Boolean(batchAction) || savingApprovalId === item.approval_id}
-                      >
-                        {savingApprovalId === item.approval_id ? "处理中..." : "批准并创建任务"}
-                      </button>
-                      <button
-                        className="ghost-button inline"
-                        onClick={() => review(item.approval_id, "reject")}
-                        type="button"
-                        disabled={Boolean(batchAction) || savingApprovalId === item.approval_id}
-                      >
-                        驳回建议
-                      </button>
+                      <div className="meta-row">
+                        <span className="meta-chip">发起人 {item.requested_by_user_name || item.requested_by_user_id}</span>
+                        <span className="meta-chip">{formatDateTime(item.created_at)}</span>
+                        <span className="meta-chip">审批人 {item.reviewer_user_name || item.reviewer_user_id || "待分配"}</span>
+                      </div>
+
+	                      <div className="summary-list">
+	                        <div className="summary-item">
+	                          <strong>动作描述</strong>
+	                          <p>{payload.description || "等待主管确认这条 AI 建议是否值得转成正式销售任务。"}</p>
+	                        </div>
+	                        {payload.agent_review?.summary ? (
+	                          <div className="summary-item">
+	                            <strong>Agent 复核结论</strong>
+	                            <p>{payload.agent_review.summary}</p>
+	                            <p>{payload.agent_review.review_note || "当前没有额外复核备注。"}</p>
+	                            <div className="meta-row">
+	                              {(Array.isArray(payload.agent_review.evidence_used) ? payload.agent_review.evidence_used : []).map(
+	                                (evidence) => (
+	                                  <span className="meta-chip" key={`${item.approval_id}-${evidence}`}>
+	                                    {evidence}
+	                                  </span>
+	                                )
+	                              )}
+	                            </div>
+	                          </div>
+	                        ) : null}
+	                        {payload.agent_context ? (
+	                          <div className="summary-item">
+	                            <strong>Agent 证据摘要</strong>
+	                            <p>{payload.agent_context.context_summary || "当前没有额外上下文摘要。"}</p>
+	                            <div className="meta-row">
+	                              {payload.agent_context.risk_level ? (
+	                                <span className="meta-chip">
+	                                  风险 {payload.agent_context.risk_level} / {String(payload.agent_context.risk_score ?? "-")}
+	                                </span>
+	                              ) : null}
+	                              {payload.agent_context.report_count ? (
+	                                <span className="meta-chip">报告 {payload.agent_context.report_count}</span>
+	                              ) : null}
+	                              {payload.agent_context.rag_trace_id ? (
+	                                <span className="meta-chip">Trace {payload.agent_context.rag_trace_id}</span>
+	                              ) : null}
+	                              {(Array.isArray(payload.agent_context.tool_names) ? payload.agent_context.tool_names : []).map(
+	                                (toolName) => (
+	                                  <span className="meta-chip" key={`${item.approval_id}-${toolName}`}>
+	                                    {toolName}
+	                                  </span>
+	                                )
+	                              )}
+	                            </div>
+	                          </div>
+	                        ) : null}
+	                        {payload.recommended_script ? (
+	                          <div className="summary-item">
+	                            <strong>推荐话术</strong>
+	                            <blockquote>{payload.recommended_script}</blockquote>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {item.status === "pending" ? (
+                        <div className="action-row">
+                          <button
+                            className="button"
+                            onClick={() => review(item.approval_id, "approve")}
+                            type="button"
+                            disabled={Boolean(batchAction) || savingApprovalId === item.approval_id}
+                          >
+                            {savingApprovalId === item.approval_id ? "处理中..." : "批准并创建任务"}
+                          </button>
+                          <button
+                            className="ghost-button inline"
+                            onClick={() => review(item.approval_id, "reject")}
+                            type="button"
+                            disabled={Boolean(batchAction) || savingApprovalId === item.approval_id}
+                          >
+                            驳回建议
+                          </button>
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Batch Review</p>
+                    <h2>批量审批</h2>
+                  </div>
+                  <span className="meta-chip">当前选中 {selectedIds.length} / {selectableIds.length}</span>
+                </div>
+                <div className="page-actions">
+                  <button className="button-secondary" onClick={toggleAllSelectable} type="button">
+                    {allSelectableChecked ? "清空当前页选择" : "全选当前页待审批"}
+                  </button>
+                  <button className="button-secondary" onClick={() => setSelectedIds([])} type="button" disabled={!selectedIds.length}>
+                    清空选择
+                  </button>
+                  <button className="button" onClick={() => batchReview("approve")} type="button" disabled={!selectedIds.length || Boolean(batchAction)}>
+                    {batchAction === "approve" ? "批量通过中..." : "批量通过并创建任务"}
+                  </button>
+                  <button
+                    className="ghost-button inline"
+                    onClick={() => batchReview("reject")}
+                    type="button"
+                    disabled={!selectedIds.length || Boolean(batchAction)}
+                  >
+                    {batchAction === "reject" ? "批量驳回中..." : "批量驳回建议"}
+                  </button>
+                </div>
+              </section>
+
+              {batchResult ? (
+                <section className="command-panel">
+                  <div className="panel-header">
+                    <div>
+                      <p className="eyebrow">Batch Result</p>
+                      <h2>上次批量审批结果</h2>
                     </div>
-                  ) : null}
-                </article>
-              );
-            })}
-          </section>
+                    <span className="meta-chip">
+                      {batchResult.actionLabel}：成功 {batchResult.successCount} 条，失败 {batchResult.failedCount} 条
+                    </span>
+                  </div>
+                  {batchResult.failedItems.length ? (
+                    <div className="detail-list">
+                      {batchResult.failedItems.map((item) => (
+                        <div className="detail-item" key={`${item.approval_id}-${item.message}`}>
+                          <strong>审批 {item.approval_id}</strong>
+                          <p>{item.message}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="lead">本次批量审批没有失败项。</p>
+                  )}
+                </section>
+              ) : null}
+
+              {!selectableIds.length ? (
+                <section className="command-panel">
+                  <p className="lead">当前没有可批量操作的待审批记录，请先回到审批队列中确认视图范围。</p>
+                </section>
+              ) : null}
+            </>
+          )}
         </>
       ) : null}
     </AppShell>
