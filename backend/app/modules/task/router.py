@@ -124,11 +124,19 @@ def _create_follow_up_from_task(
 
 @router.get("")
 def list_tasks(
+    customer_id: str | None = None,
     current_user: dict = Depends(require_permission("task:read:self")),
     db: Session = Depends(get_db),
 ):
-    params = {"tenant_id": current_user["tenant_id"], "user_id": current_user["user_id"]}
+    params = {
+        "tenant_id": current_user["tenant_id"],
+        "user_id": current_user["user_id"],
+        "customer_id": customer_id,
+    }
     where_sql = _task_scope_where(current_user)
+    customer_filter = ""
+    if customer_id:
+        customer_filter = "AND t.customer_id = :customer_id"
 
     rows = db.execute(
         text(
@@ -145,6 +153,7 @@ def list_tasks(
               ON assignee.tenant_id = t.tenant_id
              AND assignee.user_id = t.assignee_user_id
             WHERE {where_sql}
+              {customer_filter}
             ORDER BY t.due_at ASC, t.created_at DESC
             LIMIT 100
             """

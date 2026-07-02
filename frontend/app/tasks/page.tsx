@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
@@ -43,7 +45,9 @@ function isActiveTask(task: Task) {
   return ["pending", "in_progress"].includes(task.status);
 }
 
-export default function TasksPage() {
+function TasksPageContent() {
+  const searchParams = useSearchParams();
+  const customerFilter = searchParams.get("customerId");
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -64,8 +68,10 @@ export default function TasksPage() {
 
   async function loadTasks() {
     setLoading(true);
+    setError("");
     try {
-      const response = await apiFetch<Task[]>("/api/tasks");
+      const query = customerFilter ? `?customer_id=${encodeURIComponent(customerFilter)}` : "";
+      const response = await apiFetch<Task[]>(`/api/tasks${query}`);
       setItems(response.data);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "任务列表加载失败。");
@@ -108,7 +114,7 @@ export default function TasksPage() {
 
   useEffect(() => {
     loadTasks();
-  }, []);
+  }, [customerFilter]);
 
   // 中文注释：任务列表按截止时间排序，方便先暴露最容易逾期的执行动作。
   const sortedItems = useMemo(() => {
@@ -137,8 +143,21 @@ export default function TasksPage() {
         <div>
           <p className="eyebrow">Execution Queue</p>
           <h1>不是把任务创建出来就结束，而是盯住它有没有真正被执行。</h1>
-          <p className="lead">这里是 AI 建议进入人工审批后的执行现场，重点看负责人、优先级、截止时间和实际推进状态。</p>
+          <p className="lead">
+            这里是 AI 建议进入人工审批后的执行现场，重点看负责人、优先级、截止时间和实际推进状态。
+            {customerFilter ? ` 当前已聚焦客户 ${customerFilter}。` : ""}
+          </p>
         </div>
+        {customerFilter ? (
+          <div className="page-actions">
+            <Link className="button-secondary" href={`/customers/${customerFilter}`}>
+              返回客户详情
+            </Link>
+            <Link className="ghost-button inline" href="/tasks">
+              查看全部任务
+            </Link>
+          </div>
+        ) : null}
       </section>
 
       {message ? <p className="success-text">{message}</p> : null}
@@ -347,5 +366,13 @@ export default function TasksPage() {
         </>
       ) : null}
     </AppShell>
+  );
+}
+
+export default function TasksPage() {
+  return (
+    <Suspense fallback={<AppShell><LoadingCard detail="正在同步销售任务、负责人和截止时间。" /></AppShell>}>
+      <TasksPageContent />
+    </Suspense>
   );
 }

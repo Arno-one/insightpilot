@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
@@ -12,6 +14,7 @@ type Approval = {
   approval_type: string;
   risk_snapshot_id: string | null;
   customer_id: string;
+  customer_name: string | null;
   proposed_payload_json: Record<string, string> | string;
   status: string;
   requested_by_user_id: string;
@@ -40,7 +43,9 @@ function payloadOf(item: Approval): ApprovalPayload {
   return item.proposed_payload_json || {};
 }
 
-export default function ApprovalsPage() {
+function ApprovalsPageContent() {
+  const searchParams = useSearchParams();
+  const customerFilter = searchParams.get("customerId");
   const [items, setItems] = useState<Approval[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -50,7 +55,8 @@ export default function ApprovalsPage() {
     setLoading(true);
     setError("");
     try {
-      const response = await apiFetch<Approval[]>("/api/approvals");
+      const query = customerFilter ? `?customer_id=${encodeURIComponent(customerFilter)}` : "";
+      const response = await apiFetch<Approval[]>(`/api/approvals${query}`);
       setItems(response.data);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "审批列表加载失败。");
@@ -76,7 +82,7 @@ export default function ApprovalsPage() {
 
   useEffect(() => {
     loadApprovals();
-  }, []);
+  }, [customerFilter]);
 
   // 中文注释：审批页核心是把队列状态显性化，让“AI 建议是否落地”一眼可见。
   const overview = useMemo(() => {
@@ -93,8 +99,21 @@ export default function ApprovalsPage() {
         <div>
           <p className="eyebrow">Human Checkpoint</p>
           <h1>AI 可以提建议，但真正进入执行队列之前，必须先过人这一关。</h1>
-          <p className="lead">审批页负责把 AI 的速度和业务的安全感平衡起来，避免错误动作直接打到客户一线。</p>
+          <p className="lead">
+            审批页负责把 AI 的速度和业务的安全感平衡起来，避免错误动作直接打到客户一线。
+            {customerFilter ? ` 当前已聚焦客户 ${customerFilter}。` : ""}
+          </p>
         </div>
+        {customerFilter ? (
+          <div className="page-actions">
+            <Link className="button-secondary" href={`/customers/${customerFilter}`}>
+              返回客户详情
+            </Link>
+            <Link className="ghost-button inline" href="/approvals">
+              查看全部审批
+            </Link>
+          </div>
+        ) : null}
       </section>
 
       {message ? <p className="success-text">{message}</p> : null}
@@ -185,6 +204,7 @@ export default function ApprovalsPage() {
                     <div>
                       <p className="eyebrow">Customer {item.customer_id}</p>
                       <h2 className="section-title">{payload.title || item.approval_type}</h2>
+                      <p className="lead">{item.customer_name || item.customer_id}</p>
                     </div>
                     <div className="approval-meta">
                       <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
@@ -228,5 +248,13 @@ export default function ApprovalsPage() {
         </>
       ) : null}
     </AppShell>
+  );
+}
+
+export default function ApprovalsPage() {
+  return (
+    <Suspense fallback={<AppShell><LoadingCard detail="正在同步审批队列、建议 payload 与当前状态。" /></AppShell>}>
+      <ApprovalsPageContent />
+    </Suspense>
   );
 }

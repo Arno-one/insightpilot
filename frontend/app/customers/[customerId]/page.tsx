@@ -490,6 +490,14 @@ export default function CustomerDetailPage() {
                   <p className="eyebrow">Approvals & Tasks</p>
                   <h2>审批和执行摘要</h2>
                 </div>
+                <div className="page-actions">
+                  <Link className="button-secondary" href={`/approvals?customerId=${customerId}`}>
+                    查看该客户审批
+                  </Link>
+                  <Link className="button-secondary" href={`/tasks?customerId=${customerId}`}>
+                    查看该客户任务
+                  </Link>
+                </div>
               </div>
               <div className="summary-list">
                 {detail.approvals.length ? (

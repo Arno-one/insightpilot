@@ -16,17 +16,26 @@ router = APIRouter()
 
 @router.get("")
 def list_approvals(
+    customer_id: str | None = None,
     current_user: dict = Depends(require_permission("approval:review:agent_task")),
     db: Session = Depends(get_db),
 ):
+    params = {"tenant_id": current_user["tenant_id"], "customer_id": customer_id}
+    customer_filter = ""
+    if customer_id:
+        customer_filter = "AND ar.customer_id = :customer_id"
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT ar.approval_id, ar.approval_type, ar.risk_snapshot_id, ar.customer_id,
+                   c.customer_name,
                    ar.proposed_payload_json, ar.status, ar.requested_by_user_id, ar.reviewer_user_id, ar.created_at,
                    requester.real_name AS requested_by_user_name,
                    reviewer.real_name AS reviewer_user_name
             FROM approval_record ar
+            LEFT JOIN crm_customer c
+              ON c.tenant_id = ar.tenant_id
+             AND c.customer_id = ar.customer_id
             LEFT JOIN sys_user requester
               ON requester.tenant_id = ar.tenant_id
              AND requester.user_id = ar.requested_by_user_id
@@ -34,11 +43,12 @@ def list_approvals(
               ON reviewer.tenant_id = ar.tenant_id
              AND reviewer.user_id = ar.reviewer_user_id
             WHERE ar.tenant_id = :tenant_id
+              {customer_filter}
             ORDER BY ar.created_at DESC
             LIMIT 100
             """
         ),
-        {"tenant_id": current_user["tenant_id"]},
+        params,
     ).mappings().all()
     return success(list(rows), "查询成功", total=len(rows))
 
