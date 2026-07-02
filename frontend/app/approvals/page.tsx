@@ -39,6 +39,18 @@ type ApprovalFilters = {
   dateTo: string;
 };
 
+type ApprovalBatchFailureItem = {
+  approval_id: string;
+  message: string;
+};
+
+type ApprovalBatchResult = {
+  actionLabel: string;
+  successCount: number;
+  failedCount: number;
+  failedItems: ApprovalBatchFailureItem[];
+};
+
 const EMPTY_FILTERS: ApprovalFilters = {
   status: "",
   reviewerKeyword: "",
@@ -69,6 +81,7 @@ function ApprovalsPageContent() {
   const [message, setMessage] = useState("");
   const [savingApprovalId, setSavingApprovalId] = useState("");
   const [batchAction, setBatchAction] = useState<"" | "approve" | "reject">("");
+  const [batchResult, setBatchResult] = useState<ApprovalBatchResult | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
@@ -111,6 +124,7 @@ function ApprovalsPageContent() {
     setSavingApprovalId(approvalId);
     setMessage("");
     setError("");
+    setBatchResult(null);
     try {
       const response = await apiFetch(`/api/approvals/${approvalId}/${action}`, {
         method: "POST",
@@ -132,8 +146,14 @@ function ApprovalsPageContent() {
     setBatchAction(action);
     setMessage("");
     setError("");
+    setBatchResult(null);
     try {
-      const response = await apiFetch("/api/approvals/batch-review", {
+      const response = await apiFetch<{
+        items: Array<{ approval_id: string; status: string; task_id?: string }>;
+        failed_items: ApprovalBatchFailureItem[];
+        success_count: number;
+        failed_count: number;
+      }>("/api/approvals/batch-review", {
         method: "POST",
         body: JSON.stringify({
           approval_ids: selectedIds,
@@ -142,6 +162,12 @@ function ApprovalsPageContent() {
         })
       });
       setMessage(response.msg);
+      setBatchResult({
+        actionLabel: action === "approve" ? "批量通过" : "批量驳回",
+        successCount: response.data.success_count,
+        failedCount: response.data.failed_count,
+        failedItems: response.data.failed_items
+      });
       setSelectedIds([]);
       await loadApprovals();
     } catch (exc) {
@@ -382,6 +408,32 @@ function ApprovalsPageContent() {
                   {batchAction === "reject" ? "批量驳回中..." : "批量驳回建议"}
                 </button>
               </div>
+            </section>
+          ) : null}
+
+          {batchResult ? (
+            <section className="command-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Batch Result</p>
+                  <h2>上次批量审批结果</h2>
+                </div>
+                <span className="meta-chip">
+                  {batchResult.actionLabel}：成功 {batchResult.successCount} 条，失败 {batchResult.failedCount} 条
+                </span>
+              </div>
+              {batchResult.failedItems.length ? (
+                <div className="detail-list">
+                  {batchResult.failedItems.map((item) => (
+                    <div className="detail-item" key={`${item.approval_id}-${item.message}`}>
+                      <strong>审批 {item.approval_id}</strong>
+                      <p>{item.message}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="lead">本次批量审批没有失败项，可以直接继续处理下一批记录。</p>
+              )}
             </section>
           ) : null}
 

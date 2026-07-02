@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
@@ -53,6 +53,20 @@ type AssigneeOption = {
   user_id: string;
   username: string;
   real_name: string | null;
+  role_codes: string[];
+  role_names: string[];
+};
+
+type TaskBatchFailureItem = {
+  task_id: string;
+  message: string;
+};
+
+type TaskBatchResult = {
+  actionLabel: string;
+  successCount: number;
+  failedCount: number;
+  failedItems: TaskBatchFailureItem[];
 };
 
 const EMPTY_TASK_DRAFT: TaskDraft = {
@@ -99,12 +113,15 @@ function TasksPageContent() {
   const [message, setMessage] = useState("");
   const [savingTaskId, setSavingTaskId] = useState("");
   const [batchAction, setBatchAction] = useState<"" | "in_progress" | "completed" | "cancelled" | "assignee">("");
+  const [batchResult, setBatchResult] = useState<TaskBatchResult | null>(null);
   const [drafts, setDrafts] = useState<Record<string, TaskDraft>>({});
   const [batchDraft, setBatchDraft] = useState<BatchTaskDraft>(EMPTY_BATCH_DRAFT);
+  const [assigneeKeyword, setAssigneeKeyword] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<TaskFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<TaskFilters>(EMPTY_FILTERS);
   const [quickView, setQuickView] = useState<"all" | "pending" | "overdue" | "highPriorityOpen" | "mine">("all");
+  const deferredAssigneeKeyword = useDeferredValue(assigneeKeyword);
 
   function patchDraft(taskId: string, patch: Partial<TaskDraft>) {
     setDrafts((current) => ({
@@ -154,7 +171,12 @@ function TasksPageContent() {
     }
     setLoadingAssignees(true);
     try {
-      const response = await apiFetch<AssigneeOption[]>("/api/tasks/assignees");
+      const query = new URLSearchParams();
+      if (deferredAssigneeKeyword.trim()) {
+        query.set("keyword", deferredAssigneeKeyword.trim());
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const response = await apiFetch<AssigneeOption[]>(`/api/tasks/assignees${suffix}`);
       setAssignees(response.data);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "负责人列表加载失败。");
@@ -168,6 +190,7 @@ function TasksPageContent() {
     setSavingTaskId(taskId);
     setError("");
     setMessage("");
+    setBatchResult(null);
     try {
       const response = await apiFetch(`/api/tasks/${taskId}/status`, {
         method: "PATCH",
@@ -200,8 +223,14 @@ function TasksPageContent() {
     setBatchAction(status);
     setError("");
     setMessage("");
+    setBatchResult(null);
     try {
-      const response = await apiFetch("/api/tasks/batch/status", {
+      const response = await apiFetch<{
+        items: Array<{ task_id: string; status: string; unchanged: boolean }>;
+        failed_items: TaskBatchFailureItem[];
+        success_count: number;
+        failed_count: number;
+      }>("/api/tasks/batch/status", {
         method: "PATCH",
         body: JSON.stringify({
           task_ids: selectedIds,
@@ -218,6 +247,13 @@ function TasksPageContent() {
         })
       });
       setMessage(response.msg);
+      setBatchResult({
+        actionLabel:
+          status === "in_progress" ? "批量开始执行" : status === "completed" ? "批量标记完成" : "批量取消任务",
+        successCount: response.data.success_count,
+        failedCount: response.data.failed_count,
+        failedItems: response.data.failed_items
+      });
       setSelectedIds([]);
       await loadTasks();
     } catch (exc) {
@@ -234,8 +270,14 @@ function TasksPageContent() {
     setBatchAction("assignee");
     setError("");
     setMessage("");
+    setBatchResult(null);
     try {
-      const response = await apiFetch("/api/tasks/batch/assignee", {
+      const response = await apiFetch<{
+        items: Array<{ task_id: string; assignee_user_id: string; unchanged: boolean }>;
+        failed_items: TaskBatchFailureItem[];
+        success_count: number;
+        failed_count: number;
+      }>("/api/tasks/batch/assignee", {
         method: "PATCH",
         body: JSON.stringify({
           task_ids: selectedIds,
@@ -243,6 +285,12 @@ function TasksPageContent() {
         })
       });
       setMessage(response.msg);
+      setBatchResult({
+        actionLabel: "批量分配负责人",
+        successCount: response.data.success_count,
+        failedCount: response.data.failed_count,
+        failedItems: response.data.failed_items
+      });
       setSelectedIds([]);
       setBatchDraft((current) => ({ ...current, assignee_user_id: "" }));
       await loadTasks();
@@ -259,7 +307,7 @@ function TasksPageContent() {
 
   useEffect(() => {
     loadAssignees();
-  }, [canManageAssignment]);
+  }, [canManageAssignment, deferredAssigneeKeyword]);
 
   const quickFilteredItems = useMemo(() => {
     if (quickView === "pending") {
@@ -554,6 +602,24 @@ function TasksPageContent() {
                 </button>
               </div>
               {canManageAssignment ? (
+                <div className="summary-list">
+                  <div className="summary-item">
+                    <strong>负责人筛选</strong>
+                    <p>当前版本先按在职且具备 `owner / manager / salesperson` 角色的用户作为可分配负责人候选。</p>
+                  </div>
+                  <div className="summary-item">
+                    <input
+                      className="input-like"
+                      placeholder="按负责人姓名、用户名或用户 ID 筛选"
+                      value={assigneeKeyword}
+                      onChange={(event) => setAssigneeKeyword(event.target.value)}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <p className="lead">当前账号仅具备个人任务视图权限，所以这里不展示批量分配负责人能力。</p>
+              )}
+              {canManageAssignment ? (
                 <div className="page-actions">
                   <select
                     className="input-like compact-input"
@@ -566,7 +632,9 @@ function TasksPageContent() {
                     <option value="">{loadingAssignees ? "正在加载负责人..." : "选择新的负责人"}</option>
                     {assignees.map((assignee) => (
                       <option key={assignee.user_id} value={assignee.user_id}>
-                        {(assignee.real_name || assignee.username) + ` (${assignee.user_id})`}
+                        {(assignee.real_name || assignee.username) +
+                          ` (${assignee.user_id})` +
+                          (assignee.role_names.length ? ` - ${assignee.role_names.join(" / ")}` : "")}
                       </option>
                     ))}
                   </select>
@@ -579,8 +647,35 @@ function TasksPageContent() {
                     {batchAction === "assignee" ? "分配中..." : "批量分配负责人"}
                   </button>
                 </div>
+              ) : null}
+              {canManageAssignment && !loadingAssignees && !assignees.length ? (
+                <p className="lead">当前筛选条件下没有可分配负责人，请调整关键词后重试。</p>
+              ) : null}
+            </section>
+          ) : null}
+
+          {batchResult ? (
+            <section className="command-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Batch Result</p>
+                  <h2>上次批量任务操作结果</h2>
+                </div>
+                <span className="meta-chip">
+                  {batchResult.actionLabel}：成功 {batchResult.successCount} 条，失败 {batchResult.failedCount} 条
+                </span>
+              </div>
+              {batchResult.failedItems.length ? (
+                <div className="detail-list">
+                  {batchResult.failedItems.map((item) => (
+                    <div className="detail-item" key={`${item.task_id}-${item.message}`}>
+                      <strong>任务 {item.task_id}</strong>
+                      <p>{item.message}</p>
+                    </div>
+                  ))}
+                </div>
               ) : (
-                <p className="lead">当前账号仅具备个人任务视图权限，所以这里不展示批量分配负责人能力。</p>
+                <p className="lead">本次批量任务操作没有失败项，可以继续推进下一批任务。</p>
               )}
             </section>
           ) : null}

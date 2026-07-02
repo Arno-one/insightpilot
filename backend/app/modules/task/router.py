@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
 from app.core.database import get_db
+from app.core.queue import get_default_queue
 from app.modules.auth.dependencies import require_permission
 from app.modules.task.schemas import (
     BatchAssignTaskRequest,
@@ -37,6 +38,61 @@ def _can_manage_task_assignment(current_user: dict) -> bool:
 def _ensure_assignment_permission(current_user: dict):
     if not _can_manage_task_assignment(current_user):
         raise HTTPException(status_code=403, detail="当前账号仅可处理自己的任务，不能批量分配负责人")
+
+
+def _list_assignable_users(db: Session, tenant_id: str, keyword: str | None = None) -> list[dict]:
+    params = {
+        "tenant_id": tenant_id,
+        "keyword": f"%{keyword}%" if keyword else None,
+    }
+    keyword_filter = ""
+    if keyword:
+        keyword_filter = """
+          AND (
+            u.user_id LIKE :keyword
+            OR u.username LIKE :keyword
+            OR u.real_name LIKE :keyword
+          )
+        """
+
+    rows = db.execute(
+        text(
+            f"""
+            SELECT
+              u.user_id,
+              u.username,
+              u.real_name,
+              GROUP_CONCAT(DISTINCT r.role_code ORDER BY r.role_code SEPARATOR ',') AS role_codes_csv,
+              GROUP_CONCAT(DISTINCT r.role_name ORDER BY r.role_code SEPARATOR ' / ') AS role_names_text
+            FROM sys_user u
+            JOIN sys_user_role ur
+              ON ur.tenant_id = u.tenant_id
+             AND ur.user_id = u.user_id
+            JOIN sys_role r
+              ON r.tenant_id = ur.tenant_id
+             AND r.role_id = ur.role_id
+            WHERE u.tenant_id = :tenant_id
+              AND u.status = 1
+              AND u.is_deleted = 0
+              AND r.status = 1
+              AND r.role_code IN ('owner', 'manager', 'salesperson')
+              {keyword_filter}
+            GROUP BY u.user_id, u.username, u.real_name
+            ORDER BY u.real_name ASC, u.username ASC
+            """
+        ),
+        params,
+    ).mappings().all()
+    return [
+        {
+            "user_id": row["user_id"],
+            "username": row["username"],
+            "real_name": row["real_name"],
+            "role_codes": row["role_codes_csv"].split(",") if row["role_codes_csv"] else [],
+            "role_names": row["role_names_text"].split(" / ") if row["role_names_text"] else [],
+        }
+        for row in rows
+    ]
 
 
 def _load_task_for_update(db: Session, current_user: dict, task_id: str) -> dict:
@@ -180,6 +236,35 @@ def _update_risk_snapshot_status(db: Session, tenant_id: str, risk_snapshot_id: 
     )
 
 
+def _trigger_post_completion_jobs(current_user: dict, task: dict) -> dict:
+    """任务完成后异步触发单客户风险重算和日报刷新，但不让队列故障阻塞主流程。"""
+    try:
+        queue = get_default_queue()
+        risk_job = queue.enqueue(
+            "app.workers.risk_jobs.run_risk_scan",
+            current_user["tenant_id"],
+            current_user["user_id"],
+            task["customer_id"],
+            job_timeout=600,
+        )
+        report_job = queue.enqueue(
+            "app.workers.report_jobs.generate_daily_report",
+            current_user["tenant_id"],
+            current_user["user_id"],
+            job_timeout=600,
+        )
+        return {
+            "enqueue_status": "submitted",
+            "risk_scan_job_id": risk_job.id,
+            "daily_report_job_id": report_job.id,
+        }
+    except Exception as exc:
+        return {
+            "enqueue_status": "failed",
+            "error_message": str(exc),
+        }
+
+
 def _apply_task_status_update(
     db: Session,
     current_user: dict,
@@ -200,11 +285,13 @@ def _apply_task_status_update(
     now = datetime.now()
     follow_up_id = None
     completed_at = None
+    post_completion_jobs = None
     result_note = data.result_note or task.get("result_note")
 
     if data.status == "completed":
         follow_up_id = _create_follow_up_from_task(db, current_user, task, data, happened_at=now)
         completed_at = now
+        post_completion_jobs = _trigger_post_completion_jobs(current_user, task)
 
     db.execute(
         text(
@@ -240,6 +327,11 @@ def _apply_task_status_update(
         "completed": "任务已完成，并已回写跟进记录",
         "cancelled": "任务已取消",
     }[data.status]
+    if data.status == "completed" and post_completion_jobs:
+        if post_completion_jobs["enqueue_status"] == "submitted":
+            action_note = "任务已完成，已回写跟进记录，并已触发风险重算与日报刷新"
+        else:
+            action_note = "任务已完成，已回写跟进记录，但后续风险/日报异步任务提交失败"
     log_workflow_event(
         db,
         tenant_id=current_user["tenant_id"],
@@ -260,6 +352,7 @@ def _apply_task_status_update(
             "customer_feedback": data.customer_feedback,
             "next_action": data.next_action,
             "next_follow_up_at": data.next_follow_up_at,
+            "post_completion_jobs": post_completion_jobs,
         },
         happened_at=now,
     )
@@ -269,6 +362,7 @@ def _apply_task_status_update(
         "status": data.status,
         "follow_up_id": follow_up_id,
         "completed_at": completed_at.isoformat() if completed_at else None,
+        "post_completion_jobs": post_completion_jobs,
         "unchanged": False,
     }
 
@@ -379,23 +473,13 @@ def list_tasks(
 
 @router.get("/assignees")
 def list_task_assignees(
+    keyword: str | None = None,
     current_user: dict = Depends(require_permission("task:read:self")),
     db: Session = Depends(get_db),
 ):
     _ensure_assignment_permission(current_user)
-    rows = db.execute(
-        text(
-            """
-            SELECT user_id, username, real_name
-            FROM sys_user
-            WHERE tenant_id = :tenant_id AND status = 1 AND is_deleted = 0
-            ORDER BY real_name ASC, username ASC
-            """
-        ),
-        {
-            "tenant_id": current_user["tenant_id"],
-        },
-    ).mappings().all()
+    # 中文注释：当前版本还没有组织架构表，所以先按“在职且具备可执行角色”的最小集合返回负责人候选人。
+    rows = _list_assignable_users(db, current_user["tenant_id"], keyword=keyword)
     return success(list(rows), "查询成功", total=len(rows))
 
 
@@ -496,6 +580,7 @@ def update_task_status(
             "status": result["status"],
             "follow_up_id": result["follow_up_id"],
             "completed_at": result["completed_at"],
+            "post_completion_jobs": result["post_completion_jobs"],
         },
         "任务状态已更新",
     )
