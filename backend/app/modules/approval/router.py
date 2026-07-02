@@ -11,6 +11,7 @@ from app.modules.approval.schemas import (
     BatchReviewRequest,
     RejectApprovalRequest,
 )
+from app.modules.approval.service import sync_agent_run_after_approval_review
 from app.modules.auth.dependencies import require_permission
 from app.shared.ids import new_id
 from app.shared.response import success
@@ -238,6 +239,17 @@ def _approve_approval(
         approval.get("risk_snapshot_id"),
         "converted",
     )
+    sync_agent_run_after_approval_review(
+        db,
+        tenant_id=current_user["tenant_id"],
+        approval=approval,
+        reviewed_status="approved",
+        reviewed_at=reviewed_at,
+        review_comment=review_comment,
+        reviewer_user_id=current_user["user_id"],
+        reviewer_user_name=current_user.get("real_name") or current_user.get("username"),
+        task_id=task_id,
+    )
     return {
         "approval_id": approval["approval_id"],
         "status": "approved",
@@ -287,6 +299,17 @@ def _reject_approval(db: Session, current_user: dict, approval: dict, review_com
         current_user["tenant_id"],
         approval.get("risk_snapshot_id"),
         "ignored",
+    )
+    sync_agent_run_after_approval_review(
+        db,
+        tenant_id=current_user["tenant_id"],
+        approval=approval,
+        reviewed_status="rejected",
+        reviewed_at=reviewed_at,
+        review_comment=review_comment,
+        reviewer_user_id=current_user["user_id"],
+        reviewer_user_name=current_user.get("real_name") or current_user.get("username"),
+        task_id=None,
     )
     return {
         "approval_id": approval["approval_id"],

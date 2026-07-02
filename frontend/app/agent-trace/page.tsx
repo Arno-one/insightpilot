@@ -62,6 +62,17 @@ type RunDetail = {
   rag_traces: RagTrace[];
 };
 
+type ApprovalSummary = {
+  total_count?: number;
+  pending_count?: number;
+  approved_count?: number;
+  rejected_count?: number;
+  processed_count?: number;
+  converted_task_count?: number;
+  all_reviewed?: boolean;
+  latest_reviewed_at?: string | null;
+};
+
 type StepSummaryItem = {
   label: string;
   value: string;
@@ -154,6 +165,17 @@ function getStepMeta(nodeName: string): StepMeta {
       description: "当前节点还没有单独的人类可读说明。",
     }
   );
+}
+
+function getApprovalSummaryFromRunOutput(output: unknown): ApprovalSummary | null {
+  if (!isRecord(output)) {
+    return null;
+  }
+  const summary = output.approval_summary;
+  if (!isRecord(summary)) {
+    return null;
+  }
+  return summary as ApprovalSummary;
 }
 
 function summarizeStepOutput(step: AgentStep): StepSummaryItem[] {
@@ -384,6 +406,13 @@ export default function AgentTracePage() {
     };
   }, [detail]);
 
+  const approvalSummary = useMemo(() => {
+    if (!detail) {
+      return null;
+    }
+    return getApprovalSummaryFromRunOutput(detail.run.output_json);
+  }, [detail]);
+
   return (
     <AppShell>
       <section className="command-panel">
@@ -498,6 +527,27 @@ export default function AgentTracePage() {
                         <div className="trace-stat">
                           <strong>{detail.run.status === "awaiting_approval" ? "是" : "否"}</strong>
                           <span>等待人工审批</span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {approvalSummary ? (
+                      <div className="trace-overview">
+                        <div className="trace-stat">
+                          <strong>{approvalSummary.approved_count || 0}</strong>
+                          <span>人工已通过</span>
+                        </div>
+                        <div className="trace-stat">
+                          <strong>{approvalSummary.rejected_count || 0}</strong>
+                          <span>人工已驳回</span>
+                        </div>
+                        <div className="trace-stat">
+                          <strong>{approvalSummary.converted_task_count || 0}</strong>
+                          <span>已转任务</span>
+                        </div>
+                        <div className="trace-stat">
+                          <strong>{formatDateTime(approvalSummary.latest_reviewed_at)}</strong>
+                          <span>最近人工处理</span>
                         </div>
                       </div>
                     ) : null}
