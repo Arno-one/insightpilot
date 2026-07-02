@@ -994,6 +994,28 @@ pre {
   background: rgba(57, 208, 255, 0.06);
 }
 
+.mapping-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mapping-field {
+  display: grid;
+  gap: 8px;
+}
+
+.mapping-field span {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mapping-select {
+  min-height: 44px;
+  padding: 0 14px;
+}
+
 .retry-stack {
   display: grid;
   gap: 16px;
@@ -1353,6 +1375,10 @@ pre {
   }
 
   .retry-field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mapping-grid {
     grid-template-columns: 1fr;
   }
 }
