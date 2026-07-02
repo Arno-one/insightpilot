@@ -985,6 +985,46 @@ pre {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.retry-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.retry-row-card {
+  display: grid;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.retry-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.retry-field {
+  display: grid;
+  gap: 8px;
+}
+
+.retry-field span {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.retry-input {
+  min-height: 44px;
+  padding: 0 14px;
+}
+
+.retry-textarea {
+  min-height: 110px;
+}
+
 .compact-input {
   min-height: 40px;
   margin-left: 10px;
@@ -1301,5 +1341,9 @@ pre {
 
   .auth-shell {
     gap: 16px;
+  }
+
+  .retry-field-grid {
+    grid-template-columns: 1fr;
   }
 }

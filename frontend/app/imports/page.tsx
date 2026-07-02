@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { ChangeEvent, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
@@ -33,6 +33,13 @@ type ImportConfig = {
   lead: string;
   requiredFields: string[];
   validationRules: string[];
+};
+
+type RetryRow = {
+  id: string;
+  originalRowNo: number;
+  originalReason: string;
+  rowData: Record<string, string>;
 };
 
 const importConfigs: ImportConfig[] = [
@@ -116,19 +123,48 @@ function saveBlob(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
+function buildCsvContent(headers: string[], rows: Record<string, string>[]) {
+  // 中文注释：二次导入仍然走现有 CSV 接口，所以这里把页面里的修正值重新拼回标准 CSV 文本。
+  const escapeCsvCell = (value: string) => {
+    if (value.includes(",") || value.includes("\"") || value.includes("\n")) {
+      return `"${value.replaceAll("\"", "\"\"")}"`;
+    }
+    return value;
+  };
+
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) => headers.map((header) => escapeCsvCell(row[header] || "")).join(","))
+  ];
+  return lines.join("\n");
+}
+
+function createRetryRows(failures: ImportFailure[]) {
+  return failures.map((failure, index) => ({
+    id: `${failure.row_no}-${failure.business_key || "empty"}-${index}`,
+    originalRowNo: failure.row_no,
+    originalReason: failure.reason,
+    rowData: { ...failure.row_data }
+  }));
+}
+
 export default function ImportsPage() {
   const [selectedEntity, setSelectedEntity] = useState<ImportEntity>("customer");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [retryRows, setRetryRows] = useState<RetryRow[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [retrySubmitting, setRetrySubmitting] = useState(false);
 
   const currentConfig = useMemo(
     () => importConfigs.find((item) => item.key === selectedEntity) || importConfigs[0],
     [selectedEntity]
   );
+
+  const retryHeaders = currentConfig.requiredFields;
 
   async function handleTemplateDownload() {
     setDownloadingTemplate(true);
@@ -163,6 +199,7 @@ export default function ImportsPage() {
       });
 
       setResult(response.data);
+      setRetryRows(createRetryRows(response.data.failures));
       setMessage(
         `导入已执行：共 ${response.data.total_count} 行，成功 ${response.data.success_count} 行，失败 ${response.data.failed_count} 行。`
       );
@@ -182,10 +219,73 @@ export default function ImportsPage() {
     saveBlob(blob, `${result.entity}_failed_rows.csv`);
   }
 
+  function handleRetryRowsDownload() {
+    if (!retryRows.length) {
+      return;
+    }
+    const csvContent = buildCsvContent(
+      retryHeaders,
+      retryRows.map((item) => item.rowData)
+    );
+    const blob = new Blob(["\ufeff", csvContent], { type: "text/csv;charset=utf-8" });
+    saveBlob(blob, `${selectedEntity}_retry_rows.csv`);
+  }
+
+  function handleRetryFieldChange(rowId: string, field: string, event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
+    const value = event.target.value;
+    setRetryRows((currentRows) =>
+      currentRows.map((row) => (row.id === rowId ? { ...row, rowData: { ...row.rowData, [field]: value } } : row))
+    );
+  }
+
+  function handleRemoveRetryRow(rowId: string) {
+    setRetryRows((currentRows) => currentRows.filter((row) => row.id !== rowId));
+  }
+
+  async function handleRetryImportSubmit() {
+    if (!retryRows.length) {
+      setError("当前没有可重新导入的失败行。");
+      return;
+    }
+
+    setRetrySubmitting(true);
+    setMessage("");
+    setError("");
+
+    try {
+      const csvContent = buildCsvContent(
+        retryHeaders,
+        retryRows.map((item) => item.rowData)
+      );
+      // 中文注释：这里不额外发明“重试接口”，而是前端生成一个临时 CSV 文件，再复用现有导入链路。
+      const retryFile = new File([`\ufeff${csvContent}`], `${selectedEntity}_retry.csv`, {
+        type: "text/csv;charset=utf-8"
+      });
+      const formData = new FormData();
+      formData.append("file", retryFile);
+
+      const response = await apiFetch<ImportResult>(`/api/crm/import/${selectedEntity}`, {
+        method: "POST",
+        body: formData
+      });
+
+      setResult(response.data);
+      setRetryRows(createRetryRows(response.data.failures));
+      setMessage(
+        `失败行二次导入已执行：共 ${response.data.total_count} 行，成功 ${response.data.success_count} 行，失败 ${response.data.failed_count} 行。`
+      );
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "失败行二次导入失败。");
+    } finally {
+      setRetrySubmitting(false);
+    }
+  }
+
   function handleEntityChange(entity: ImportEntity) {
     setSelectedEntity(entity);
     setSelectedFile(null);
     setResult(null);
+    setRetryRows([]);
     setMessage("");
     setError("");
   }
@@ -278,6 +378,7 @@ export default function ImportsPage() {
               onClick={() => {
                 setSelectedFile(null);
                 setResult(null);
+                setRetryRows([]);
                 setMessage("");
                 setError("");
               }}
@@ -377,24 +478,87 @@ export default function ImportsPage() {
           </section>
 
           {result.failures.length ? (
-            <section className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Failed Rows</p>
-                  <h2>失败行明细</h2>
-                </div>
-              </div>
-              <div className="summary-list">
-                {result.failures.map((failure) => (
-                  <div className="summary-item" key={`${failure.row_no}-${failure.business_key || "empty"}`}>
-                    <strong>
-                      第 {failure.row_no} 行 {failure.business_key ? `· ${failure.business_key}` : ""}
-                    </strong>
-                    <p>{failure.reason}</p>
+            <>
+              <section className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Failed Rows</p>
+                    <h2>失败行明细</h2>
                   </div>
-                ))}
-              </div>
-            </section>
+                </div>
+                <div className="summary-list">
+                  {result.failures.map((failure) => (
+                    <div className="summary-item" key={`${failure.row_no}-${failure.business_key || "empty"}`}>
+                      <strong>
+                        第 {failure.row_no} 行 {failure.business_key ? `· ${failure.business_key}` : ""}
+                      </strong>
+                      <p>{failure.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Retry Import</p>
+                    <h2>修正失败行后再次导入</h2>
+                    <p className="panel-copy">
+                      这里直接复用本次失败行作为草稿，改完后会重新生成一份 CSV，并继续走现有导入接口。
+                    </p>
+                  </div>
+                  <div className="page-actions">
+                    <button className="button-secondary" onClick={handleRetryRowsDownload} type="button" disabled={!retryRows.length}>
+                      下载当前修正版
+                    </button>
+                    <button className="button" onClick={handleRetryImportSubmit} type="button" disabled={!retryRows.length || retrySubmitting}>
+                      {retrySubmitting ? "二次导入中..." : "重新导入失败行"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="retry-stack">
+                  {retryRows.map((row, index) => (
+                    <article className="retry-row-card" key={row.id}>
+                      <div className="panel-header">
+                        <div>
+                          <strong>修正草稿 {index + 1}</strong>
+                          <p className="panel-copy">原始失败行：第 {row.originalRowNo} 行；失败原因：{row.originalReason}</p>
+                        </div>
+                        <button className="ghost-button" onClick={() => handleRemoveRetryRow(row.id)} type="button">
+                          移除这一行
+                        </button>
+                      </div>
+
+                      <div className="retry-field-grid">
+                        {retryHeaders.map((field) => {
+                          const value = row.rowData[field] || "";
+                          const useTextarea = field === "content" || field === "remark";
+                          return (
+                            <label className="retry-field" key={`${row.id}-${field}`}>
+                              <span>{field}</span>
+                              {useTextarea ? (
+                                <textarea
+                                  className="input-like textarea-like retry-textarea"
+                                  onChange={(event) => handleRetryFieldChange(row.id, field, event)}
+                                  value={value}
+                                />
+                              ) : (
+                                <input
+                                  className="input-like retry-input"
+                                  onChange={(event) => handleRetryFieldChange(row.id, field, event)}
+                                  value={value}
+                                />
+                              )}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </>
           ) : (
             <EmptyCard
               text="本次没有失败行。"
