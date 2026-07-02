@@ -170,6 +170,68 @@ def test_review_risk_tool_results_fallback_blocks_incomplete_advice(monkeypatch)
     assert "缺少关键字段" in decision.review_note
 
 
+def test_review_risk_tool_results_fallback_blocks_high_risk_without_context_evidence(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
+
+    decision = llm_client.review_risk_tool_results(
+        customer={"customer_id": "cust_001", "customer_name": "上海样例客户"},
+        deal={"deal_id": "deal_001", "amount": 88000},
+        risk_result={
+            "risk_score": 82,
+            "risk_level": "high",
+            "rule_hits": [{"rule_name": "连续14天未跟进"}],
+            "evidence": {},
+        },
+        rag_result={"status": "failed", "trace_id": None, "hit_count": 0},
+        advice_data={
+            "reason": "客户长期未推进且风险较高。",
+            "suggestion": "建议主管介入。",
+            "task_type": "manager_intervention",
+            "task_title": "主管介入高风险客户",
+            "priority": "urgent",
+            "recommended_script": "先确认采购时间与阻塞点。",
+        },
+    )
+
+    assert decision.approved is False
+    assert "证据" in decision.review_note
+    assert decision.evidence_used == []
+
+
+def test_review_risk_tool_results_fallback_blocks_duplicate_pending_approval(monkeypatch):
+    monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
+
+    decision = llm_client.review_risk_tool_results(
+        customer={"customer_id": "cust_001", "customer_name": "上海样例客户"},
+        deal=None,
+        risk_result={
+            "risk_score": 61,
+            "risk_level": "medium",
+            "rule_hits": [{"rule_name": "客户沉默"}],
+            "evidence": {},
+        },
+        rag_result={"status": "success", "trace_id": "trace_001", "hit_count": 2},
+        advice_data={
+            "reason": "客户跟进节奏变慢。",
+            "suggestion": "建议补一次高质量回访。",
+            "task_type": "quote_follow",
+            "task_title": "补充客户回访",
+            "priority": "high",
+            "recommended_script": "先确认预算和决策时间。",
+        },
+        customer_detail={
+            "approvals": [{"approval_id": "appr_001", "status": "pending"}],
+            "tasks": [],
+            "follow_ups": [],
+        },
+        tool_executions=[{"tool_name": "crm.get_customer_detail"}],
+    )
+
+    assert decision.approved is False
+    assert "待审批" in decision.review_note
+    assert "crm.get_customer_detail" in decision.evidence_used
+
+
 def test_review_risk_tool_results_fallback_approves_complete_advice(monkeypatch):
     monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
 
@@ -191,7 +253,23 @@ def test_review_risk_tool_results_fallback_approves_complete_advice(monkeypatch)
             "priority": "urgent",
             "recommended_script": "这次先不推动成交，只确认项目节奏和真实顾虑。",
         },
+        customer_detail={
+            "approvals": [],
+            "tasks": [],
+            "follow_ups": [{"follow_up_id": "fu_001"}],
+        },
+        related_reports=[{"report_id": "report_001", "summary": "最近两周客户推进速度明显放缓。"}],
+        tool_executions=[
+            {"tool_name": "crm.get_customer_detail"},
+            {"tool_name": "report.query"},
+            {"tool_name": "rag.retrieve_sales_context"},
+        ],
     )
 
     assert decision.approved is True
-    assert "结构完整" in decision.summary
+    assert "证据" in decision.summary
+    assert decision.evidence_used == [
+        "rag.retrieve_sales_context",
+        "crm.get_customer_detail",
+        "report.query",
+    ]

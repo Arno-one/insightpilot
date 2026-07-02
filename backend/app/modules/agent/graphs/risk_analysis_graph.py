@@ -680,6 +680,9 @@ def build_risk_analysis_graph(db: Session):
                         },
                     ),
                     item.get("advice"),
+                    customer_detail=item.get("customer_detail"),
+                    related_reports=item.get("related_reports"),
+                    tool_executions=item.get("tool_executions"),
                 )
                 reviewed_actions.append({**item, "review": review.model_dump()})
                 if review.approved:
@@ -695,6 +698,7 @@ def build_risk_analysis_graph(db: Session):
                             "customer_name": item["customer"].get("customer_name"),
                             "approved": item["review"]["approved"],
                             "review_note": item["review"]["review_note"],
+                            "evidence_used": item["review"].get("evidence_used", []),
                         }
                         for item in reviewed_actions[:5]
                     ],

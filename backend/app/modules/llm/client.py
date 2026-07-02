@@ -40,6 +40,7 @@ class RiskReviewDecision(BaseModel):
     approved: bool = Field(..., description="当前建议是否可以进入人工审批草稿")
     summary: str = Field(..., description="本次复核总结")
     review_note: str = Field(..., description="复核意见")
+    evidence_used: list[str] = Field(default_factory=list, description="本次复核实际参考的证据来源")
 
 
 class ReportNarrative(BaseModel):
@@ -296,20 +297,88 @@ def generate_risk_advice(customer: dict, deal: dict | None, risk_result: dict, r
     return advice or fallback_risk_advice(customer, risk_result)
 
 
-def fallback_risk_review_decision(advice_data: dict | None) -> RiskReviewDecision:
-    """LLM 不可用时的规则化 Reviewer，先校验结构是否完整。"""
+def _review_evidence_snapshot(
+    rag_result: dict,
+    customer_detail: dict | None,
+    related_reports: list[dict] | None,
+    tool_executions: list[dict] | None,
+) -> dict[str, object]:
+    """把 Reviewer 会用到的上下文证据压缩成简单快照，便于规则和 LLM 共用。"""
+    related_reports = related_reports or []
+    tool_executions = tool_executions or []
+    customer_detail = customer_detail or {}
+
+    approvals = customer_detail.get("approvals", []) if isinstance(customer_detail, dict) else []
+    tasks = customer_detail.get("tasks", []) if isinstance(customer_detail, dict) else []
+    follow_ups = customer_detail.get("follow_ups", []) if isinstance(customer_detail, dict) else []
+
+    evidence_used: list[str] = []
+    if rag_result.get("status") == "success" and rag_result.get("hit_count", 0):
+        evidence_used.append("rag.retrieve_sales_context")
+    if customer_detail:
+        evidence_used.append("crm.get_customer_detail")
+    if related_reports:
+        evidence_used.append("report.query")
+
+    pending_approvals = sum(1 for item in approvals if item.get("status") == "pending")
+    active_tasks = sum(1 for item in tasks if item.get("status") in {"pending", "in_progress"})
+
+    return {
+        "evidence_used": evidence_used,
+        "has_context_evidence": bool(evidence_used),
+        "pending_approvals": pending_approvals,
+        "active_tasks": active_tasks,
+        "follow_up_count": len(follow_ups),
+        "report_count": len(related_reports),
+        "tool_names": [item.get("tool_name") for item in tool_executions if item.get("tool_name")],
+    }
+
+
+def fallback_risk_review_decision(
+    risk_result: dict,
+    rag_result: dict,
+    advice_data: dict | None,
+    customer_detail: dict | None = None,
+    related_reports: list[dict] | None = None,
+    tool_executions: list[dict] | None = None,
+) -> RiskReviewDecision:
+    """LLM 不可用时的规则化 Reviewer，除了结构完整性，也会参考上下文证据与重复处置风险。"""
     required_fields = ["reason", "suggestion", "task_type", "task_title", "priority", "recommended_script"]
     missing_fields = [field for field in required_fields if not advice_data or not advice_data.get(field)]
+    evidence = _review_evidence_snapshot(rag_result, customer_detail, related_reports, tool_executions)
     if missing_fields:
         return RiskReviewDecision(
             approved=False,
             summary="建议信息不完整，暂不进入人工审批草稿。",
             review_note=f"缺少关键字段：{', '.join(missing_fields)}",
+            evidence_used=evidence["evidence_used"],
+        )
+    if risk_result.get("risk_level") == "high" and not evidence["has_context_evidence"]:
+        return RiskReviewDecision(
+            approved=False,
+            summary="高风险客户缺少充分证据支撑，暂不进入人工审批草稿。",
+            review_note="当前没有拿到 CRM 详情、经营报告或有效 RAG 上下文，建议先补证据再提交审批。",
+            evidence_used=evidence["evidence_used"],
+        )
+    if evidence["pending_approvals"]:
+        return RiskReviewDecision(
+            approved=False,
+            summary="客户已存在待审批动作，先避免重复创建新的审批草稿。",
+            review_note=f"该客户当前已有 {evidence['pending_approvals']} 条待审批记录，建议先处理存量审批。",
+            evidence_used=evidence["evidence_used"],
+        )
+    if evidence["active_tasks"] and risk_result.get("risk_level") != "high":
+        return RiskReviewDecision(
+            approved=False,
+            summary="客户已有在执行任务，当前建议先不重复进入审批。",
+            review_note=f"检测到 {evidence['active_tasks']} 条活跃任务，建议先确认现有动作效果，再决定是否追加处置。",
+            evidence_used=evidence["evidence_used"],
         )
     return RiskReviewDecision(
         approved=True,
-        summary="建议结构完整，可以进入人工审批草稿。",
-        review_note="已校验建议字段、优先级和推荐话术，保持先审后落地。",
+        summary="建议结构完整，且已有足够证据支持，可以进入人工审批草稿。",
+        review_note="已校验建议字段、风险等级、上下文证据和重复处置风险，保持先审后落地。",
+        evidence_used=evidence["evidence_used"],
     )
 
 
@@ -319,12 +388,16 @@ def review_risk_tool_results(
     risk_result: dict,
     rag_result: dict,
     advice_data: dict | None,
+    customer_detail: dict | None = None,
+    related_reports: list[dict] | None = None,
+    tool_executions: list[dict] | None = None,
 ) -> RiskReviewDecision:
     """让 Reviewer 判断当前建议是否值得进入审批草稿。"""
+    evidence = _review_evidence_snapshot(rag_result, customer_detail, related_reports, tool_executions)
     system_prompt = (
         "你是 InsightPilot 风险 Agent 的 Reviewer。"
         "你只能判断当前建议是否应进入人工审批草稿，不能直接创建正式任务。"
-        "如果建议字段缺失、风险解释空泛或缺少可执行动作，应拒绝通过。"
+        "如果建议字段缺失、风险解释空泛、证据不足，或客户已有待审批/在执行动作而重复创建处置，应拒绝通过。"
     )
     user_message = json.dumps(
         {
@@ -336,10 +409,26 @@ def review_risk_tool_results(
                 "hit_count": rag_result.get("hit_count", 0),
                 "trace_id": rag_result.get("trace_id"),
             },
+            "customer_detail_snapshot": {
+                "approval_count": len((customer_detail or {}).get("approvals", [])) if isinstance(customer_detail, dict) else 0,
+                "pending_approval_count": evidence["pending_approvals"],
+                "task_count": len((customer_detail or {}).get("tasks", [])) if isinstance(customer_detail, dict) else 0,
+                "active_task_count": evidence["active_tasks"],
+                "follow_up_count": evidence["follow_up_count"],
+            },
+            "report_snapshot": {
+                "report_count": evidence["report_count"],
+                "latest_report_summary": (related_reports or [{}])[0].get("summary", "")[:200] if related_reports else "",
+            },
+            "tool_execution_summary": {
+                "tool_names": evidence["tool_names"],
+                "evidence_used": evidence["evidence_used"],
+            },
             "advice": advice_data,
             "review_rules": [
                 "保持先审后落地",
-                "只有建议结构完整、结论明确时才允许 approved=true",
+                "只有建议结构完整、结论明确且证据足够时才允许 approved=true",
+                "如果客户已有待审批或已有活跃任务，要谨慎避免重复处置",
                 "review_note 必须说清楚通过或拒绝的原因",
             ],
         },
@@ -347,7 +436,14 @@ def review_risk_tool_results(
         default=str,
     )
     decision = structured_complete(system_prompt, user_message, RiskReviewDecision)
-    return decision or fallback_risk_review_decision(advice_data)
+    return decision or fallback_risk_review_decision(
+        risk_result,
+        rag_result,
+        advice_data,
+        customer_detail=customer_detail,
+        related_reports=related_reports,
+        tool_executions=tool_executions,
+    )
 
 
 def fallback_report_narrative(metrics: dict, risk_top: list[dict]) -> ReportNarrative:

@@ -282,6 +282,11 @@ function renderPreviewRow(step: AgentStep, row: StepPreviewRecord, index: number
         <p>{formatValue(row.review_note)}</p>
         <div className="meta-row">
           <span className="meta-chip">{row.approved ? "允许进入审批" : "阻断审批创建"}</span>
+          {(Array.isArray(row.evidence_used) ? row.evidence_used : []).map((evidence) => (
+            <span className="meta-chip" key={`${step.step_id}-${index}-${String(evidence)}`}>
+              {String(evidence)}
+            </span>
+          ))}
         </div>
       </div>
     );
