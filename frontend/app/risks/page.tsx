@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
@@ -10,6 +11,7 @@ import { formatDateTime, getRiskMeta, getStatusMeta } from "@/lib/presentation";
 type RiskSnapshot = {
   risk_snapshot_id: string;
   customer_id: string;
+  customer_name: string | null;
   owner_user_id: string;
   owner_user_name: string | null;
   risk_score: number;
@@ -19,6 +21,14 @@ type RiskSnapshot = {
   status: string;
   created_at: string;
 };
+
+function customerLabel(item: RiskSnapshot) {
+  return item.customer_name ? `${item.customer_name} · ${item.customer_id}` : item.customer_id;
+}
+
+function customerDetailHref(item: RiskSnapshot) {
+  return `/customers/${item.customer_id}?riskSnapshotId=${item.risk_snapshot_id}`;
+}
 
 export default function RisksPage() {
   const [items, setItems] = useState<RiskSnapshot[]>([]);
@@ -67,7 +77,7 @@ export default function RisksPage() {
         <div>
           <p className="eyebrow">Risk Signals</p>
           <h1>先看客户为什么会失速，再决定团队今天该先做什么。</h1>
-          <p className="lead">这里集中展示规则引擎识别出的风险级别、AI 解释、建议动作与待审批状态。</p>
+          <p className="lead">这里集中展示规则引擎识别出的风险级别、AI 解释、建议动作与待审批状态，现在也可以直接下钻到客户级工作台。</p>
         </div>
         <div className="page-actions">
           <button className="button" onClick={triggerScan} type="button">
@@ -107,7 +117,7 @@ export default function RisksPage() {
             <article className="metric-card">
               <strong className="metric-value">{topRisk?.risk_score ?? 0}</strong>
               <span className="metric-label">最高风险分</span>
-              <p className="metric-detail">{topRisk ? `当前来自客户 ${topRisk.customer_id}` : "暂无风险数据"}</p>
+              <p className="metric-detail">{topRisk ? `当前来自 ${customerLabel(topRisk)}` : "暂无风险数据"}</p>
             </article>
           </section>
 
@@ -118,10 +128,15 @@ export default function RisksPage() {
                   <p className="eyebrow">Highest Alert</p>
                   <h2>当前最需要优先处理的风险</h2>
                 </div>
+                {topRisk ? (
+                  <Link className="button-secondary" href={customerDetailHref(topRisk)}>
+                    打开客户工作台
+                  </Link>
+                ) : null}
               </div>
               {topRisk ? (
                 <div className="summary-item">
-                  <strong>{topRisk.customer_id}</strong>
+                  <strong>{customerLabel(topRisk)}</strong>
                   <p>{topRisk.llm_reason}</p>
                   <div className="meta-row">
                     <span className={`pill ${getRiskMeta(topRisk.risk_level).toneClass}`}>{getRiskMeta(topRisk.risk_level).label}</span>
@@ -163,7 +178,7 @@ export default function RisksPage() {
                   <div className="risk-card-header">
                     <div>
                       <p className="eyebrow">Customer {item.customer_id}</p>
-                      <h2 className="section-title">风险分 {item.risk_score}</h2>
+                      <h2 className="section-title">{customerLabel(item)}</h2>
                     </div>
                     <div className="risk-meta">
                       <span className={`pill ${riskMeta.toneClass}`}>{riskMeta.label}</span>
@@ -172,6 +187,7 @@ export default function RisksPage() {
                   </div>
 
                   <div className="meta-row">
+                    <span className="meta-chip">风险分 {item.risk_score}</span>
                     <span className="meta-chip">负责人 {item.owner_user_name || item.owner_user_id}</span>
                     <span className="meta-chip">快照时间 {formatDateTime(item.created_at)}</span>
                   </div>
@@ -185,6 +201,12 @@ export default function RisksPage() {
                       <strong>建议动作</strong>
                       <p>{item.llm_suggestion}</p>
                     </div>
+                  </div>
+
+                  <div className="action-row">
+                    <Link className="button-secondary" href={customerDetailHref(item)}>
+                      查看客户详情
+                    </Link>
                   </div>
                 </article>
               );

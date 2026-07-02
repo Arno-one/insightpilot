@@ -27,6 +27,7 @@ class RiskCandidate(TypedDict):
 class RiskAnalysisState(TypedDict, total=False):
     tenant_id: str
     user_id: str
+    customer_id: str
     run_id: str
     started_at: datetime
     started_ts: float
@@ -94,34 +95,46 @@ def _insert_step(
     )
 
 
-def _load_customers(db: Session, tenant_id: str) -> list[dict[str, Any]]:
+def _load_customers(db: Session, tenant_id: str, customer_id: str | None = None) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"tenant_id": tenant_id}
+    customer_filter = ""
+    if customer_id:
+        customer_filter = "AND customer_id = :customer_id"
+        params["customer_id"] = customer_id
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT *
             FROM crm_customer
             WHERE tenant_id = :tenant_id
               AND lifecycle_stage NOT IN ('won', 'lost')
+              {customer_filter}
             ORDER BY updated_at DESC
             """
         ),
-        {"tenant_id": tenant_id},
+        params,
     ).mappings().all()
     return [dict(row) for row in rows]
 
 
-def _load_deals_by_customer(db: Session, tenant_id: str) -> dict[str, dict[str, Any]]:
+def _load_deals_by_customer(db: Session, tenant_id: str, customer_id: str | None = None) -> dict[str, dict[str, Any]]:
+    params: dict[str, Any] = {"tenant_id": tenant_id}
+    customer_filter = ""
+    if customer_id:
+        customer_filter = "AND customer_id = :customer_id"
+        params["customer_id"] = customer_id
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT *
             FROM crm_deal
             WHERE tenant_id = :tenant_id
               AND close_result = 'open'
+              {customer_filter}
             ORDER BY updated_at DESC
             """
         ),
-        {"tenant_id": tenant_id},
+        params,
     ).mappings().all()
     deals: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -357,8 +370,9 @@ def build_risk_analysis_graph(db: Session):
 
     def load_crm_data(state: RiskAnalysisState) -> dict[str, Any]:
         def handler(current_state: RiskAnalysisState):
-            customers = _load_customers(db, current_state["tenant_id"])
-            deals_by_customer = _load_deals_by_customer(db, current_state["tenant_id"])
+            customer_id = current_state.get("customer_id")
+            customers = _load_customers(db, current_state["tenant_id"], customer_id=customer_id)
+            deals_by_customer = _load_deals_by_customer(db, current_state["tenant_id"], customer_id=customer_id)
             return (
                 {"customer_count": len(customers), "deal_count": len(deals_by_customer)},
                 {"customers": customers, "deals_by_customer": deals_by_customer},
@@ -483,14 +497,20 @@ def build_risk_analysis_graph(db: Session):
     return graph.compile()
 
 
-def run_risk_analysis_workflow(tenant_id: str, user_id: str) -> dict[str, Any]:
+def run_risk_analysis_workflow(tenant_id: str, user_id: str, customer_id: str | None = None) -> dict[str, Any]:
     """执行风险扫描图，并保持现有返回结构与落库行为兼容。"""
     db = SessionLocal()
     run_id = new_id("run")
     started_at = datetime.now()
     started_ts = time.time()
     try:
-        logger.info("开始风险扫描: tenant_id=%s, user_id=%s, run_id=%s", tenant_id, user_id, run_id)
+        logger.info(
+            "开始风险扫描: tenant_id=%s, user_id=%s, customer_id=%s, run_id=%s",
+            tenant_id,
+            user_id,
+            customer_id,
+            run_id,
+        )
         db.execute(
             text(
                 """
@@ -507,7 +527,12 @@ def run_risk_analysis_workflow(tenant_id: str, user_id: str) -> dict[str, Any]:
                 "tenant_id": tenant_id,
                 "run_id": run_id,
                 "user_id": user_id,
-                "input_json": _dumps({"scope": "tenant"}),
+                "input_json": _dumps(
+                    {
+                        "scope": "customer" if customer_id else "tenant",
+                        "customer_id": customer_id,
+                    }
+                ),
                 "started_at": started_at,
             },
         )
@@ -519,6 +544,7 @@ def run_risk_analysis_workflow(tenant_id: str, user_id: str) -> dict[str, Any]:
             {
                 "tenant_id": tenant_id,
                 "user_id": user_id,
+                "customer_id": customer_id,
                 "run_id": run_id,
                 "started_at": started_at,
                 "started_ts": started_ts,
