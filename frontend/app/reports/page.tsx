@@ -121,6 +121,15 @@ const EMPTY_FILTERS: ReportFilters = {
 
 const GENERATE_TYPES: ReportType[] = ["daily", "weekly", "monthly"];
 
+function getOwnerDisplayName(ownerUserName: string | null | undefined, ownerUserId: string) {
+  const normalizedName = ownerUserName?.trim();
+  if (normalizedName) {
+    return normalizedName;
+  }
+  const normalizedId = ownerUserId.trim();
+  return normalizedId || "未命名负责人";
+}
+
 function buildQuery(customerId: string | null, filters: ReportFilters) {
   const params = new URLSearchParams();
   if (customerId) {
@@ -200,19 +209,27 @@ function getOwnerCandidates(items: Report[]) {
   const map = new Map<string, string>();
   for (const item of items) {
     for (const owner of item.metrics_json.owner_summary || []) {
-      if (!map.has(owner.owner_user_id)) {
-        map.set(owner.owner_user_id, owner.owner_user_name || owner.owner_user_id);
+      const ownerUserId = owner.owner_user_id?.trim();
+      if (ownerUserId && !map.has(ownerUserId)) {
+        // 中文注释：报告聚合里负责人姓名可能为空，这里统一兜底，避免排序和下钻文案直接报错。
+        map.set(ownerUserId, getOwnerDisplayName(owner.owner_user_name, ownerUserId));
       }
     }
     for (const risk of item.risk_top_json || []) {
-      if (!map.has(risk.owner_user_id)) {
-        map.set(risk.owner_user_id, risk.owner_user_name || risk.owner_user_id);
+      const ownerUserId = risk.owner_user_id?.trim();
+      if (ownerUserId && !map.has(ownerUserId)) {
+        map.set(ownerUserId, getOwnerDisplayName(risk.owner_user_name, ownerUserId));
       }
     }
   }
   return [...map.entries()]
     .map(([owner_user_id, owner_user_name]) => ({ owner_user_id, owner_user_name }))
-    .sort((left, right) => left.owner_user_name.localeCompare(right.owner_user_name, "zh-CN"));
+    .sort((left, right) =>
+      getOwnerDisplayName(left.owner_user_name, left.owner_user_id).localeCompare(
+        getOwnerDisplayName(right.owner_user_name, right.owner_user_id),
+        "zh-CN"
+      )
+    );
 }
 
 function findOwnerSnapshot(report: Report | undefined, ownerUserId: string) {
