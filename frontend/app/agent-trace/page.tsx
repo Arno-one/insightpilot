@@ -62,6 +62,57 @@ type RunDetail = {
   rag_traces: RagTrace[];
 };
 
+type StepSummaryItem = {
+  label: string;
+  value: string;
+};
+
+type StepMeta = {
+  stage: string;
+  label: string;
+  description: string;
+};
+
+type StepPreviewRecord = Record<string, unknown>;
+
+const STEP_META: Record<string, StepMeta> = {
+  load_crm_data: {
+    stage: "Data",
+    label: "加载 CRM 数据",
+    description: "先把本次风险判断需要的客户和商机基础数据读进来。",
+  },
+  calculate_rule_risk: {
+    stage: "Scoring",
+    label: "规则风险打分",
+    description: "基于规则引擎先筛出值得继续分析的风险候选客户。",
+  },
+  plan_risk_actions: {
+    stage: "Planner",
+    label: "风险处置规划",
+    description: "Planner 先决定要调用哪些内部工具，以及调用顺序。",
+  },
+  execute_risk_tools: {
+    stage: "Executor",
+    label: "执行内部工具",
+    description: "Executor 按计划调用知识检索和建议生成工具。",
+  },
+  review_risk_actions: {
+    stage: "Reviewer",
+    label: "复核建议质量",
+    description: "Reviewer 判断当前建议是否值得进入人工审批草稿。",
+  },
+  create_approval_drafts: {
+    stage: "Approval",
+    label: "创建审批草稿",
+    description: "只把通过复核的建议写成审批草稿，仍然保持人审后落地。",
+  },
+  persist_agent_trace: {
+    stage: "Trace",
+    label: "落盘执行追踪",
+    description: "把本次 Run 的最终结果、状态和关键指标写回 Trace。",
+  },
+};
+
 function prettyJson(value: unknown) {
   if (value === null || value === undefined || value === "") {
     return "{}";
@@ -70,6 +121,188 @@ function prettyJson(value: unknown) {
     return value;
   }
   return JSON.stringify(value, null, 2);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatValue(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "无";
+  }
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.join("、");
+  }
+  return prettyJson(value);
+}
+
+function getStepMeta(nodeName: string): StepMeta {
+  return (
+    STEP_META[nodeName] || {
+      stage: "Node",
+      label: nodeName,
+      description: "当前节点还没有单独的人类可读说明。",
+    }
+  );
+}
+
+function summarizeStepOutput(step: AgentStep): StepSummaryItem[] {
+  if (!isRecord(step.output_json)) {
+    return [];
+  }
+
+  const output = step.output_json;
+
+  if (step.node_name === "load_crm_data") {
+    return [
+      { label: "客户数量", value: formatValue(output.customer_count) },
+      { label: "商机数量", value: formatValue(output.deal_count) },
+    ];
+  }
+
+  if (step.node_name === "calculate_rule_risk") {
+    return [{ label: "风险候选客户", value: formatValue(output.candidate_count) }];
+  }
+
+  if (step.node_name === "plan_risk_actions") {
+    return [
+      { label: "规划客户数", value: formatValue(output.plan_count) },
+      { label: "总步骤数", value: formatValue(output.total_steps) },
+    ];
+  }
+
+  if (step.node_name === "execute_risk_tools") {
+    return [
+      { label: "执行客户数", value: formatValue(output.execution_count) },
+      { label: "工具调用数", value: formatValue(output.tool_call_count) },
+      { label: "RAG Trace", value: Array.isArray(output.trace_ids) ? String(output.trace_ids.length) : "0" },
+    ];
+  }
+
+  if (step.node_name === "review_risk_actions") {
+    return [
+      { label: "复核总数", value: formatValue(output.review_count) },
+      { label: "通过", value: formatValue(output.approved_count) },
+      { label: "驳回", value: formatValue(output.rejected_count) },
+    ];
+  }
+
+  if (step.node_name === "create_approval_drafts") {
+    return [
+      { label: "已创建草稿", value: formatValue(output.created_count) },
+      { label: "跳过创建", value: formatValue(output.skipped_count) },
+    ];
+  }
+
+  if (step.node_name === "persist_agent_trace") {
+    return [
+      { label: "风险结果", value: formatValue(output.risk_count) },
+      { label: "审批草稿", value: formatValue(output.approval_count) },
+      { label: "最终状态", value: formatValue(output.status) },
+    ];
+  }
+
+  return Object.entries(output)
+    .slice(0, 4)
+    .map(([label, value]) => ({ label, value: formatValue(value) }));
+}
+
+function getStepPreviewRows(step: AgentStep): StepPreviewRecord[] {
+  if (!isRecord(step.output_json)) {
+    return [];
+  }
+  const output = step.output_json;
+
+  if (step.node_name === "plan_risk_actions" && Array.isArray(output.plan_preview)) {
+    return output.plan_preview.filter(isRecord);
+  }
+  if (step.node_name === "execute_risk_tools" && Array.isArray(output.execution_preview)) {
+    return output.execution_preview.filter(isRecord);
+  }
+  if (step.node_name === "review_risk_actions" && Array.isArray(output.review_preview)) {
+    return output.review_preview.filter(isRecord);
+  }
+  if (step.node_name === "create_approval_drafts" && Array.isArray(output.created_preview)) {
+    return output.created_preview.filter(isRecord);
+  }
+
+  return [];
+}
+
+function renderPreviewRow(step: AgentStep, row: StepPreviewRecord, index: number) {
+  const customerName = formatValue(row.customer_name || row.customer_id || `第 ${index + 1} 条`);
+
+  if (step.node_name === "plan_risk_actions") {
+    return (
+      <div className="summary-item" key={`${step.step_id}-plan-${index}`}>
+        <strong>{customerName}</strong>
+        <p>{formatValue(row.thinking)}</p>
+        <div className="meta-row">
+          {(Array.isArray(row.tools) ? row.tools : []).map((toolName) => (
+            <span className="meta-chip" key={`${step.step_id}-${index}-${String(toolName)}`}>
+              {String(toolName)}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (step.node_name === "execute_risk_tools") {
+    return (
+      <div className="summary-item" key={`${step.step_id}-exec-${index}`}>
+        <strong>{customerName}</strong>
+        <p>工具链已经执行，{row.advice_ready ? "建议草稿已准备好。" : "建议草稿尚未准备好。"} </p>
+        <div className="meta-row">
+          {(Array.isArray(row.tools) ? row.tools : []).map((toolName) => (
+            <span className="meta-chip" key={`${step.step_id}-${index}-${String(toolName)}`}>
+              {String(toolName)}
+            </span>
+          ))}
+          {row.rag_trace_id ? <span className="meta-chip">Trace {String(row.rag_trace_id)}</span> : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (step.node_name === "review_risk_actions") {
+    return (
+      <div className="summary-item" key={`${step.step_id}-review-${index}`}>
+        <strong>{customerName}</strong>
+        <p>{formatValue(row.review_note)}</p>
+        <div className="meta-row">
+          <span className="meta-chip">{row.approved ? "允许进入审批" : "阻断审批创建"}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.node_name === "create_approval_drafts") {
+    return (
+      <div className="summary-item" key={`${step.step_id}-draft-${index}`}>
+        <strong>{customerName}</strong>
+        <p>
+          审批草稿 {formatValue(row.approval_id)}，风险快照 {formatValue(row.risk_snapshot_id)}。
+        </p>
+        <div className="meta-row">
+          <span className="meta-chip">风险分 {formatValue(row.risk_score)}</span>
+          <span className="meta-chip">等级 {formatValue(row.risk_level)}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 export default function AgentTracePage() {
@@ -130,17 +363,32 @@ export default function AgentTracePage() {
     return { successCount, failedCount, avgDuration };
   }, [items]);
 
+  const selectedOverview = useMemo(() => {
+    if (!detail) {
+      return null;
+    }
+
+    const plannerStepCount = detail.steps.filter((step) => step.node_name === "plan_risk_actions").length;
+    const executorStepCount = detail.steps.filter((step) => step.node_name === "execute_risk_tools").length;
+    const reviewerStepCount = detail.steps.filter((step) => step.node_name === "review_risk_actions").length;
+
+    return {
+      plannerStepCount,
+      executorStepCount,
+      reviewerStepCount,
+    };
+  }, [detail]);
+
   return (
     <AppShell>
-      <section className="page-hero">
+      <section className="command-panel">
         <div>
           <p className="eyebrow">Execution Trace</p>
-          <h1>把 Agent 的每一步跑法摊开看，系统才真正具备“可审计”这件事。</h1>
-          <p className="lead">这里同时展示 Run 列表、节点耗时、工具输出和 RAG 证据，适合排查问题，也适合面试时讲清楚技术深度。</p>
+          <h1>Agent 执行追踪</h1>
         </div>
       </section>
 
-      {error ? <ErrorCard message={error} detail="如果详情拉取失败，请确认 Trace 相关接口与数据库记录是否正常。" /> : null}
+      {error ? <ErrorCard message={error} detail="如果详情拉取失败，请确认 Trace 接口与数据库记录是否正常。" /> : null}
       {loading ? <LoadingCard detail="正在读取 Agent Run 列表与链路摘要。" /> : null}
       {!loading && !items.length && !error ? (
         <EmptyCard text="当前没有 Agent 执行记录。" detail="先触发风险扫描或经营日报任务，再回来查看完整链路。" />
@@ -162,7 +410,7 @@ export default function AgentTracePage() {
             <article className="metric-card">
               <strong className="metric-value">{overview.failedCount}</strong>
               <span className="metric-label">失败告警</span>
-              <p className="metric-detail">失败 Run 越多，越需要结合节点输出定位瓶颈。</p>
+              <p className="metric-detail">失败 Run 越多，越需要结合节点输出来定位瓶颈。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{formatDuration(overview.avgDuration)}</strong>
@@ -228,6 +476,27 @@ export default function AgentTracePage() {
                       </div>
                     </div>
 
+                    {selectedOverview ? (
+                      <div className="trace-overview">
+                        <div className="trace-stat">
+                          <strong>{selectedOverview.plannerStepCount}</strong>
+                          <span>Planner 阶段</span>
+                        </div>
+                        <div className="trace-stat">
+                          <strong>{selectedOverview.executorStepCount}</strong>
+                          <span>Executor 阶段</span>
+                        </div>
+                        <div className="trace-stat">
+                          <strong>{selectedOverview.reviewerStepCount}</strong>
+                          <span>Reviewer 阶段</span>
+                        </div>
+                        <div className="trace-stat">
+                          <strong>{detail.run.status === "awaiting_approval" ? "是" : "否"}</strong>
+                          <span>等待人工审批</span>
+                        </div>
+                      </div>
+                    ) : null}
+
                     {detail.run.error_message ? <p className="danger-text">{detail.run.error_message}</p> : null}
 
                     <details>
@@ -247,19 +516,44 @@ export default function AgentTracePage() {
                     <div className="timeline">
                       {detail.steps.map((step, index) => {
                         const statusMeta = getStatusMeta(step.status);
+                        const stepMeta = getStepMeta(step.node_name);
+                        const summaryItems = summarizeStepOutput(step);
+                        const previewRows = getStepPreviewRows(step);
 
                         return (
                           <article className="step-card" key={step.step_id}>
                             <div className="step-index">{index + 1}</div>
                             <div>
                               <div className="step-title">
-                                <h3>{step.node_name}</h3>
+                                <h3>{stepMeta.label}</h3>
                                 <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
                               </div>
-                              <p className="panel-copy">
-                                工具 {step.tool_name || "无"} · 耗时 {formatDuration(step.duration_ms)} · 开始于 {formatDateTime(step.started_at)}
-                              </p>
+                              <p className="panel-copy">{stepMeta.description}</p>
+                              <div className="meta-row">
+                                <span className="meta-chip">阶段 {stepMeta.stage}</span>
+                                <span className="meta-chip">工具 {step.tool_name || "无"}</span>
+                                <span className="meta-chip">耗时 {formatDuration(step.duration_ms)}</span>
+                                <span className="meta-chip">开始于 {formatDateTime(step.started_at)}</span>
+                              </div>
                               {step.error_message ? <p className="danger-text">{step.error_message}</p> : null}
+
+                              {summaryItems.length ? (
+                                <div className="summary-list">
+                                  {summaryItems.map((item) => (
+                                    <div className="summary-item" key={`${step.step_id}-${item.label}`}>
+                                      <strong>{item.label}</strong>
+                                      <p>{item.value}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+
+                              {previewRows.length ? (
+                                <div className="summary-list">
+                                  {previewRows.map((row, rowIndex) => renderPreviewRow(step, row, rowIndex))}
+                                </div>
+                              ) : null}
+
                               <details className="detail-toggle">
                                 <summary>查看输入 / 输出 JSON</summary>
                                 <pre>{prettyJson({ input: step.input_json, output: step.output_json })}</pre>

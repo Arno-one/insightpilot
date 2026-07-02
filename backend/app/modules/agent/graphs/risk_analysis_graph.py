@@ -523,6 +523,15 @@ def build_risk_analysis_graph(db: Session):
                 {
                     "plan_count": len(planned_actions),
                     "total_steps": total_steps,
+                    "plan_preview": [
+                        {
+                            "customer_id": item["customer"]["customer_id"],
+                            "customer_name": item["customer"].get("customer_name"),
+                            "thinking": item["plan"]["thinking"],
+                            "tools": [step["tool_name"] for step in item["plan"]["steps"]],
+                        }
+                        for item in planned_actions[:5]
+                    ],
                 },
                 {"planned_actions": planned_actions},
             )
@@ -572,6 +581,16 @@ def build_risk_analysis_graph(db: Session):
                     "execution_count": len(executed_actions),
                     "tool_call_count": total_calls,
                     "trace_ids": trace_ids,
+                    "execution_preview": [
+                        {
+                            "customer_id": item["customer"]["customer_id"],
+                            "customer_name": item["customer"].get("customer_name"),
+                            "tools": [record["tool_name"] for record in item["tool_executions"]],
+                            "rag_trace_id": item.get("rag_result", {}).get("trace_id"),
+                            "advice_ready": bool(item.get("advice")),
+                        }
+                        for item in executed_actions[:5]
+                    ],
                 },
                 {"executed_actions": executed_actions},
             )
@@ -605,6 +624,15 @@ def build_risk_analysis_graph(db: Session):
                     "review_count": len(reviewed_actions),
                     "approved_count": approved_count,
                     "rejected_count": len(reviewed_actions) - approved_count,
+                    "review_preview": [
+                        {
+                            "customer_id": item["customer"]["customer_id"],
+                            "customer_name": item["customer"].get("customer_name"),
+                            "approved": item["review"]["approved"],
+                            "review_note": item["review"]["review_note"],
+                        }
+                        for item in reviewed_actions[:5]
+                    ],
                 },
                 {"reviewed_actions": reviewed_actions},
             )
@@ -656,6 +684,8 @@ def build_risk_analysis_graph(db: Session):
                 {
                     "created_count": len(created),
                     "skipped_count": len(skipped_reviews),
+                    "created_preview": created[:5],
+                    "skipped_preview": skipped_reviews[:5],
                 },
                 {"created": created},
             )
