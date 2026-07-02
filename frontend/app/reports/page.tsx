@@ -307,6 +307,34 @@ function currentOwnerName(
   );
 }
 
+function buildOwnerDrilldownHref(
+  pathname: "/tasks" | "/risks" | "/approvals",
+  options: {
+    customerId?: string | null;
+    ownerUserId: string;
+    ownerUserName: string;
+  }
+) {
+  const params = new URLSearchParams();
+  if (options.customerId) {
+    params.set("customerId", options.customerId);
+  }
+  if (pathname === "/tasks") {
+    params.set("assigneeUserId", options.ownerUserId);
+    params.set("assigneeUserName", options.ownerUserName);
+  }
+  if (pathname === "/risks") {
+    params.set("ownerUserId", options.ownerUserId);
+    params.set("ownerUserName", options.ownerUserName);
+  }
+  if (pathname === "/approvals") {
+    params.set("relatedUserId", options.ownerUserId);
+    params.set("relatedUserName", options.ownerUserName);
+  }
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
+}
+
 function ReportsPageContent() {
   const searchParams = useSearchParams();
   const customerFilter = searchParams.get("customerId");
@@ -424,6 +452,27 @@ function ReportsPageContent() {
     [latestOwnerSnapshot, previousOwnerSnapshot]
   );
   const activeOwnerName = currentOwnerName(ownerCandidates, drilledOwnerUserId, currentUser, latestOwnerSnapshot);
+  const taskDrilldownHref = isOwnerDrilldown
+    ? buildOwnerDrilldownHref("/tasks", {
+        customerId: customerFilter,
+        ownerUserId: drilledOwnerUserId,
+        ownerUserName: activeOwnerName || drilledOwnerUserId,
+      })
+    : "";
+  const riskDrilldownHref = isOwnerDrilldown
+    ? buildOwnerDrilldownHref("/risks", {
+        customerId: customerFilter,
+        ownerUserId: drilledOwnerUserId,
+        ownerUserName: activeOwnerName || drilledOwnerUserId,
+      })
+    : "";
+  const approvalDrilldownHref = isOwnerDrilldown
+    ? buildOwnerDrilldownHref("/approvals", {
+        customerId: customerFilter,
+        ownerUserId: drilledOwnerUserId,
+        ownerUserName: activeOwnerName || drilledOwnerUserId,
+      })
+    : "";
 
   const emptyDetail = isOwnerDrilldown
     ? `当前负责人视角还没有命中报告。${ownerViewMode === "mine" ? "如果你刚接手客户，可以先生成一轮周报或月报再回来查看。" : "可以切回团队视角，先判断当前经营问题集中在哪位负责人。"}`
@@ -599,6 +648,31 @@ function ReportsPageContent() {
           </span>
         </div>
       </section>
+
+      {isOwnerDrilldown ? (
+        <section className="command-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Action Links</p>
+              <h2>继续下钻到执行与审批明细</h2>
+              <p className="panel-copy">
+                这里把负责人视角下最常继续看的三类明细直接串起来，避免在报告、任务、风险和审批之间反复手动重新筛选。
+              </p>
+            </div>
+          </div>
+          <div className="page-actions">
+            <Link className="button" href={taskDrilldownHref}>
+              查看任务明细
+            </Link>
+            <Link className="button-secondary" href={riskDrilldownHref}>
+              查看风险明细
+            </Link>
+            <Link className="button-secondary" href={approvalDrilldownHref}>
+              查看审批明细
+            </Link>
+          </div>
+        </section>
+      ) : null}
 
       {!loading && !visibleItems.length && !error ? (
         <EmptyCard detail={emptyDetail} text={isOwnerDrilldown ? "当前负责人视角还没有匹配到经营报告。" : "当前还没有经营报告。"} />

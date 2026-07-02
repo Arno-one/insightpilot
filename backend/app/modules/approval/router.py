@@ -303,6 +303,7 @@ def _build_batch_message(action_label: str, success_count: int, failed_count: in
 @router.get("")
 def list_approvals(
     customer_id: str | None = None,
+    related_user_id: str | None = None,
     status: str | None = None,
     reviewer_keyword: str | None = None,
     requester_keyword: str | None = None,
@@ -314,6 +315,7 @@ def list_approvals(
     params = {
         "tenant_id": current_user["tenant_id"],
         "customer_id": customer_id,
+        "related_user_id": related_user_id,
         "status": status,
         "reviewer_keyword": f"%{reviewer_keyword}%" if reviewer_keyword else None,
         "requester_keyword": f"%{requester_keyword}%" if requester_keyword else None,
@@ -323,6 +325,12 @@ def list_approvals(
     filters: list[str] = []
     if customer_id:
         filters.append("AND ar.customer_id = :customer_id")
+    if related_user_id:
+        # 中文注释：负责人下钻时，需要把“发起人、审批人、payload 里的任务负责人”三类相关审批一起找出来。
+        filters.append(
+            "AND (ar.requested_by_user_id = :related_user_id OR ar.reviewer_user_id = :related_user_id "
+            "OR JSON_UNQUOTE(JSON_EXTRACT(ar.proposed_payload_json, '$.assignee_user_id')) = :related_user_id)"
+        )
     if status:
         filters.append("AND ar.status = :status")
     if reviewer_keyword:

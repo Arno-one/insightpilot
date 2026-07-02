@@ -1,7 +1,10 @@
 from datetime import date
 
 from app.modules.agent.graphs import business_report_graph
+from app.modules.approval import router as approval_router
 from app.modules.report import router as report_router
+from app.modules.risk import router as risk_router
+from app.modules.task import router as task_router
 from app.workers import report_jobs
 
 
@@ -132,3 +135,44 @@ def test_list_reports_supports_owner_drilldown_filter():
     assert "CAST(br.metrics_json AS CHAR) LIKE :owner_pattern" in dummy_db.statement
     assert "CAST(br.risk_top_json AS CHAR) LIKE :owner_pattern" in dummy_db.statement
     assert dummy_db.params["owner_pattern"] == "%u_sales_001%"
+
+
+def test_list_tasks_supports_exact_assignee_drilldown_filter():
+    dummy_db = _DummySession()
+
+    task_router.list_tasks(
+        assignee_user_id="u_sales_001",
+        current_user={"tenant_id": "demo_tenant", "user_id": "u_manager_001", "permission_codes": ["task:read:team"]},
+        db=dummy_db,
+    )
+
+    assert "AND t.assignee_user_id = :assignee_user_id" in dummy_db.statement
+    assert dummy_db.params["assignee_user_id"] == "u_sales_001"
+
+
+def test_list_approvals_supports_related_user_drilldown_filter():
+    dummy_db = _DummySession()
+
+    approval_router.list_approvals(
+        related_user_id="u_sales_001",
+        current_user={"tenant_id": "demo_tenant", "user_id": "u_manager_001"},
+        db=dummy_db,
+    )
+
+    assert "ar.requested_by_user_id = :related_user_id" in dummy_db.statement
+    assert "ar.reviewer_user_id = :related_user_id" in dummy_db.statement
+    assert "JSON_UNQUOTE(JSON_EXTRACT(ar.proposed_payload_json, '$.assignee_user_id')) = :related_user_id" in dummy_db.statement
+    assert dummy_db.params["related_user_id"] == "u_sales_001"
+
+
+def test_list_risk_snapshots_supports_owner_drilldown_filter():
+    dummy_db = _DummySession()
+
+    risk_router.list_risk_snapshots(
+        owner_user_id="u_sales_001",
+        current_user={"tenant_id": "demo_tenant", "user_id": "u_manager_001"},
+        db=dummy_db,
+    )
+
+    assert "AND rs.owner_user_id = :owner_user_id" in dummy_db.statement
+    assert dummy_db.params["owner_user_id"] == "u_sales_001"

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
@@ -23,14 +24,19 @@ type RiskSnapshot = {
 };
 
 function customerLabel(item: RiskSnapshot) {
-  return item.customer_name ? `${item.customer_name} · ${item.customer_id}` : item.customer_id;
+  return item.customer_name ? `${item.customer_name} / ${item.customer_id}` : item.customer_id;
 }
 
 function customerDetailHref(item: RiskSnapshot) {
   return `/customers/${item.customer_id}?riskSnapshotId=${item.risk_snapshot_id}`;
 }
 
-export default function RisksPage() {
+function RisksPageContent() {
+  const searchParams = useSearchParams();
+  const customerFilter = searchParams.get("customerId");
+  const ownerUserFilter = searchParams.get("ownerUserId");
+  const ownerUserName = searchParams.get("ownerUserName");
+
   const [items, setItems] = useState<RiskSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -40,7 +46,15 @@ export default function RisksPage() {
     setLoading(true);
     setError("");
     try {
-      const response = await apiFetch<RiskSnapshot[]>("/api/risk/snapshots");
+      const query = new URLSearchParams();
+      if (customerFilter) {
+        query.set("customer_id", customerFilter);
+      }
+      if (ownerUserFilter) {
+        query.set("owner_user_id", ownerUserFilter);
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const response = await apiFetch<RiskSnapshot[]>(`/api/risk/snapshots${suffix}`);
       setItems(response.data);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "风险列表加载失败。");
@@ -61,15 +75,16 @@ export default function RisksPage() {
   }
 
   useEffect(() => {
-    loadRisks();
-  }, []);
+    void loadRisks();
+  }, [customerFilter, ownerUserFilter]);
 
-  // 中文注释：前端先按风险分重排，确保主管打开页面第一眼就看到最危险的客户。
+  // 中文注释：风险页仍然先按风险分倒序，保证从经营报告跳过来时第一眼看到的就是最危险的客户。
   const sortedItems = useMemo(() => [...items].sort((a, b) => b.risk_score - a.risk_score), [items]);
   const highRiskCount = sortedItems.filter((item) => item.risk_level === "high").length;
   const mediumRiskCount = sortedItems.filter((item) => item.risk_level === "medium").length;
   const pendingCount = sortedItems.filter((item) => item.status === "pending").length;
   const topRisk = sortedItems[0];
+  const clearFilterHref = customerFilter ? `/risks?customerId=${customerFilter}` : "/risks";
 
   return (
     <AppShell>
@@ -77,7 +92,11 @@ export default function RisksPage() {
         <div>
           <p className="eyebrow">Risk Signals</p>
           <h1>先看客户为什么会失速，再决定团队今天该先做什么。</h1>
-          <p className="lead">这里集中展示规则引擎识别出的风险级别、AI 解释、建议动作与待审批状态，现在也可以直接下钻到客户级工作台。</p>
+          <p className="lead">
+            这里集中展示规则引擎识别出的风险级别、AI 解释、建议动作与待审批状态，现在也可以直接下钻到客户级工作台。
+            {customerFilter ? ` 当前已聚焦客户 ${customerFilter}。` : ""}
+            {ownerUserFilter ? ` 当前已按负责人 ${ownerUserName || ownerUserFilter} 过滤。` : ""}
+          </p>
         </div>
         <div className="page-actions">
           <button className="button" onClick={triggerScan} type="button">
@@ -89,11 +108,37 @@ export default function RisksPage() {
         </div>
       </section>
 
+      {ownerUserFilter ? (
+        <section className="command-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Report Drilldown</p>
+              <h2>当前负责人风险明细</h2>
+              <p className="panel-copy">
+                当前列表已按负责人 {ownerUserName || ownerUserFilter} 精确过滤，方便从经营报告直接落到这位负责人的风险客户名单。
+              </p>
+            </div>
+            <div className="page-actions">
+              <Link className="button-secondary" href={clearFilterHref}>
+                清除负责人过滤
+              </Link>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       {message ? <p className="success-text">{message}</p> : null}
       {error ? <ErrorCard message={error} detail="如果刚启动本地环境，请确认后端、Redis 与 Worker 都已就绪。" /> : null}
       {loading ? <LoadingCard detail="正在同步客户风险快照、AI 建议与审批状态。" /> : null}
       {!loading && !sortedItems.length && !error ? (
-        <EmptyCard text="当前还没有风险快照。" detail="可以先触发一轮风险扫描，系统会把结果写回这里。" />
+        <EmptyCard
+          text={ownerUserFilter ? "当前负责人还没有命中的风险快照。" : "当前还没有风险快照。"}
+          detail={
+            ownerUserFilter
+              ? "可以先回到经营报告，确认这位负责人当前更多是执行压力还是风险客户压力。"
+              : "可以先触发一轮风险扫描，系统会把结果写回这里。"
+          }
+        />
       ) : null}
 
       {sortedItems.length ? (
@@ -126,7 +171,7 @@ export default function RisksPage() {
               <div className="panel-header">
                 <div>
                   <p className="eyebrow">Highest Alert</p>
-                  <h2>当前最需要优先处理的风险</h2>
+                  <h2>{ownerUserFilter ? "这位负责人当前最值得先处理的风险" : "当前最需要优先处理的风险"}</h2>
                 </div>
                 {topRisk ? (
                   <Link className="button-secondary" href={customerDetailHref(topRisk)}>
@@ -141,9 +186,10 @@ export default function RisksPage() {
                   <div className="meta-row">
                     <span className={`pill ${getRiskMeta(topRisk.risk_level).toneClass}`}>{getRiskMeta(topRisk.risk_level).label}</span>
                     <span className={`pill ${getStatusMeta(topRisk.status).toneClass}`}>{getStatusMeta(topRisk.status).label}</span>
-                    <span className="meta-chip">风险分 {topRisk.risk_score}</span>
                     <span className="meta-chip">负责人 {topRisk.owner_user_name || topRisk.owner_user_id}</span>
+                    <span className="meta-chip">快照时间 {formatDateTime(topRisk.created_at)}</span>
                   </div>
+                  <p>{topRisk.llm_suggestion}</p>
                 </div>
               ) : null}
             </article>
@@ -151,69 +197,79 @@ export default function RisksPage() {
             <article className="command-panel">
               <div className="panel-header">
                 <div>
-                  <p className="eyebrow">Response Rule</p>
-                  <h2>处理建议</h2>
+                  <p className="eyebrow">Reading Guide</p>
+                  <h2>{ownerUserFilter ? "负责人风险下钻要回答什么问题" : "风险看板要回答什么问题"}</h2>
                 </div>
               </div>
               <div className="detail-list">
                 <div className="detail-item">
-                  <strong>高风险先看原因</strong>
-                  <p>如果是报价后无回应、竞品介入、长期未跟进，优先确认是否需要主管介入或重新设计跟进话术。</p>
+                  <strong>先看最危险的客户是谁</strong>
+                  <p>风险页默认按风险分倒序，保证管理层打开页面就先看到最需要马上介入的客户。</p>
                 </div>
                 <div className="detail-item">
-                  <strong>审批不宜堆积</strong>
-                  <p>风险建议若长时间停留在待审批，会让 AI 输出停在“纸面建议”，无法进入执行闭环。</p>
+                  <strong>再看问题集中在哪位负责人</strong>
+                  <p>如果同一个负责人连续命中多条高风险客户，就要回到任务、审批和跟进节奏继续下钻。</p>
+                </div>
+                <div className="detail-item">
+                  <strong>最后回到客户细节和动作闭环</strong>
+                  <p>风险只是入口，真正的处理动作还是要回到客户详情页，把审批、任务和跟进链路串起来。</p>
                 </div>
               </div>
             </article>
           </section>
 
           <section className="risk-board">
-            {sortedItems.map((item) => {
-              const riskMeta = getRiskMeta(item.risk_level);
-              const statusMeta = getStatusMeta(item.status);
-
-              return (
-                <article className="risk-card" key={item.risk_snapshot_id}>
-                  <div className="risk-card-header">
-                    <div>
-                      <p className="eyebrow">Customer {item.customer_id}</p>
-                      <h2 className="section-title">{customerLabel(item)}</h2>
-                    </div>
-                    <div className="risk-meta">
-                      <span className={`pill ${riskMeta.toneClass}`}>{riskMeta.label}</span>
-                      <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
-                    </div>
+            {sortedItems.map((item) => (
+              <article className="risk-card" key={item.risk_snapshot_id}>
+                <div className="risk-card-header">
+                  <div>
+                    <p className="eyebrow">{customerLabel(item)}</p>
+                    <h2 className="report-title">{item.llm_reason || "当前没有风险解释。"}</h2>
                   </div>
-
-                  <div className="meta-row">
+                  <div className="risk-meta">
+                    <span className={`pill ${getRiskMeta(item.risk_level).toneClass}`}>{getRiskMeta(item.risk_level).label}</span>
+                    <span className={`pill ${getStatusMeta(item.status).toneClass}`}>{getStatusMeta(item.status).label}</span>
                     <span className="meta-chip">风险分 {item.risk_score}</span>
                     <span className="meta-chip">负责人 {item.owner_user_name || item.owner_user_id}</span>
                     <span className="meta-chip">快照时间 {formatDateTime(item.created_at)}</span>
                   </div>
+                </div>
 
-                  <div className="summary-list">
-                    <div className="summary-item">
-                      <strong>风险原因</strong>
-                      <p>{item.llm_reason}</p>
-                    </div>
-                    <div className="summary-item">
-                      <strong>建议动作</strong>
-                      <p>{item.llm_suggestion}</p>
-                    </div>
+                <div className="summary-list">
+                  <div className="summary-item">
+                    <strong>风险解释</strong>
+                    <p>{item.llm_reason || "当前没有风险解释。"}</p>
                   </div>
+                  <div className="summary-item">
+                    <strong>动作建议</strong>
+                    <p>{item.llm_suggestion || "当前没有动作建议。"}</p>
+                  </div>
+                </div>
 
-                  <div className="action-row">
-                    <Link className="button-secondary" href={customerDetailHref(item)}>
-                      查看客户详情
-                    </Link>
-                  </div>
-                </article>
-              );
-            })}
+                <div className="page-actions">
+                  <Link className="button-secondary" href={customerDetailHref(item)}>
+                    查看客户详情
+                  </Link>
+                </div>
+              </article>
+            ))}
           </section>
         </>
       ) : null}
     </AppShell>
+  );
+}
+
+export default function RisksPage() {
+  return (
+    <Suspense
+      fallback={
+        <AppShell>
+          <LoadingCard detail="正在同步客户风险快照、AI 建议与审批状态。" />
+        </AppShell>
+      }
+    >
+      <RisksPageContent />
+    </Suspense>
   );
 }

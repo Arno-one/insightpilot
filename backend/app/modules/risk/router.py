@@ -76,12 +76,24 @@ def trigger_single_customer_risk_scan(
 
 @router.get("/snapshots")
 def list_risk_snapshots(
+    customer_id: str | None = None,
+    owner_user_id: str | None = None,
     current_user: dict = Depends(require_permission("crm:risk:read:team")),
     db: Session = Depends(get_db),
 ):
+    params = {
+        "tenant_id": current_user["tenant_id"],
+        "customer_id": customer_id,
+        "owner_user_id": owner_user_id,
+    }
+    filters: list[str] = []
+    if customer_id:
+        filters.append("AND rs.customer_id = :customer_id")
+    if owner_user_id:
+        filters.append("AND rs.owner_user_id = :owner_user_id")
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT rs.risk_snapshot_id, rs.customer_id, c.customer_name, rs.owner_user_id,
                    owner.real_name AS owner_user_name, rs.risk_score, rs.risk_level,
                    rs.llm_reason, rs.llm_suggestion, rs.status, rs.created_at
@@ -93,10 +105,11 @@ def list_risk_snapshots(
               ON owner.tenant_id = rs.tenant_id
              AND owner.user_id = rs.owner_user_id
             WHERE rs.tenant_id = :tenant_id
+              {' '.join(filters)}
             ORDER BY rs.risk_score DESC, rs.created_at DESC
             LIMIT 100
             """
         ),
-        {"tenant_id": current_user["tenant_id"]},
+        params,
     ).mappings().all()
     return success(list(rows), "查询成功", total=len(rows))

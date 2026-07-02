@@ -417,6 +417,7 @@ def _build_batch_message(action_label: str, success_count: int, failed_count: in
 @router.get("")
 def list_tasks(
     customer_id: str | None = None,
+    assignee_user_id: str | None = None,
     status: str | None = None,
     priority: str | None = None,
     assignee_keyword: str | None = None,
@@ -428,6 +429,7 @@ def list_tasks(
         "tenant_id": current_user["tenant_id"],
         "user_id": current_user["user_id"],
         "customer_id": customer_id,
+        "assignee_user_id": assignee_user_id,
         "status": status,
         "priority": priority,
         "assignee_keyword": f"%{assignee_keyword}%" if assignee_keyword else None,
@@ -436,6 +438,8 @@ def list_tasks(
     filters: list[str] = []
     if customer_id:
         filters.append("AND t.customer_id = :customer_id")
+    if assignee_user_id:
+        filters.append("AND t.assignee_user_id = :assignee_user_id")
     if status:
         filters.append("AND t.status = :status")
     if priority:

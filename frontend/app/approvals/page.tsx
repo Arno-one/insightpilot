@@ -74,6 +74,8 @@ function payloadOf(item: Approval): ApprovalPayload {
 function ApprovalsPageContent() {
   const searchParams = useSearchParams();
   const customerFilter = searchParams.get("customerId");
+  const relatedUserFilter = searchParams.get("relatedUserId");
+  const relatedUserName = searchParams.get("relatedUserName");
   const currentUser = useMemo(() => getStoredUser(), []);
   const [items, setItems] = useState<Approval[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +96,9 @@ function ApprovalsPageContent() {
       const query = new URLSearchParams();
       if (customerFilter) {
         query.set("customer_id", customerFilter);
+      }
+      if (relatedUserFilter) {
+        query.set("related_user_id", relatedUserFilter);
       }
       if (filters.status) {
         query.set("status", filters.status);
@@ -179,7 +184,7 @@ function ApprovalsPageContent() {
 
   useEffect(() => {
     loadApprovals();
-  }, [customerFilter, filters]);
+  }, [customerFilter, filters, relatedUserFilter]);
 
   const filteredItems = useMemo(() => {
     if (quickView === "pending") {
@@ -253,6 +258,25 @@ function ApprovalsPageContent() {
           </div>
         ) : null}
       </section>
+
+      {relatedUserFilter ? (
+        <section className="command-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Report Drilldown</p>
+              <h2>当前负责人相关审批</h2>
+              <p className="panel-copy">
+                当前列表已按负责人 {relatedUserName || relatedUserFilter} 过滤，会同时命中发起人、审批人以及审批 payload 里的任务负责人。
+              </p>
+            </div>
+            <div className="page-actions">
+              <Link className="button-secondary" href={customerFilter ? `/approvals?customerId=${customerFilter}` : "/approvals"}>
+                清除负责人过滤
+              </Link>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {message ? <p className="success-text">{message}</p> : null}
       {error ? <ErrorCard message={error} detail="请确认审批接口、权限与后端服务是否运行正常。" /> : null}

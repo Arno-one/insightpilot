@@ -100,6 +100,8 @@ function isOverdueTask(task: Task) {
 function TasksPageContent() {
   const searchParams = useSearchParams();
   const customerFilter = searchParams.get("customerId");
+  const assigneeUserFilter = searchParams.get("assigneeUserId");
+  const assigneeUserName = searchParams.get("assigneeUserName");
   const currentUser = useMemo(() => getStoredUser(), []);
   const canManageAssignment = useMemo(
     () => hasAnyPermission(currentUser, ["task:read:team", "task:read:all"]),
@@ -141,6 +143,9 @@ function TasksPageContent() {
       const query = new URLSearchParams();
       if (customerFilter) {
         query.set("customer_id", customerFilter);
+      }
+      if (assigneeUserFilter) {
+        query.set("assignee_user_id", assigneeUserFilter);
       }
       if (filters.status) {
         query.set("status", filters.status);
@@ -303,7 +308,7 @@ function TasksPageContent() {
 
   useEffect(() => {
     loadTasks();
-  }, [customerFilter, filters]);
+  }, [assigneeUserFilter, customerFilter, filters]);
 
   useEffect(() => {
     loadAssignees();
@@ -390,6 +395,25 @@ function TasksPageContent() {
           </div>
         ) : null}
       </section>
+
+      {assigneeUserFilter ? (
+        <section className="command-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Report Drilldown</p>
+              <h2>当前负责人任务明细</h2>
+              <p className="panel-copy">
+                当前列表已按负责人 {assigneeUserName || assigneeUserFilter} 精确过滤，方便从经营报告直接落到这位负责人的执行队列。
+              </p>
+            </div>
+            <div className="page-actions">
+              <Link className="button-secondary" href={customerFilter ? `/tasks?customerId=${customerFilter}` : "/tasks"}>
+                清除负责人过滤
+              </Link>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {message ? <p className="success-text">{message}</p> : null}
       {error ? <ErrorCard message={error} detail="请确认任务接口、权限与后端服务是否运行正常。" /> : null}
