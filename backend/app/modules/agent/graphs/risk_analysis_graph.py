@@ -11,11 +11,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
-from app.modules.agent.platform import InternalToolRegistry, ToolDefinition, ToolExecutionContext
+from app.modules.agent.platform import InternalToolRegistry, ToolDefinition, ToolExecutionContext, build_shared_internal_tools
 from app.modules.llm.client import RiskAdvice, generate_risk_advice, plan_risk_tool_calls, review_risk_tool_results
 from app.modules.risk.rules import calculate_risk_score
 from app.shared.ids import new_id
-from app.shared.workflow_event import log_workflow_event
 
 logger = logging.getLogger(__name__)
 
@@ -404,6 +403,7 @@ def _build_risk_tool_registry() -> InternalToolRegistry:
 
     return InternalToolRegistry(
         [
+            *build_shared_internal_tools(),
             ToolDefinition(
                 name="rag.retrieve_sales_context",
                 description="从销售知识库检索当前客户风险处置所需的 SOP、话术和案例上下文。",
