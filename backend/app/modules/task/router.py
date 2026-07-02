@@ -13,6 +13,10 @@ from app.shared.response import success
 router = APIRouter()
 
 
+def _normalize_bool_filter(value: bool | None) -> bool:
+    return bool(value)
+
+
 def _task_scope_where(current_user: dict) -> str:
     """按当前用户的任务可见范围拼接 SQL 条件，保持列表和更新权限一致。"""
     if "task:read:all" in current_user["permission_codes"] or "task:read:team" in current_user["permission_codes"]:
@@ -125,6 +129,10 @@ def _create_follow_up_from_task(
 @router.get("")
 def list_tasks(
     customer_id: str | None = None,
+    status: str | None = None,
+    priority: str | None = None,
+    assignee_keyword: str | None = None,
+    overdue_only: bool | None = None,
     current_user: dict = Depends(require_permission("task:read:self")),
     db: Session = Depends(get_db),
 ):
@@ -132,11 +140,25 @@ def list_tasks(
         "tenant_id": current_user["tenant_id"],
         "user_id": current_user["user_id"],
         "customer_id": customer_id,
+        "status": status,
+        "priority": priority,
+        "assignee_keyword": f"%{assignee_keyword}%" if assignee_keyword else None,
     }
     where_sql = _task_scope_where(current_user)
-    customer_filter = ""
+    filters: list[str] = []
     if customer_id:
-        customer_filter = "AND t.customer_id = :customer_id"
+        filters.append("AND t.customer_id = :customer_id")
+    if status:
+        filters.append("AND t.status = :status")
+    if priority:
+        filters.append("AND t.priority = :priority")
+    if assignee_keyword:
+        filters.append(
+            "AND (t.assignee_user_id LIKE :assignee_keyword OR assignee.real_name LIKE :assignee_keyword)"
+        )
+    if _normalize_bool_filter(overdue_only):
+        # 中文注释：逾期筛选只看仍需推进的任务，已完成或已取消的不再计入风险队列。
+        filters.append("AND t.status IN ('pending', 'in_progress') AND t.due_at IS NOT NULL AND t.due_at < NOW()")
 
     rows = db.execute(
         text(
@@ -153,7 +175,7 @@ def list_tasks(
               ON assignee.tenant_id = t.tenant_id
              AND assignee.user_id = t.assignee_user_id
             WHERE {where_sql}
-              {customer_filter}
+              {' '.join(filters)}
             ORDER BY t.due_at ASC, t.created_at DESC
             LIMIT 100
             """

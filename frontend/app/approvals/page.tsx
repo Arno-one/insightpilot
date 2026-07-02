@@ -6,7 +6,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getStoredUser } from "@/lib/api";
 import { formatDateTime, getPriorityMeta, getStatusMeta } from "@/lib/presentation";
 
 type Approval = {
@@ -31,6 +31,22 @@ type ApprovalPayload = {
   priority?: string;
 };
 
+type ApprovalFilters = {
+  status: string;
+  reviewerKeyword: string;
+  requesterKeyword: string;
+  dateFrom: string;
+  dateTo: string;
+};
+
+const EMPTY_FILTERS: ApprovalFilters = {
+  status: "",
+  reviewerKeyword: "",
+  requesterKeyword: "",
+  dateFrom: "",
+  dateTo: ""
+};
+
 function payloadOf(item: Approval): ApprovalPayload {
   if (typeof item.proposed_payload_json === "string") {
     try {
@@ -46,17 +62,40 @@ function payloadOf(item: Approval): ApprovalPayload {
 function ApprovalsPageContent() {
   const searchParams = useSearchParams();
   const customerFilter = searchParams.get("customerId");
+  const currentUser = useMemo(() => getStoredUser(), []);
   const [items, setItems] = useState<Approval[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [filters, setFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
+  const [draftFilters, setDraftFilters] = useState<ApprovalFilters>(EMPTY_FILTERS);
+  const [quickView, setQuickView] = useState<"all" | "pending" | "approved" | "rejected" | "mine">("all");
 
   async function loadApprovals() {
     setLoading(true);
     setError("");
     try {
-      const query = customerFilter ? `?customer_id=${encodeURIComponent(customerFilter)}` : "";
-      const response = await apiFetch<Approval[]>(`/api/approvals${query}`);
+      const query = new URLSearchParams();
+      if (customerFilter) {
+        query.set("customer_id", customerFilter);
+      }
+      if (filters.status) {
+        query.set("status", filters.status);
+      }
+      if (filters.reviewerKeyword) {
+        query.set("reviewer_keyword", filters.reviewerKeyword);
+      }
+      if (filters.requesterKeyword) {
+        query.set("requester_keyword", filters.requesterKeyword);
+      }
+      if (filters.dateFrom) {
+        query.set("date_from", filters.dateFrom);
+      }
+      if (filters.dateTo) {
+        query.set("date_to", filters.dateTo);
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const response = await apiFetch<Approval[]>(`/api/approvals${suffix}`);
       setItems(response.data);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "审批列表加载失败。");
@@ -82,16 +121,32 @@ function ApprovalsPageContent() {
 
   useEffect(() => {
     loadApprovals();
-  }, [customerFilter]);
+  }, [customerFilter, filters]);
+
+  const filteredItems = useMemo(() => {
+    if (quickView === "pending") {
+      return items.filter((item) => item.status === "pending");
+    }
+    if (quickView === "approved") {
+      return items.filter((item) => item.status === "approved");
+    }
+    if (quickView === "rejected") {
+      return items.filter((item) => item.status === "rejected");
+    }
+    if (quickView === "mine" && currentUser) {
+      return items.filter((item) => item.requested_by_user_id === currentUser.user_id || item.reviewer_user_id === currentUser.user_id);
+    }
+    return items;
+  }, [currentUser, items, quickView]);
 
   // 中文注释：审批页核心是把队列状态显性化，让“AI 建议是否落地”一眼可见。
   const overview = useMemo(() => {
     return {
-      pending: items.filter((item) => item.status === "pending").length,
-      approved: items.filter((item) => item.status === "approved").length,
-      rejected: items.filter((item) => item.status === "rejected").length
+      pending: filteredItems.filter((item) => item.status === "pending").length,
+      approved: filteredItems.filter((item) => item.status === "approved").length,
+      rejected: filteredItems.filter((item) => item.status === "rejected").length
     };
-  }, [items]);
+  }, [filteredItems]);
 
   return (
     <AppShell>
@@ -142,10 +197,99 @@ function ApprovalsPageContent() {
               <p className="metric-detail">被驳回的动作值得回看规则命中与建议质量是否合理。</p>
             </article>
             <article className="metric-card">
-              <strong className="metric-value">{items.length}</strong>
-              <span className="metric-label">累计记录</span>
-              <p className="metric-detail">这部分数据也能帮助面试或演示时展示完整的人机协作链路。</p>
+              <strong className="metric-value">{filteredItems.length}</strong>
+              <span className="metric-label">当前视图记录</span>
+              <p className="metric-detail">可以快速确认当前筛选条件下还有多少条审批需要回看或处理。</p>
             </article>
+          </section>
+
+          <section className="command-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Queue Filters</p>
+                <h2>审批筛选与快捷视图</h2>
+              </div>
+            </div>
+            <div className="eval-control-bar">
+              <label>
+                状态
+                <select
+                  className="input-like compact-input"
+                  value={draftFilters.status}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, status: event.target.value }))}
+                >
+                  <option value="">全部状态</option>
+                  <option value="pending">待审批</option>
+                  <option value="approved">已通过</option>
+                  <option value="rejected">已驳回</option>
+                </select>
+              </label>
+              <label>
+                审批人
+                <input
+                  placeholder="输入审批人姓名或 ID"
+                  value={draftFilters.reviewerKeyword}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, reviewerKeyword: event.target.value }))}
+                />
+              </label>
+              <label>
+                发起人
+                <input
+                  placeholder="输入发起人姓名或 ID"
+                  value={draftFilters.requesterKeyword}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, requesterKeyword: event.target.value }))}
+                />
+              </label>
+              <label>
+                开始日期
+                <input
+                  type="date"
+                  value={draftFilters.dateFrom}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, dateFrom: event.target.value }))}
+                />
+              </label>
+              <label>
+                结束日期
+                <input
+                  type="date"
+                  value={draftFilters.dateTo}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, dateTo: event.target.value }))}
+                />
+              </label>
+            </div>
+            <div className="page-actions">
+              <button className="button" onClick={() => setFilters(draftFilters)} type="button">
+                应用筛选
+              </button>
+              <button
+                className="button-secondary"
+                onClick={() => {
+                  setDraftFilters(EMPTY_FILTERS);
+                  setFilters(EMPTY_FILTERS);
+                  setQuickView("all");
+                }}
+                type="button"
+              >
+                重置筛选
+              </button>
+            </div>
+            <div className="page-actions">
+              <button className={quickView === "all" ? "button" : "button-secondary"} onClick={() => setQuickView("all")} type="button">
+                全部记录
+              </button>
+              <button className={quickView === "pending" ? "button" : "button-secondary"} onClick={() => setQuickView("pending")} type="button">
+                待处理
+              </button>
+              <button className={quickView === "approved" ? "button" : "button-secondary"} onClick={() => setQuickView("approved")} type="button">
+                已通过
+              </button>
+              <button className={quickView === "rejected" ? "button" : "button-secondary"} onClick={() => setQuickView("rejected")} type="button">
+                已驳回
+              </button>
+              <button className={quickView === "mine" ? "button" : "button-secondary"} onClick={() => setQuickView("mine")} type="button">
+                与我相关
+              </button>
+            </div>
           </section>
 
           <section className="workspace-grid">
@@ -193,7 +337,7 @@ function ApprovalsPageContent() {
           </section>
 
           <section className="approval-stack">
-            {items.map((item) => {
+            {filteredItems.map((item) => {
               const payload = payloadOf(item);
               const statusMeta = getStatusMeta(item.status);
               const priorityMeta = getPriorityMeta(payload.priority || "medium");

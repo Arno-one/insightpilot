@@ -6,7 +6,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getStoredUser } from "@/lib/api";
 import { formatDateTime, getPriorityMeta, getStatusMeta } from "@/lib/presentation";
 
 type Task = {
@@ -35,25 +35,47 @@ type TaskDraft = {
   next_follow_up_at: string;
 };
 
+type TaskFilters = {
+  status: string;
+  priority: string;
+  assigneeKeyword: string;
+  overdueOnly: boolean;
+};
+
 const EMPTY_TASK_DRAFT: TaskDraft = {
   result_note: "",
   sentiment: "neutral",
   next_follow_up_at: ""
 };
 
+const EMPTY_FILTERS: TaskFilters = {
+  status: "",
+  priority: "",
+  assigneeKeyword: "",
+  overdueOnly: false
+};
+
 function isActiveTask(task: Task) {
   return ["pending", "in_progress"].includes(task.status);
+}
+
+function isOverdueTask(task: Task) {
+  return Boolean(task.due_at && isActiveTask(task) && new Date(task.due_at) < new Date());
 }
 
 function TasksPageContent() {
   const searchParams = useSearchParams();
   const customerFilter = searchParams.get("customerId");
+  const currentUser = useMemo(() => getStoredUser(), []);
   const [items, setItems] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [savingTaskId, setSavingTaskId] = useState("");
   const [drafts, setDrafts] = useState<Record<string, TaskDraft>>({});
+  const [filters, setFilters] = useState<TaskFilters>(EMPTY_FILTERS);
+  const [draftFilters, setDraftFilters] = useState<TaskFilters>(EMPTY_FILTERS);
+  const [quickView, setQuickView] = useState<"all" | "pending" | "overdue" | "highPriorityOpen" | "mine">("all");
 
   function patchDraft(taskId: string, patch: Partial<TaskDraft>) {
     setDrafts((current) => ({
@@ -70,8 +92,25 @@ function TasksPageContent() {
     setLoading(true);
     setError("");
     try {
-      const query = customerFilter ? `?customer_id=${encodeURIComponent(customerFilter)}` : "";
-      const response = await apiFetch<Task[]>(`/api/tasks${query}`);
+      // 中文注释：查询参数由后端正式承接，前端只负责把用户筛选条件清晰地拼出来。
+      const query = new URLSearchParams();
+      if (customerFilter) {
+        query.set("customer_id", customerFilter);
+      }
+      if (filters.status) {
+        query.set("status", filters.status);
+      }
+      if (filters.priority) {
+        query.set("priority", filters.priority);
+      }
+      if (filters.assigneeKeyword) {
+        query.set("assignee_keyword", filters.assigneeKeyword);
+      }
+      if (filters.overdueOnly) {
+        query.set("overdue_only", "true");
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : "";
+      const response = await apiFetch<Task[]>(`/api/tasks${suffix}`);
       setItems(response.data);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "任务列表加载失败。");
@@ -92,7 +131,11 @@ function TasksPageContent() {
           status,
           result_note:
             draft.result_note ||
-            (status === "cancelled" ? "演示环境前端触发取消" : status === "completed" ? "演示环境前端标记完成" : "任务已开始推进"),
+            (status === "cancelled"
+              ? "演示环境前端触发取消"
+              : status === "completed"
+                ? "演示环境前端标记完成"
+                : "任务已开始推进"),
           sentiment: draft.sentiment,
           next_follow_up_at: draft.next_follow_up_at || null
         })
@@ -114,13 +157,29 @@ function TasksPageContent() {
 
   useEffect(() => {
     loadTasks();
-  }, [customerFilter]);
+  }, [customerFilter, filters]);
 
-  // 中文注释：任务列表按截止时间排序，方便先暴露最容易逾期的执行动作。
+  const quickFilteredItems = useMemo(() => {
+    if (quickView === "pending") {
+      return items.filter(isActiveTask);
+    }
+    if (quickView === "overdue") {
+      return items.filter(isOverdueTask);
+    }
+    if (quickView === "highPriorityOpen") {
+      return items.filter((item) => item.priority === "high" && isActiveTask(item));
+    }
+    if (quickView === "mine" && currentUser) {
+      return items.filter((item) => item.assignee_user_id === currentUser.user_id);
+    }
+    return items;
+  }, [currentUser, items, quickView]);
+
   const sortedItems = useMemo(() => {
-    return [...items].sort((a, b) => {
+    // 中文注释：先按截止时间排，能让“快逾期”和“已逾期”的任务自然浮到前面。
+    return [...quickFilteredItems].sort((a, b) => {
       if (!a.due_at && !b.due_at) {
-        return 0;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       }
       if (!a.due_at) {
         return 1;
@@ -130,21 +189,21 @@ function TasksPageContent() {
       }
       return new Date(a.due_at).getTime() - new Date(b.due_at).getTime();
     });
-  }, [items]);
+  }, [quickFilteredItems]);
 
   const activeCount = sortedItems.filter(isActiveTask).length;
   const inProgressCount = sortedItems.filter((item) => item.status === "in_progress").length;
   const completedCount = sortedItems.filter((item) => item.status === "completed").length;
-  const overdueCount = sortedItems.filter((item) => item.due_at && isActiveTask(item) && new Date(item.due_at) < new Date()).length;
+  const overdueCount = sortedItems.filter(isOverdueTask).length;
 
   return (
     <AppShell>
       <section className="page-hero">
         <div>
           <p className="eyebrow">Execution Queue</p>
-          <h1>不是把任务创建出来就结束，而是盯住它有没有真正被执行。</h1>
+          <h1>任务创建只是开始，真正有价值的是它有没有被持续推进。</h1>
           <p className="lead">
-            这里是 AI 建议进入人工审批后的执行现场，重点看负责人、优先级、截止时间和实际推进状态。
+            这里承接审批通过后的执行现场，重点看负责人、优先级、截止时间和实际推进状态。
             {customerFilter ? ` 当前已聚焦客户 ${customerFilter}。` : ""}
           </p>
         </div>
@@ -161,7 +220,7 @@ function TasksPageContent() {
       </section>
 
       {message ? <p className="success-text">{message}</p> : null}
-      {error ? <ErrorCard message={error} detail="请确认任务接口与登录权限是否正常。" /> : null}
+      {error ? <ErrorCard message={error} detail="请确认任务接口、登录权限与后端服务是否正常。" /> : null}
       {loading ? <LoadingCard detail="正在同步销售任务、负责人和截止时间。" /> : null}
       {!loading && !sortedItems.length && !error ? (
         <EmptyCard text="当前还没有销售任务。" detail="可以先从审批台通过一条 AI 建议，再回到这里查看任务落地情况。" />
@@ -178,7 +237,7 @@ function TasksPageContent() {
             <article className="metric-card">
               <strong className="metric-value">{inProgressCount}</strong>
               <span className="metric-label">正在推进</span>
-              <p className="metric-detail">销售已经接手、仍需要继续推进的任务数量。</p>
+              <p className="metric-detail">销售已经接手，但仍需要继续推进的任务数量。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overdueCount}</strong>
@@ -190,6 +249,109 @@ function TasksPageContent() {
               <span className="metric-label">已完成</span>
               <p className="metric-detail">完成量越高，说明 AI 建议越有机会形成业务正反馈。</p>
             </article>
+          </section>
+
+          <section className="command-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Queue Filters</p>
+                <h2>任务筛选与快捷视图</h2>
+              </div>
+            </div>
+            <div className="eval-control-bar">
+              <label>
+                状态
+                <select
+                  className="input-like compact-input"
+                  value={draftFilters.status}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, status: event.target.value }))}
+                >
+                  <option value="">全部状态</option>
+                  <option value="pending">待处理</option>
+                  <option value="in_progress">执行中</option>
+                  <option value="completed">已完成</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </label>
+              <label>
+                优先级
+                <select
+                  className="input-like compact-input"
+                  value={draftFilters.priority}
+                  onChange={(event) => setDraftFilters((current) => ({ ...current, priority: event.target.value }))}
+                >
+                  <option value="">全部优先级</option>
+                  <option value="high">高</option>
+                  <option value="medium">中</option>
+                  <option value="low">低</option>
+                </select>
+              </label>
+              <label>
+                负责人
+                <input
+                  placeholder="输入负责人姓名或 ID"
+                  value={draftFilters.assigneeKeyword}
+                  onChange={(event) =>
+                    setDraftFilters((current) => ({ ...current, assigneeKeyword: event.target.value }))
+                  }
+                />
+              </label>
+              <label className="meta-chip">
+                <input
+                  type="checkbox"
+                  checked={draftFilters.overdueOnly}
+                  onChange={(event) =>
+                    setDraftFilters((current) => ({ ...current, overdueOnly: event.target.checked }))
+                  }
+                />
+                仅看逾期
+              </label>
+            </div>
+            <div className="page-actions">
+              <button className="button" onClick={() => setFilters(draftFilters)} type="button">
+                应用筛选
+              </button>
+              <button
+                className="button-secondary"
+                onClick={() => {
+                  setDraftFilters(EMPTY_FILTERS);
+                  setFilters(EMPTY_FILTERS);
+                  setQuickView("all");
+                }}
+                type="button"
+              >
+                重置筛选
+              </button>
+            </div>
+            <div className="page-actions">
+              <button className={quickView === "all" ? "button" : "button-secondary"} onClick={() => setQuickView("all")} type="button">
+                全部任务
+              </button>
+              <button
+                className={quickView === "pending" ? "button" : "button-secondary"}
+                onClick={() => setQuickView("pending")}
+                type="button"
+              >
+                待跟进
+              </button>
+              <button
+                className={quickView === "overdue" ? "button" : "button-secondary"}
+                onClick={() => setQuickView("overdue")}
+                type="button"
+              >
+                逾期任务
+              </button>
+              <button
+                className={quickView === "highPriorityOpen" ? "button" : "button-secondary"}
+                onClick={() => setQuickView("highPriorityOpen")}
+                type="button"
+              >
+                高优先级未完成
+              </button>
+              <button className={quickView === "mine" ? "button" : "button-secondary"} onClick={() => setQuickView("mine")} type="button">
+                我负责
+              </button>
+            </div>
           </section>
 
           <section className="workspace-grid">
@@ -240,7 +402,7 @@ function TasksPageContent() {
             {sortedItems.map((item) => {
               const statusMeta = getStatusMeta(item.status);
               const priorityMeta = getPriorityMeta(item.priority);
-              const isOverdue = item.due_at && isActiveTask(item) && new Date(item.due_at) < new Date();
+              const overdue = isOverdueTask(item);
 
               return (
                 <article className="task-card" key={item.task_id}>
@@ -259,7 +421,7 @@ function TasksPageContent() {
                   <div className="meta-row">
                     <span className="meta-chip">客户 {item.customer_name || item.customer_id}</span>
                     <span className="meta-chip">负责人 {item.assignee_user_name || item.assignee_user_id}</span>
-                    <span className={`meta-chip ${isOverdue ? "tone-danger" : ""}`}>
+                    <span className={`meta-chip ${overdue ? "tone-danger" : ""}`}>
                       截止 {item.due_at ? formatDateTime(item.due_at) : "未设置"}
                     </span>
                     <span className="meta-chip">创建时间 {formatDateTime(item.created_at)}</span>
@@ -371,7 +533,13 @@ function TasksPageContent() {
 
 export default function TasksPage() {
   return (
-    <Suspense fallback={<AppShell><LoadingCard detail="正在同步销售任务、负责人和截止时间。" /></AppShell>}>
+    <Suspense
+      fallback={
+        <AppShell>
+          <LoadingCard detail="正在同步销售任务、负责人和截止时间。" />
+        </AppShell>
+      }
+    >
       <TasksPageContent />
     </Suspense>
   );

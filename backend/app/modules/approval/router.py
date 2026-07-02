@@ -14,16 +14,57 @@ from app.shared.response import success
 router = APIRouter()
 
 
+def _parse_filter_datetime(value: str | None, field_name: str, end_of_day: bool = False) -> datetime | None:
+    if not value:
+        return None
+    try:
+        if len(value) == 10:
+            base = datetime.strptime(value, "%Y-%m-%d")
+            if end_of_day:
+                return base + timedelta(days=1) - timedelta(seconds=1)
+            return base
+        return datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} 时间格式不正确") from exc
+
+
 @router.get("")
 def list_approvals(
     customer_id: str | None = None,
+    status: str | None = None,
+    reviewer_keyword: str | None = None,
+    requester_keyword: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     current_user: dict = Depends(require_permission("approval:review:agent_task")),
     db: Session = Depends(get_db),
 ):
-    params = {"tenant_id": current_user["tenant_id"], "customer_id": customer_id}
-    customer_filter = ""
+    params = {
+        "tenant_id": current_user["tenant_id"],
+        "customer_id": customer_id,
+        "status": status,
+        "reviewer_keyword": f"%{reviewer_keyword}%" if reviewer_keyword else None,
+        "requester_keyword": f"%{requester_keyword}%" if requester_keyword else None,
+        "date_from": _parse_filter_datetime(date_from, "date_from"),
+        "date_to": _parse_filter_datetime(date_to, "date_to", end_of_day=True),
+    }
+    filters: list[str] = []
     if customer_id:
-        customer_filter = "AND ar.customer_id = :customer_id"
+        filters.append("AND ar.customer_id = :customer_id")
+    if status:
+        filters.append("AND ar.status = :status")
+    if reviewer_keyword:
+        filters.append(
+            "AND (ar.reviewer_user_id LIKE :reviewer_keyword OR reviewer.real_name LIKE :reviewer_keyword)"
+        )
+    if requester_keyword:
+        filters.append(
+            "AND (ar.requested_by_user_id LIKE :requester_keyword OR requester.real_name LIKE :requester_keyword)"
+        )
+    if params["date_from"]:
+        filters.append("AND ar.created_at >= :date_from")
+    if params["date_to"]:
+        filters.append("AND ar.created_at <= :date_to")
     rows = db.execute(
         text(
             f"""
@@ -43,7 +84,7 @@ def list_approvals(
               ON reviewer.tenant_id = ar.tenant_id
              AND reviewer.user_id = ar.reviewer_user_id
             WHERE ar.tenant_id = :tenant_id
-              {customer_filter}
+              {' '.join(filters)}
             ORDER BY ar.created_at DESC
             LIMIT 100
             """
