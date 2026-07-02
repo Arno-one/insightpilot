@@ -99,3 +99,36 @@ def test_generate_daily_report_keeps_backward_compatibility(monkeypatch):
         "report_type": "daily",
         "report_date": None,
     }
+
+
+class _DummyResult:
+    def mappings(self):
+        return self
+
+    def all(self):
+        return []
+
+
+class _DummySession:
+    def __init__(self):
+        self.statement = ""
+        self.params: dict = {}
+
+    def execute(self, statement, params):
+        self.statement = str(statement)
+        self.params = params
+        return _DummyResult()
+
+
+def test_list_reports_supports_owner_drilldown_filter():
+    dummy_db = _DummySession()
+
+    report_router.list_reports(
+        owner_user_id="u_sales_001",
+        current_user={"tenant_id": "demo_tenant", "user_id": "u_manager_001"},
+        db=dummy_db,
+    )
+
+    assert "CAST(br.metrics_json AS CHAR) LIKE :owner_pattern" in dummy_db.statement
+    assert "CAST(br.risk_top_json AS CHAR) LIKE :owner_pattern" in dummy_db.statement
+    assert dummy_db.params["owner_pattern"] == "%u_sales_001%"
