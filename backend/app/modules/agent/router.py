@@ -1,7 +1,7 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -38,6 +38,82 @@ def _collect_trace_ids_from_step(step: dict) -> list[str]:
             if trace_id:
                 trace_ids.append(trace_id)
     return trace_ids
+
+
+def _load_action_run_bundles(db: Session, tenant_id: str, approval_ids: list[str]) -> list[dict]:
+    if not approval_ids:
+        return []
+    run_rows = db.execute(
+        text(
+            """
+            SELECT action_run_id, chain_code, approval_id, customer_id, trigger_source,
+                   triggered_by_user_id, status, current_step_code, context_payload_json,
+                   error_message, created_at, finished_at
+            FROM agent_action_run
+            WHERE tenant_id = :tenant_id
+              AND approval_id IN :approval_ids
+            ORDER BY created_at DESC
+            """
+        ).bindparams(bindparam("approval_ids", expanding=True)),
+        {"tenant_id": tenant_id, "approval_ids": approval_ids},
+    ).mappings().all()
+    items: list[dict] = []
+    for row in run_rows:
+        run_item = dict(row)
+        run_item["context_payload_json"] = _loads_json(run_item.get("context_payload_json"))
+        step_rows = db.execute(
+            text(
+                """
+                SELECT step_run_id, action_run_id, approval_id, customer_id, step_code, tool_name,
+                       step_order, status, input_payload_json, output_payload_json, error_message,
+                       retry_count, started_at, finished_at, created_at
+                FROM agent_action_run_step
+                WHERE tenant_id = :tenant_id AND action_run_id = :action_run_id
+                ORDER BY step_order ASC
+                """
+            ),
+            {"tenant_id": tenant_id, "action_run_id": run_item["action_run_id"]},
+        ).mappings().all()
+        steps = []
+        for step_row in step_rows:
+            step = dict(step_row)
+            step["input_payload_json"] = _loads_json(step.get("input_payload_json"))
+            step["output_payload_json"] = _loads_json(step.get("output_payload_json"))
+            steps.append(step)
+        items.append(
+            {
+                **run_item,
+                "task_id": (run_item.get("context_payload_json") or {}).get("task", {}).get("task_id"),
+                "notification_id": (run_item.get("context_payload_json") or {}).get("notification", {}).get(
+                    "notification_id"
+                ),
+                "can_retry": run_item.get("status") == "failed",
+                "steps": steps,
+            }
+        )
+    return items
+
+
+def _collect_action_approval_ids(run_output: object) -> list[str]:
+    """中文注释：优先从 Agent Run 输出里提取审批单，减少详情页回查数据库的次数。"""
+    if not isinstance(run_output, dict):
+        return []
+
+    approval_ids: list[str] = []
+    direct_approval_id = run_output.get("approval_id")
+    if isinstance(direct_approval_id, str) and direct_approval_id:
+        approval_ids.append(direct_approval_id)
+
+    items = run_output.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            approval_id = item.get("approval_id")
+            if isinstance(approval_id, str) and approval_id:
+                approval_ids.append(approval_id)
+
+    return list(dict.fromkeys(approval_ids))
 
 
 def _load_latest_customer_risk_snapshot(db: Session, tenant_id: str, customer_id: str) -> dict:
@@ -126,7 +202,7 @@ def get_agent_run_detail(
     current_user: dict = Depends(require_permission("agent:log:read")),
     db: Session = Depends(get_db),
 ):
-    """查询单次 Agent Run 的完整审计链路：Run、Step、RAG Trace 和命中片段。"""
+    """查询单次 Agent Run 的完整审计链路，包括节点、RAG 检索和动作链恢复信息。"""
     run = db.execute(
         text(
             """
@@ -164,7 +240,7 @@ def get_agent_run_detail(
         {"tenant_id": current_user["tenant_id"], "run_id": run_id},
     ).mappings().all()
 
-    steps = []
+    steps: list[dict] = []
     trace_ids: list[str] = []
     for row in step_rows:
         step = dict(row)
@@ -174,7 +250,7 @@ def get_agent_run_detail(
         trace_ids.extend(_collect_trace_ids_from_step(step))
         steps.append(step)
 
-    rag_traces = []
+    rag_traces: list[dict] = []
     for trace_id in dict.fromkeys(trace_ids):
         trace_row = db.execute(
             text(
@@ -206,11 +282,32 @@ def get_agent_run_detail(
         ).mappings().all()
         rag_traces.append({**dict(trace_row), "hits": [dict(hit) for hit in hit_rows]})
 
+    approval_ids = _collect_action_approval_ids(run_data.get("output_json"))
+    if not approval_ids:
+        approval_ids = db.execute(
+            text(
+                """
+                SELECT approval_id
+                FROM approval_record
+                WHERE tenant_id = :tenant_id AND run_id = :run_id
+                ORDER BY created_at DESC
+                """
+            ),
+            {"tenant_id": current_user["tenant_id"], "run_id": run_id},
+        ).scalars().all()
+
+    action_runs = _load_action_run_bundles(
+        db,
+        current_user["tenant_id"],
+        [approval_id for approval_id in dict.fromkeys(approval_ids) if approval_id],
+    )
+
     return success(
         {
             "run": run_data,
             "steps": steps,
             "rag_traces": rag_traces,
+            "action_runs": action_runs,
         },
         "查询成功",
         total=len(steps),
@@ -247,7 +344,7 @@ def send_risk_chat_message(
     current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
-    """发送一条 Risk Agent 对话消息，并把短期记忆压缩为最近 5 轮全量 + 历史摘要。"""
+    """发送一条 Risk Agent 对话消息，并把短期记忆压缩为最近 5 轮全量加历史摘要。"""
     customer = crm_service.load_customer_or_404(db, current_user, customer_id)
     latest_risk = _load_latest_customer_risk_snapshot(db, current_user["tenant_id"], customer_id)
     customer_memory = _load_customer_memory_item(db, current_user["tenant_id"], customer_id)

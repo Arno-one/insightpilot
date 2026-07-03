@@ -53,6 +53,43 @@ type RagTrace = {
   hits: RagHit[];
 };
 
+type ActionRunStep = {
+  step_run_id: string;
+  action_run_id: string;
+  approval_id: string | null;
+  customer_id: string | null;
+  step_code: string;
+  tool_name: string;
+  step_order: number;
+  status: string;
+  input_payload_json: unknown;
+  output_payload_json: unknown;
+  error_message: string | null;
+  retry_count: number;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string | null;
+};
+
+type ActionRun = {
+  action_run_id: string;
+  chain_code: string;
+  approval_id: string | null;
+  customer_id: string | null;
+  trigger_source: string;
+  triggered_by_user_id: string | null;
+  status: string;
+  current_step_code: string | null;
+  context_payload_json: unknown;
+  error_message: string | null;
+  created_at: string | null;
+  finished_at: string | null;
+  task_id: string | null;
+  notification_id: string | null;
+  can_retry: boolean;
+  steps: ActionRunStep[];
+};
+
 type RunDetail = {
   run: AgentRun & {
     input_json: unknown;
@@ -61,6 +98,7 @@ type RunDetail = {
   };
   steps: AgentStep[];
   rag_traces: RagTrace[];
+  action_runs: ActionRun[];
 };
 
 type ApprovalSummary = {
@@ -86,6 +124,8 @@ type StepMeta = {
 };
 
 type StepPreviewRecord = Record<string, unknown>;
+
+type RunFilter = "all" | "failed";
 
 const STEP_META: Record<string, StepMeta> = {
   load_crm_data: {
@@ -121,18 +161,24 @@ const STEP_META: Record<string, StepMeta> = {
   create_approval_drafts: {
     stage: "Approval",
     label: "创建审批草稿",
-    description: "只把通过复核的建议写成审批草稿，仍然保持人审后落地。",
+    description: "只把通过复核的建议写成审批草稿，保持人审后再落地。",
   },
   persist_customer_memory: {
     stage: "Memory",
     label: "回写客户记忆",
-    description: "将本次风险判断、审批草稿和执行证据沉淀为客户长期记忆。",
+    description: "把本次风险判断、审批草稿和执行证据沉淀为客户长期记忆。",
   },
   persist_agent_trace: {
     stage: "Trace",
     label: "落盘执行追踪",
     description: "把本次 Run 的最终结果、状态和关键指标写回 Trace。",
   },
+};
+
+const ACTION_STEP_LABELS: Record<string, string> = {
+  create_task: "创建任务",
+  send_notification: "发送通知",
+  create_calendar_event: "创建日程",
 };
 
 function prettyJson(value: unknown) {
@@ -149,7 +195,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function formatValue(value: unknown) {
+function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === "") {
     return "无";
   }
@@ -163,7 +209,7 @@ function formatValue(value: unknown) {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.join("、");
+    return value.map((item) => formatValue(item)).join("、");
   }
   return prettyJson(value);
 }
@@ -176,6 +222,10 @@ function getStepMeta(nodeName: string): StepMeta {
       description: "当前节点还没有单独的人类可读说明。",
     }
   );
+}
+
+function getActionStepLabel(stepCode: string) {
+  return ACTION_STEP_LABELS[stepCode] || stepCode;
 }
 
 function getApprovalSummaryFromRunOutput(output: unknown): ApprovalSummary | null {
@@ -315,7 +365,11 @@ function renderPreviewRow(step: AgentStep, row: StepPreviewRecord, index: number
     return (
       <div className="summary-item" key={`${step.step_id}-memory-load-${index}`}>
         <strong>{customerName}</strong>
-        <p>{row.memory_hit ? "已命中历史客户记忆，可直接参与本次规划。" : "当前还没有沉淀好的客户记忆，本次运行会首次建立。"}</p>
+        <p>
+          {row.memory_hit
+            ? "已命中历史客户记忆，可直接参与本次规划。"
+            : "当前还没有沉淀好的客户记忆，本次运行会首次建立。"}
+        </p>
         <div className="meta-row">
           <span className="meta-chip">{row.memory_hit ? "Memory Hit" : "Memory Miss"}</span>
           {row.last_compiled_at ? <span className="meta-chip">上次编译 {String(row.last_compiled_at)}</span> : null}
@@ -328,7 +382,7 @@ function renderPreviewRow(step: AgentStep, row: StepPreviewRecord, index: number
     return (
       <div className="summary-item" key={`${step.step_id}-exec-${index}`}>
         <strong>{customerName}</strong>
-        <p>工具链已经执行，{row.advice_ready ? "建议草稿已准备好。" : "建议草稿尚未准备好。"} </p>
+        <p>{row.advice_ready ? "工具链执行完成，建议草稿已准备好。" : "工具链执行完成，但建议草稿尚未准备好。"}</p>
         <div className="meta-row">
           {(Array.isArray(row.tools) ? row.tools : []).map((toolName) => (
             <span className="meta-chip" key={`${step.step_id}-${index}-${String(toolName)}`}>
@@ -389,6 +443,16 @@ function renderPreviewRow(step: AgentStep, row: StepPreviewRecord, index: number
   return null;
 }
 
+async function fetchAgentRuns() {
+  const response = await apiFetch<AgentRun[]>("/api/agent/runs");
+  return response.data;
+}
+
+async function fetchAgentRunDetail(runId: string) {
+  const response = await apiFetch<RunDetail>(`/api/agent/runs/${runId}`);
+  return response.data;
+}
+
 export default function AgentTracePage() {
   const [items, setItems] = useState<AgentRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
@@ -396,47 +460,88 @@ export default function AgentTracePage() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
+  const [runFilter, setRunFilter] = useState<RunFilter>("all");
+  const [retryingActionRunId, setRetryingActionRunId] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
 
   useEffect(() => {
+    let cancelled = false;
+
     async function loadRuns() {
       try {
-        const response = await apiFetch<AgentRun[]>("/api/agent/runs");
-        setItems(response.data);
-        if (response.data[0]) {
-          setSelectedRunId(response.data[0].run_id);
+        const data = await fetchAgentRuns();
+        if (cancelled) {
+          return;
         }
+        setItems(data);
+        setSelectedRunId((current) => current || data[0]?.run_id || "");
       } catch (exc) {
-        setError(exc instanceof Error ? exc.message : "Agent 执行记录加载失败。");
+        if (!cancelled) {
+          setError(exc instanceof Error ? exc.message : "Agent 执行记录加载失败。");
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
-    loadRuns();
+    void loadRuns();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  const filteredItems = useMemo(() => {
+    if (runFilter === "failed") {
+      return items.filter((item) => item.status === "failed");
+    }
+    return items;
+  }, [items, runFilter]);
+
+  useEffect(() => {
+    if (!filteredItems.length) {
+      setSelectedRunId("");
+      setDetail(null);
+      return;
+    }
+    if (!filteredItems.some((item) => item.run_id === selectedRunId)) {
+      setSelectedRunId(filteredItems[0].run_id);
+    }
+  }, [filteredItems, selectedRunId]);
 
   useEffect(() => {
     if (!selectedRunId) {
       return;
     }
 
+    let cancelled = false;
+
     async function loadDetail() {
       setDetailLoading(true);
       setError("");
       try {
-        const response = await apiFetch<RunDetail>(`/api/agent/runs/${selectedRunId}`);
-        setDetail(response.data);
+        const data = await fetchAgentRunDetail(selectedRunId);
+        if (!cancelled) {
+          setDetail(data);
+        }
       } catch (exc) {
-        setError(exc instanceof Error ? exc.message : "Agent 详情加载失败。");
+        if (!cancelled) {
+          setError(exc instanceof Error ? exc.message : "Agent 详情加载失败。");
+        }
       } finally {
-        setDetailLoading(false);
+        if (!cancelled) {
+          setDetailLoading(false);
+        }
       }
     }
 
-    loadDetail();
+    void loadDetail();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedRunId]);
 
-  // 中文注释：Trace 页先给总体健康度，再下钻具体 Run，避免一上来就被长日志淹没。
   const overview = useMemo(() => {
     const successCount = items.filter((item) => item.status === "success").length;
     const failedCount = items.filter((item) => item.status === "failed").length;
@@ -452,14 +557,12 @@ export default function AgentTracePage() {
       return null;
     }
 
-    const plannerStepCount = detail.steps.filter((step) => step.node_name === "plan_risk_actions").length;
-    const executorStepCount = detail.steps.filter((step) => step.node_name === "execute_risk_tools").length;
-    const reviewerStepCount = detail.steps.filter((step) => step.node_name === "review_risk_actions").length;
-
     return {
-      plannerStepCount,
-      executorStepCount,
-      reviewerStepCount,
+      plannerStepCount: detail.steps.filter((step) => step.node_name === "plan_risk_actions").length,
+      executorStepCount: detail.steps.filter((step) => step.node_name === "execute_risk_tools").length,
+      reviewerStepCount: detail.steps.filter((step) => step.node_name === "review_risk_actions").length,
+      actionRunCount: detail.action_runs.length,
+      failedActionRunCount: detail.action_runs.filter((item) => item.status === "failed").length,
     };
   }, [detail]);
 
@@ -469,6 +572,46 @@ export default function AgentTracePage() {
     }
     return getApprovalSummaryFromRunOutput(detail.run.output_json);
   }, [detail]);
+
+  async function refreshRuns(preferredRunId?: string) {
+    const data = await fetchAgentRuns();
+    setItems(data);
+    setSelectedRunId((current) => {
+      const nextRunId = preferredRunId || current;
+      if (nextRunId && data.some((item) => item.run_id === nextRunId)) {
+        return nextRunId;
+      }
+      return data[0]?.run_id || "";
+    });
+  }
+
+  async function refreshDetail(runId: string) {
+    const data = await fetchAgentRunDetail(runId);
+    setDetail(data);
+  }
+
+  async function handleRetryActionRun(actionRunId: string) {
+    if (!selectedRunId) {
+      return;
+    }
+
+    setRetryingActionRunId(actionRunId);
+    setActionMessage("");
+    setError("");
+
+    try {
+      await apiFetch(`/api/approvals/action-runs/${actionRunId}/retry`, { method: "POST" });
+      await refreshRuns(selectedRunId);
+      await refreshDetail(selectedRunId);
+      setActionMessage("动作链已重新执行，当前 Run 状态已刷新。");
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : "动作链重试失败。";
+      setActionMessage(message);
+      setError(message);
+    } finally {
+      setRetryingActionRunId("");
+    }
+  }
 
   return (
     <AppShell>
@@ -491,12 +634,12 @@ export default function AgentTracePage() {
             <article className="metric-card">
               <strong className="metric-value">{items.length}</strong>
               <span className="metric-label">累计 Run</span>
-              <p className="metric-detail">说明系统已经把异步任务跑成了可回放的执行记录。</p>
+              <p className="metric-detail">说明系统已经把异步任务沉淀成可回放的执行记录。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overview.successCount}</strong>
               <span className="metric-label">成功完成</span>
-              <p className="metric-detail">成功率越高，说明链路越稳定。</p>
+              <p className="metric-detail">成功率越高，说明主链路越稳定。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overview.failedCount}</strong>
@@ -506,39 +649,72 @@ export default function AgentTracePage() {
             <article className="metric-card">
               <strong className="metric-value">{formatDuration(overview.avgDuration)}</strong>
               <span className="metric-label">平均耗时</span>
-              <p className="metric-detail">有助于快速判断系统响应是否健康。</p>
+              <p className="metric-detail">帮助快速判断系统响应是否健康。</p>
             </article>
           </section>
 
           <section className="trace-layout">
             <div className="run-list">
-              {items.map((item) => {
-                const statusMeta = getStatusMeta(item.status);
-
-                return (
+              <div className={styles.traceToolbar}>
+                <div>
+                  <p className="eyebrow">Run Filters</p>
+                  <h2 className={styles.traceToolbarTitle}>历史 Run</h2>
+                </div>
+                <div className={styles.traceFilterTabs}>
                   <button
-                    className={`run-item ${styles.runItem} ${item.run_id === selectedRunId ? "selected" : ""}`}
-                    key={item.run_id}
-                    onClick={() => setSelectedRunId(item.run_id)}
+                    className={`${styles.traceFilterTab} ${runFilter === "all" ? styles.traceFilterTabActive : ""}`}
+                    onClick={() => setRunFilter("all")}
                     type="button"
                   >
-                    <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
-                    <div className={styles.runItemTitle}>
-                      <strong className={styles.runItemName}>{getRunTypeLabel(item.run_type)}</strong>
-                      <small className={styles.runItemGraph}>{item.graph_name}</small>
-                    </div>
-                    <div className={styles.runItemMeta}>
-                      <small className={styles.runItemMetaLine}>发起人 {item.user_real_name || item.user_id}</small>
-                      <small className={styles.runItemMetaLine}>开始于 {formatDateTime(item.started_at)}</small>
-                      <small className={styles.runItemMetaLine}>耗时 {formatDuration(item.total_duration_ms)}</small>
-                    </div>
+                    全部记录
                   </button>
-                );
-              })}
+                  <button
+                    className={`${styles.traceFilterTab} ${runFilter === "failed" ? styles.traceFilterTabActive : ""}`}
+                    onClick={() => setRunFilter("failed")}
+                    type="button"
+                  >
+                    只看失败
+                  </button>
+                </div>
+                <div className="meta-row">
+                  <span className="meta-chip">当前展示 {filteredItems.length} 条</span>
+                  <span className="meta-chip">失败 {overview.failedCount} 条</span>
+                </div>
+              </div>
+
+              {!filteredItems.length ? (
+                <div className={styles.emptyFilterState}>
+                  <EmptyCard text="当前筛选下没有 Run。" detail="切回全部记录，可以查看完整执行历史。" />
+                </div>
+              ) : (
+                filteredItems.map((item) => {
+                  const statusMeta = getStatusMeta(item.status);
+
+                  return (
+                    <button
+                      className={`run-item ${styles.runItem} ${item.run_id === selectedRunId ? "selected" : ""}`}
+                      key={item.run_id}
+                      onClick={() => setSelectedRunId(item.run_id)}
+                      type="button"
+                    >
+                      <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
+                      <div className={styles.runItemTitle}>
+                        <strong className={styles.runItemName}>{getRunTypeLabel(item.run_type)}</strong>
+                        <small className={styles.runItemGraph}>{item.graph_name}</small>
+                      </div>
+                      <div className={styles.runItemMeta}>
+                        <small className={styles.runItemMetaLine}>发起人 {item.user_real_name || item.user_id}</small>
+                        <small className={styles.runItemMetaLine}>开始于 {formatDateTime(item.started_at)}</small>
+                        <small className={styles.runItemMetaLine}>耗时 {formatDuration(item.total_duration_ms)}</small>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
             </div>
 
             <div className="trace-detail">
-              {detailLoading ? <LoadingCard text="正在读取链路详情..." detail="包括节点输出、RAG 证据与执行状态。" /> : null}
+              {detailLoading ? <LoadingCard text="正在读取链路详情..." detail="包括节点输出、RAG 证据与动作链状态。" /> : null}
 
               {detail ? (
                 <>
@@ -549,7 +725,9 @@ export default function AgentTracePage() {
                         <h2>{getRunTypeLabel(detail.run.run_type)}</h2>
                         <p className={`panel-copy ${styles.traceRunId}`}>Run ID：{detail.run.run_id}</p>
                       </div>
-                      <span className={`pill ${getStatusMeta(detail.run.status).toneClass}`}>{getStatusMeta(detail.run.status).label}</span>
+                      <span className={`pill ${getStatusMeta(detail.run.status).toneClass}`}>
+                        {getStatusMeta(detail.run.status).label}
+                      </span>
                     </div>
 
                     <div className={`trace-overview ${styles.traceOverview}`}>
@@ -586,8 +764,31 @@ export default function AgentTracePage() {
                           <span>Reviewer 阶段</span>
                         </div>
                         <div className={`trace-stat ${styles.traceStat}`}>
-                          <strong className={styles.traceStatValue}>{detail.run.status === "awaiting_approval" ? "是" : "否"}</strong>
+                          <strong className={styles.traceStatValue}>{selectedOverview.actionRunCount}</strong>
+                          <span>动作链总数</span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedOverview ? (
+                      <div className={`trace-overview ${styles.traceOverview}`}>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{selectedOverview.failedActionRunCount}</strong>
+                          <span>失败动作链</span>
+                        </div>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>
+                            {detail.run.status === "awaiting_approval" ? "是" : "否"}
+                          </strong>
                           <span>等待人工审批</span>
+                        </div>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{detail.action_runs.filter((item) => item.can_retry).length}</strong>
+                          <span>可重试动作链</span>
+                        </div>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{formatDateTime(detail.run.started_at)}</strong>
+                          <span>开始时间</span>
                         </div>
                       </div>
                     ) : null}
@@ -619,6 +820,130 @@ export default function AgentTracePage() {
                       <summary>查看 Run 输入与输出</summary>
                       <pre>{prettyJson({ input: detail.run.input_json, output: detail.run.output_json })}</pre>
                     </details>
+                  </article>
+
+                  <article className="command-panel">
+                    <div className="section-heading">
+                      <div>
+                        <p className="eyebrow">Action Recovery</p>
+                        <h2>审批后动作链</h2>
+                      </div>
+                      <span className="meta-chip">{detail.action_runs.length} 条动作链</span>
+                    </div>
+
+                    {actionMessage ? (
+                      <p
+                        className={`${styles.actionMessage} ${
+                          error && actionMessage === error ? styles.actionMessageError : styles.actionMessageSuccess
+                        }`}
+                      >
+                        {actionMessage}
+                      </p>
+                    ) : null}
+
+                    {!detail.action_runs.length ? <p className="muted-text">当前 Run 暂无审批后动作链记录。</p> : null}
+
+                    {detail.action_runs.length ? (
+                      <div className={styles.actionRunStack}>
+                        {detail.action_runs.map((actionRun) => {
+                          const statusMeta = getStatusMeta(actionRun.status);
+
+                          return (
+                            <article className={styles.actionRunCard} key={actionRun.action_run_id}>
+                              <div className={styles.actionRunHeader}>
+                                <div className={styles.actionRunHeaderMain}>
+                                  <p className="eyebrow">{actionRun.chain_code}</p>
+                                  <h3>{actionRun.chain_code === "post_approval_followup" ? "审批后外部动作闭环" : actionRun.chain_code}</h3>
+                                  <p className={styles.actionRunId}>Action Run ID：{actionRun.action_run_id}</p>
+                                </div>
+                                <div className={styles.actionRunHeaderSide}>
+                                  <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
+                                  {actionRun.can_retry ? (
+                                    <button
+                                      className="button-secondary"
+                                      disabled={retryingActionRunId === actionRun.action_run_id}
+                                      onClick={() => void handleRetryActionRun(actionRun.action_run_id)}
+                                      type="button"
+                                    >
+                                      {retryingActionRunId === actionRun.action_run_id ? "重试中..." : "重试当前动作链"}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              <div className="meta-row">
+                                <span className="meta-chip">审批单 {actionRun.approval_id || "无"}</span>
+                                <span className="meta-chip">客户 {actionRun.customer_id || "无"}</span>
+                                <span className="meta-chip">当前步骤 {getActionStepLabel(actionRun.current_step_code || "未开始")}</span>
+                                <span className="meta-chip">触发来源 {actionRun.trigger_source}</span>
+                              </div>
+
+                              <div className="summary-list">
+                                <div className="summary-item">
+                                  <strong>任务 ID</strong>
+                                  <p className={styles.wrapText}>{actionRun.task_id || "尚未生成"}</p>
+                                </div>
+                                <div className="summary-item">
+                                  <strong>通知 ID</strong>
+                                  <p className={styles.wrapText}>{actionRun.notification_id || "尚未发送"}</p>
+                                </div>
+                                <div className="summary-item">
+                                  <strong>创建时间</strong>
+                                  <p>{formatDateTime(actionRun.created_at)}</p>
+                                </div>
+                                <div className="summary-item">
+                                  <strong>完成时间</strong>
+                                  <p>{formatDateTime(actionRun.finished_at)}</p>
+                                </div>
+                              </div>
+
+                              {actionRun.error_message ? (
+                                <p className={`danger-text ${styles.errorMessage}`}>{actionRun.error_message}</p>
+                              ) : null}
+
+                              <div className={styles.actionRunStepList}>
+                                {actionRun.steps.map((step) => {
+                                  const stepStatusMeta = getStatusMeta(step.status);
+
+                                  return (
+                                    <article className={styles.actionRunStepItem} key={step.step_run_id}>
+                                      <div className={styles.actionRunStepHeader}>
+                                        <div>
+                                          <h4>{getActionStepLabel(step.step_code)}</h4>
+                                          <p className={styles.wrapText}>{step.tool_name}</p>
+                                        </div>
+                                        <span className={`pill ${stepStatusMeta.toneClass}`}>{stepStatusMeta.label}</span>
+                                      </div>
+
+                                      <div className="meta-row">
+                                        <span className="meta-chip">步骤序号 {step.step_order}</span>
+                                        <span className="meta-chip">重试次数 {step.retry_count}</span>
+                                        <span className="meta-chip">开始于 {formatDateTime(step.started_at)}</span>
+                                        <span className="meta-chip">完成于 {formatDateTime(step.finished_at)}</span>
+                                      </div>
+
+                                      {step.error_message ? (
+                                        <p className={`danger-text ${styles.errorMessage}`}>{step.error_message}</p>
+                                      ) : null}
+
+                                      <details className="detail-toggle">
+                                        <summary>查看步骤输入 / 输出 JSON</summary>
+                                        <pre>{prettyJson({ input: step.input_payload_json, output: step.output_payload_json })}</pre>
+                                      </details>
+                                    </article>
+                                  );
+                                })}
+                              </div>
+
+                              <details className="detail-toggle">
+                                <summary>查看动作链上下文</summary>
+                                <pre>{prettyJson(actionRun.context_payload_json)}</pre>
+                              </details>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </article>
 
                   <article className="command-panel">

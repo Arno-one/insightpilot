@@ -3,7 +3,13 @@
 }
 
 .runItemTitle,
-.runItemMeta {
+.runItemMeta,
+.traceSummaryMain,
+.actionRunHeaderMain,
+.actionRunHeaderSide,
+.actionRunStepHeader,
+.actionRunCard,
+.actionRunStepItem {
   min-width: 0;
 }
 
@@ -12,12 +18,57 @@
   gap: 4px;
 }
 
+.traceToolbar {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 12px;
+}
+
+.traceToolbarTitle {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.traceFilterTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.traceFilterTab {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.03);
+  color: inherit;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.traceFilterTab:hover {
+  transform: translateY(-1px);
+  border-color: rgba(14, 116, 144, 0.4);
+}
+
+.traceFilterTabActive {
+  background: rgba(14, 116, 144, 0.12);
+  border-color: rgba(14, 116, 144, 0.45);
+  color: rgb(14, 116, 144);
+}
+
+.emptyFilterState {
+  padding-top: 8px;
+}
+
 .runItemName,
 .runItemGraph,
 .runItemMetaLine,
 .traceRunId,
 .traceStatValue,
-.errorMessage {
+.errorMessage,
+.wrapText,
+.actionRunId {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -33,7 +84,6 @@
 }
 
 .traceSummaryMain {
-  min-width: 0;
   display: grid;
   gap: 6px;
 }
@@ -55,7 +105,116 @@
   font-size: clamp(24px, 2vw, 40px);
 }
 
+.actionMessage {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  line-height: 1.7;
+}
+
+.actionMessageSuccess {
+  background: rgba(22, 163, 74, 0.1);
+  color: rgb(21, 128, 61);
+}
+
+.actionMessageError {
+  background: rgba(220, 38, 38, 0.08);
+  color: rgb(185, 28, 28);
+}
+
+.actionRunStack {
+  display: grid;
+  gap: 18px;
+}
+
+.actionRunCard {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background:
+    radial-gradient(circle at top right, rgba(14, 116, 144, 0.08), transparent 36%),
+    rgba(255, 255, 255, 0.85);
+}
+
+.actionRunHeader {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.actionRunHeaderMain {
+  display: grid;
+  gap: 6px;
+}
+
+.actionRunHeaderMain h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.actionRunHeaderSide {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.actionRunId {
+  margin: 0;
+  color: rgba(15, 23, 42, 0.68);
+}
+
+.actionRunStepList {
+  display: grid;
+  gap: 12px;
+}
+
+.actionRunStepItem {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.94);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.actionRunStepHeader {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.actionRunStepHeader h4 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.actionRunStepHeader p {
+  margin: 0;
+  color: rgba(15, 23, 42, 0.68);
+  line-height: 1.7;
+}
+
 .errorMessage {
   margin: 0;
   line-height: 1.75;
+}
+
+@media (max-width: 900px) {
+  .traceToolbar {
+    gap: 12px;
+  }
+
+  .actionRunCard {
+    padding: 16px;
+  }
+
+  .actionRunStepItem {
+    padding: 12px;
+  }
 }

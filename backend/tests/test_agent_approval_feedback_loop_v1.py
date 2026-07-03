@@ -466,3 +466,46 @@ def test_agent_run_feedback_loop_updates_output_and_status(monkeypatch):
         assert final_output["approval_summary"]["all_reviewed"] is True
     finally:
         _cleanup_agent_run_feedback_fixture(tenant_id, run_id, customer_ids)
+
+
+def test_agent_run_detail_includes_action_run_recovery_payload(monkeypatch):
+    monkeypatch.setattr(
+        email_service,
+        "send_task_assignment_email",
+        lambda **kwargs: {
+            "provider": "smtp",
+            "sender_email": "no-reply@insightpilot.local",
+            "recipient_email": kwargs["recipient_email"],
+            "recipient_name": kwargs.get("recipient_name"),
+            "subject": f"mock:{kwargs['task']['title']}",
+        },
+    )
+
+    client = TestClient(app)
+    _ensure_workflow_event_table_exists()
+    headers, tenant_id, requester_user_id = _build_headers(client)
+    run_id, _, customer_ids, approval_ids = _create_agent_run_feedback_fixture(tenant_id, requester_user_id)
+
+    try:
+        approve_response = client.post(f"/api/approvals/{approval_ids[0]}/approve", headers=headers)
+        assert approve_response.status_code == 200
+
+        detail_response = client.get(f"/api/agent/runs/{run_id}", headers=headers)
+        assert detail_response.status_code == 200
+
+        detail_data = detail_response.json()["data"]
+        assert detail_data["run"]["run_id"] == run_id
+        assert len(detail_data["action_runs"]) == 1
+
+        action_run = detail_data["action_runs"][0]
+        assert action_run["approval_id"] == approval_ids[0]
+        assert action_run["task_id"]
+        assert action_run["notification_id"]
+        assert action_run["can_retry"] is False
+        assert [step["step_code"] for step in action_run["steps"]] == [
+            "create_task",
+            "send_notification",
+            "create_calendar_event",
+        ]
+    finally:
+        _cleanup_agent_run_feedback_fixture(tenant_id, run_id, customer_ids)
