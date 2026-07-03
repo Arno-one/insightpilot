@@ -428,7 +428,13 @@ function CustomerWorkbenchContent() {
                           <p>你可以直接问风险原因、回访策略或是否值得升级给主管介入，Risk Agent 会沿着这位客户持续记忆。</p>
                           <div className={styles.promptList}>
                             {promptList.map((prompt) => (
-                              <button className="button-secondary" key={prompt} onClick={() => sendMessage(prompt)} type="button" disabled={sending}>
+                              <button
+                                className={`button-secondary ${styles.promptButton}`}
+                                key={prompt}
+                                onClick={() => sendMessage(prompt)}
+                                type="button"
+                                disabled={sending}
+                              >
                                 {prompt}
                               </button>
                             ))}

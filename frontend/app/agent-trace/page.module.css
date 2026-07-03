@@ -1,0 +1,61 @@
+.runItem {
+  min-width: 0;
+}
+
+.runItemTitle,
+.runItemMeta {
+  min-width: 0;
+}
+
+.runItemTitle {
+  display: grid;
+  gap: 4px;
+}
+
+.runItemName,
+.runItemGraph,
+.runItemMetaLine,
+.traceRunId,
+.traceStatValue,
+.errorMessage {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runItemName {
+  line-height: 1.4;
+}
+
+.runItemGraph,
+.runItemMetaLine {
+  display: block;
+  line-height: 1.7;
+}
+
+.traceSummaryMain {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.traceRunId {
+  margin: 0;
+}
+
+.traceOverview {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.traceStat {
+  min-width: 0;
+}
+
+.traceStatValue {
+  line-height: 1.2;
+  font-size: clamp(24px, 2vw, 40px);
+}
+
+.errorMessage {
+  margin: 0;
+  line-height: 1.75;
+}

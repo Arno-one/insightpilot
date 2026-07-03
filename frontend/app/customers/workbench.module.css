@@ -214,6 +214,21 @@
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.promptButton {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  min-height: 60px;
+  height: auto;
+  padding: 14px 18px;
+  line-height: 1.6;
+  text-align: left;
+  white-space: normal;
+  text-wrap: wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .chatComposer {
   display: grid;
   gap: 14px;

@@ -6,6 +6,7 @@ import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
 import { apiFetch } from "@/lib/api";
 import { formatDateTime, formatDuration, getRunTypeLabel, getStatusMeta } from "@/lib/presentation";
+import styles from "./page.module.css";
 
 type AgentRun = {
   run_id: string;
@@ -516,17 +517,21 @@ export default function AgentTracePage() {
 
                 return (
                   <button
-                    className={`run-item ${item.run_id === selectedRunId ? "selected" : ""}`}
+                    className={`run-item ${styles.runItem} ${item.run_id === selectedRunId ? "selected" : ""}`}
                     key={item.run_id}
                     onClick={() => setSelectedRunId(item.run_id)}
                     type="button"
                   >
                     <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
-                    <strong>{getRunTypeLabel(item.run_type)}</strong>
-                    <small>{item.graph_name}</small>
-                    <small>发起人 {item.user_real_name || item.user_id}</small>
-                    <small>开始于 {formatDateTime(item.started_at)}</small>
-                    <small>耗时 {formatDuration(item.total_duration_ms)}</small>
+                    <div className={styles.runItemTitle}>
+                      <strong className={styles.runItemName}>{getRunTypeLabel(item.run_type)}</strong>
+                      <small className={styles.runItemGraph}>{item.graph_name}</small>
+                    </div>
+                    <div className={styles.runItemMeta}>
+                      <small className={styles.runItemMetaLine}>发起人 {item.user_real_name || item.user_id}</small>
+                      <small className={styles.runItemMetaLine}>开始于 {formatDateTime(item.started_at)}</small>
+                      <small className={styles.runItemMetaLine}>耗时 {formatDuration(item.total_duration_ms)}</small>
+                    </div>
                   </button>
                 );
               })}
@@ -539,76 +544,76 @@ export default function AgentTracePage() {
                 <>
                   <article className="command-panel">
                     <div className="trace-summary">
-                      <div>
+                      <div className={styles.traceSummaryMain}>
                         <p className="eyebrow">{detail.run.graph_name}</p>
                         <h2>{getRunTypeLabel(detail.run.run_type)}</h2>
-                        <p className="panel-copy">Run ID：{detail.run.run_id}</p>
+                        <p className={`panel-copy ${styles.traceRunId}`}>Run ID：{detail.run.run_id}</p>
                       </div>
                       <span className={`pill ${getStatusMeta(detail.run.status).toneClass}`}>{getStatusMeta(detail.run.status).label}</span>
                     </div>
 
-                    <div className="trace-overview">
-                      <div className="trace-stat">
-                        <strong>{formatDuration(detail.run.total_duration_ms)}</strong>
+                    <div className={`trace-overview ${styles.traceOverview}`}>
+                      <div className={`trace-stat ${styles.traceStat}`}>
+                        <strong className={styles.traceStatValue}>{formatDuration(detail.run.total_duration_ms)}</strong>
                         <span>总耗时</span>
                       </div>
-                      <div className="trace-stat">
-                        <strong>{detail.steps.length}</strong>
+                      <div className={`trace-stat ${styles.traceStat}`}>
+                        <strong className={styles.traceStatValue}>{detail.steps.length}</strong>
                         <span>节点数量</span>
                       </div>
-                      <div className="trace-stat">
-                        <strong>{detail.rag_traces.length}</strong>
+                      <div className={`trace-stat ${styles.traceStat}`}>
+                        <strong className={styles.traceStatValue}>{detail.rag_traces.length}</strong>
                         <span>RAG 检索链路</span>
                       </div>
-                      <div className="trace-stat">
-                        <strong>{formatDateTime(detail.run.finished_at)}</strong>
+                      <div className={`trace-stat ${styles.traceStat}`}>
+                        <strong className={styles.traceStatValue}>{formatDateTime(detail.run.finished_at)}</strong>
                         <span>完成时间</span>
                       </div>
                     </div>
 
                     {selectedOverview ? (
-                      <div className="trace-overview">
-                        <div className="trace-stat">
-                          <strong>{selectedOverview.plannerStepCount}</strong>
+                      <div className={`trace-overview ${styles.traceOverview}`}>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{selectedOverview.plannerStepCount}</strong>
                           <span>Planner 阶段</span>
                         </div>
-                        <div className="trace-stat">
-                          <strong>{selectedOverview.executorStepCount}</strong>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{selectedOverview.executorStepCount}</strong>
                           <span>Executor 阶段</span>
                         </div>
-                        <div className="trace-stat">
-                          <strong>{selectedOverview.reviewerStepCount}</strong>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{selectedOverview.reviewerStepCount}</strong>
                           <span>Reviewer 阶段</span>
                         </div>
-                        <div className="trace-stat">
-                          <strong>{detail.run.status === "awaiting_approval" ? "是" : "否"}</strong>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{detail.run.status === "awaiting_approval" ? "是" : "否"}</strong>
                           <span>等待人工审批</span>
                         </div>
                       </div>
                     ) : null}
 
                     {approvalSummary ? (
-                      <div className="trace-overview">
-                        <div className="trace-stat">
-                          <strong>{approvalSummary.approved_count || 0}</strong>
+                      <div className={`trace-overview ${styles.traceOverview}`}>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{approvalSummary.approved_count || 0}</strong>
                           <span>人工已通过</span>
                         </div>
-                        <div className="trace-stat">
-                          <strong>{approvalSummary.rejected_count || 0}</strong>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{approvalSummary.rejected_count || 0}</strong>
                           <span>人工已驳回</span>
                         </div>
-                        <div className="trace-stat">
-                          <strong>{approvalSummary.converted_task_count || 0}</strong>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{approvalSummary.converted_task_count || 0}</strong>
                           <span>已转任务</span>
                         </div>
-                        <div className="trace-stat">
-                          <strong>{formatDateTime(approvalSummary.latest_reviewed_at)}</strong>
+                        <div className={`trace-stat ${styles.traceStat}`}>
+                          <strong className={styles.traceStatValue}>{formatDateTime(approvalSummary.latest_reviewed_at)}</strong>
                           <span>最近人工处理</span>
                         </div>
                       </div>
                     ) : null}
 
-                    {detail.run.error_message ? <p className="danger-text">{detail.run.error_message}</p> : null}
+                    {detail.run.error_message ? <p className={`danger-text ${styles.errorMessage}`}>{detail.run.error_message}</p> : null}
 
                     <details>
                       <summary>查看 Run 输入与输出</summary>
@@ -646,7 +651,7 @@ export default function AgentTracePage() {
                                 <span className="meta-chip">耗时 {formatDuration(step.duration_ms)}</span>
                                 <span className="meta-chip">开始于 {formatDateTime(step.started_at)}</span>
                               </div>
-                              {step.error_message ? <p className="danger-text">{step.error_message}</p> : null}
+                              {step.error_message ? <p className={`danger-text ${styles.errorMessage}`}>{step.error_message}</p> : null}
 
                               {summaryItems.length ? (
                                 <div className="summary-list">
