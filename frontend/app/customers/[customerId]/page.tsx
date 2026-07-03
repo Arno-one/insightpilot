@@ -171,6 +171,58 @@ type CustomerDetailData = {
   report_refs: ReportRef[];
 };
 
+type RiskChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
+
+type RiskChatSession = {
+  session_key: string;
+  recent_messages: RiskChatMessage[];
+  history_summary: string;
+  memory_window: {
+    recent_rounds: number;
+    max_recent_messages: number;
+  };
+  updated_at: string | null;
+  customer_brief: {
+    customer_id: string;
+    customer_name: string | null;
+    owner_user_id: string;
+    owner_user_name: string | null;
+    lifecycle_stage: string | null;
+    intent_level: string | null;
+    last_follow_up_at: string | null;
+    next_follow_up_at: string | null;
+    last_sentiment: string | null;
+  };
+  latest_risk: {
+    risk_snapshot_id?: string;
+    risk_score?: number;
+    risk_level?: string;
+    llm_reason?: string | null;
+    llm_suggestion?: string | null;
+  };
+  customer_memory_summary: string;
+  customer_memory_updated_at: string | null;
+};
+
+type RiskChatMessageResult = {
+  reply: string;
+  session_key: string;
+  recent_messages: RiskChatMessage[];
+  history_summary: string;
+  memory_window: {
+    recent_rounds: number;
+    max_recent_messages: number;
+  };
+  updated_at: string | null;
+  compacted: boolean;
+  customer_memory_summary: string;
+  latest_risk: RiskChatSession["latest_risk"];
+};
+
 function formatCurrency(value: number | null | undefined) {
   if (value === null || value === undefined) {
     return "未记录";
@@ -220,6 +272,11 @@ export default function CustomerDetailPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [rescanLoading, setRescanLoading] = useState(false);
+  const [chatSession, setChatSession] = useState<RiskChatSession | null>(null);
+  const [chatLoading, setChatLoading] = useState(true);
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const [chatDraft, setChatDraft] = useState("");
 
   async function loadDetail() {
     if (!customerId) {
@@ -257,8 +314,76 @@ export default function CustomerDetailPage() {
     }
   }
 
+  async function loadRiskChatSession() {
+    if (!customerId) {
+      return;
+    }
+    setChatLoading(true);
+    setChatError("");
+    try {
+      const response = await apiFetch<RiskChatSession>(`/api/agent/risk-chat/customers/${customerId}/session`);
+      setChatSession(response.data);
+    } catch (exc) {
+      setChatError(exc instanceof Error ? exc.message : "Risk Agent 对话加载失败。");
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function sendRiskChatMessage() {
+    if (!customerId || !chatDraft.trim()) {
+      return;
+    }
+    setChatSending(true);
+    setChatError("");
+    try {
+      const response = await apiFetch<RiskChatMessageResult>(`/api/agent/risk-chat/customers/${customerId}/message`, {
+        method: "POST",
+        body: JSON.stringify({ message: chatDraft.trim() })
+      });
+      setChatSession((current) =>
+        current
+          ? {
+              ...current,
+              session_key: response.data.session_key,
+              recent_messages: response.data.recent_messages,
+              history_summary: response.data.history_summary,
+              memory_window: response.data.memory_window,
+              updated_at: response.data.updated_at,
+              customer_memory_summary: response.data.customer_memory_summary,
+              latest_risk: response.data.latest_risk
+            }
+          : null
+      );
+      setChatDraft("");
+    } catch (exc) {
+      setChatError(exc instanceof Error ? exc.message : "Risk Agent 回复失败。");
+    } finally {
+      setChatSending(false);
+    }
+  }
+
+  async function clearRiskChatSession() {
+    if (!customerId) {
+      return;
+    }
+    setChatSending(true);
+    setChatError("");
+    try {
+      await apiFetch(`/api/agent/risk-chat/customers/${customerId}/session`, {
+        method: "DELETE"
+      });
+      await loadRiskChatSession();
+    } catch (exc) {
+      setChatError(exc instanceof Error ? exc.message : "会话清空失败。");
+    } finally {
+      setChatSending(false);
+    }
+  }
+
   useEffect(() => {
     loadDetail();
+    loadRiskChatSession();
   }, [customerId, highlightedRiskSnapshotId]);
 
   // 中文注释：优先高亮这次从风险中心点进来的那一条快照，没有上下文时再退回到最新快照。
@@ -279,13 +404,10 @@ export default function CustomerDetailPage() {
 
   return (
     <AppShell>
-      <section className="page-hero">
+      <section className="command-panel">
         <div>
           <p className="eyebrow">Customer Workbench</p>
           <h1>{detail?.customer.customer_name || customerId}</h1>
-          <p className="lead">
-            这一页把单个客户的风险原因、最近动作和执行上下文放在一起，方便主管和销售围绕一个对象连续处理问题。
-          </p>
         </div>
         <div className="page-actions">
           <Link className="button-secondary" href="/risks">
@@ -387,7 +509,7 @@ export default function CustomerDetailPage() {
                   </div>
                 </>
               ) : (
-                <EmptyCard text="当前还没有风险快照。" detail="可以先触发“重算当前客户风险”，再回到这里查看结果。" />
+                <EmptyCard text="当前还没有风险快照。" detail="可以先触发「重算当前客户风险」，再回到这里查看结果。" />
               )}
             </article>
 
@@ -431,6 +553,99 @@ export default function CustomerDetailPage() {
                   <p>
                     竞品介入 {detail.customer.competitor_involved ? "是" : "否"}，流失原因 {labelValue(detail.customer.lost_reason)}，
                     备注 {labelValue(detail.customer.remark)}。
+                  </p>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <section className="workspace-grid">
+            <article className="command-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Risk Agent Chat</p>
+                  <h2>当前客户对话面板</h2>
+                </div>
+                <div className="page-actions">
+                  <button className="button-secondary" type="button" onClick={clearRiskChatSession} disabled={chatSending || chatLoading}>
+                    清空会话
+                  </button>
+                </div>
+              </div>
+              <div className="meta-row">
+                <span className="meta-chip">短期记忆：最近 {chatSession?.memory_window.recent_rounds || 5} 轮全量</span>
+                <span className="meta-chip">超过后自动压缩为历史摘要</span>
+                <span className="meta-chip">长期记忆：客户经营记忆</span>
+              </div>
+              {chatError ? <p className="form-error">{chatError}</p> : null}
+              {chatLoading ? (
+                <LoadingCard detail="正在载入当前客户的 Risk Agent 会话记忆。" />
+              ) : (
+                <>
+                  <div className="summary-list">
+                    {chatSession?.recent_messages.length ? (
+                      chatSession.recent_messages.map((item, index) => (
+                        <div className="summary-item" key={`${item.created_at}-${index}`}>
+                          <div className="meta-row">
+                            <span className={`pill ${item.role === "user" ? "tone-info" : "tone-success"}`}>
+                              {item.role === "user" ? "你" : "Risk Agent"}
+                            </span>
+                            <span className="meta-chip">{formatDateTime(item.created_at)}</span>
+                          </div>
+                          <p>{item.content}</p>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="summary-item">
+                        <strong>当前还没有对话记录</strong>
+                        <p>你可以直接问这个客户为什么有风险、应该怎么回访，或者下一步是否值得升级动作。</p>
+                      </div>
+                    )}
+                  </div>
+                  <textarea
+                    className="input-like textarea-like"
+                    placeholder="例如：这个客户现在最值得先确认的风险点是什么？"
+                    value={chatDraft}
+                    onChange={(event) => setChatDraft(event.target.value)}
+                    rows={5}
+                    disabled={chatSending}
+                  />
+                  <div className="page-actions">
+                    <button className="button" type="button" onClick={sendRiskChatMessage} disabled={chatSending || !chatDraft.trim()}>
+                      {chatSending ? "发送中..." : "发送给 Risk Agent"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </article>
+
+            <article className="command-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Memory View</p>
+                  <h2>记忆命中情况</h2>
+                </div>
+              </div>
+              <div className="summary-list">
+                <div className="summary-item">
+                  <strong>长期客户记忆</strong>
+                  <p>{chatSession?.customer_memory_summary || "当前还没有写入客户长期记忆，建议先完成一次风险分析后再来对话。"}</p>
+                  <div className="meta-row">
+                    <span className="meta-chip">
+                      最近编译时间 {chatSession?.customer_memory_updated_at ? formatDateTime(chatSession.customer_memory_updated_at) : "未生成"}
+                    </span>
+                  </div>
+                </div>
+                <div className="summary-item">
+                  <strong>更早对话摘要</strong>
+                  <p>{chatSession?.history_summary || "当前还没有触发对话压缩，超过最近 5 轮后会把更早内容沉淀到这里。"}</p>
+                </div>
+                <div className="summary-item">
+                  <strong>当前风险参考</strong>
+                  <p>
+                    {chatSession?.latest_risk?.risk_level
+                      ? `${getRiskMeta(chatSession.latest_risk.risk_level).label}，风险分 ${chatSession.latest_risk.risk_score ?? "未记录"}。`
+                      : "当前还没有关联风险快照，Risk Agent 会先基于客户资料和长期记忆回答。"}
                   </p>
                 </div>
               </div>

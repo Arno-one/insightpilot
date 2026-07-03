@@ -50,6 +50,12 @@ class ReportNarrative(BaseModel):
     suggestions: str = Field(..., description="经营建议")
 
 
+class RiskConversationReply(BaseModel):
+    """Risk Agent 对话回复结构，方便后续扩展多字段会话输出。"""
+
+    reply: str = Field(..., description="Risk Agent 针对当前客户与当前问题的回复")
+
+
 def _risk_tool_names(available_tools: list[dict[str, str]]) -> set[str]:
     return {tool["name"] for tool in available_tools}
 
@@ -315,6 +321,114 @@ def generate_risk_advice(
     )
     advice = structured_complete(system_prompt, user_message, RiskAdvice)
     return advice or fallback_risk_advice(customer, risk_result)
+
+
+def _risk_level_label(level: str | None) -> str:
+    labels = {
+        "high": "高风险",
+        "medium": "中风险",
+        "low": "低风险",
+    }
+    return labels.get(level or "", level or "待评估")
+
+
+def fallback_risk_chat_reply(
+    customer: dict,
+    latest_risk: dict | None,
+    customer_memory: dict | None,
+    conversation_memory: dict | None,
+    user_message: str,
+) -> str:
+    """LLM 不可用时给出稳定可测的对话回复，先保证有记忆、有上下文、能落地。"""
+    latest_risk = latest_risk or {}
+    customer_memory = customer_memory or {}
+    conversation_memory = conversation_memory or {}
+    summary_json = customer_memory.get("summary_json", {}) if isinstance(customer_memory, dict) else {}
+    risk_state = summary_json.get("risk_state", {}) if isinstance(summary_json, dict) else {}
+    approval_state = summary_json.get("approval_state", {}) if isinstance(summary_json, dict) else {}
+    task_state = summary_json.get("task_state", {}) if isinstance(summary_json, dict) else {}
+    follow_up_state = summary_json.get("follow_up_state", {}) if isinstance(summary_json, dict) else {}
+
+    customer_name = customer.get("customer_name") or customer.get("customer_id") or "该客户"
+    risk_level = latest_risk.get("risk_level") or risk_state.get("latest_risk_level")
+    risk_score = latest_risk.get("risk_score") or risk_state.get("latest_risk_score")
+    latest_reason = latest_risk.get("llm_reason") or risk_state.get("latest_reason")
+    latest_suggestion = latest_risk.get("llm_suggestion") or risk_state.get("latest_suggestion")
+    pending_approvals = int(approval_state.get("pending_count", 0) or 0)
+    active_tasks = int(task_state.get("active_count", 0) or 0)
+    latest_follow_up_at = follow_up_state.get("latest_follow_up_at") or customer.get("last_follow_up_at")
+    history_summary = str(conversation_memory.get("history_summary") or "")
+    normalized_message = str(user_message or "")
+
+    parts = [
+        f"结合当前客户资料，{customer_name} 现在更接近{_risk_level_label(risk_level)}场景"
+        + (f"，最近风险分约 {risk_score}。" if risk_score not in (None, "") else "。"),
+    ]
+
+    if any(keyword in normalized_message for keyword in ["为什么", "原因", "风险"]):
+        if latest_reason:
+            parts.append(f"当前最核心的风险原因是：{latest_reason}")
+        else:
+            parts.append("当前还没有足够新的风险解释，建议先补一轮客户现状确认。")
+    elif any(keyword in normalized_message for keyword in ["回访", "跟进", "联系", "沟通"]):
+        parts.append("建议下一次沟通先确认真实采购时间、预算是否变化，以及竞品比较目前卡在哪一步。")
+    elif any(keyword in normalized_message for keyword in ["审批", "任务", "执行"]):
+        if pending_approvals:
+            parts.append(f"这个客户当前还有 {pending_approvals} 条待审批动作，优先别重复创建新动作。")
+        elif active_tasks:
+            parts.append(f"这个客户当前已有 {active_tasks} 条执行中任务，建议先确认现有动作效果。")
+        else:
+            parts.append("当前还没有明显的待审批或执行中动作，可以先把问题澄清清楚，再决定是否升级为任务。")
+    elif latest_suggestion:
+        parts.append(f"如果现在要推进，我更建议：{latest_suggestion}")
+    else:
+        parts.append("建议先把客户真实顾虑、内部决策人状态和下一次跟进时间补齐，再决定后续动作。")
+
+    if latest_follow_up_at:
+        parts.append(f"现有记录里最近一次跟进时间是 {latest_follow_up_at}，对话里最好先核对这之后是否又出现了新变化。")
+    if history_summary:
+        parts.append("我会继续沿用更早对话的摘要，不会把这位客户当成全新对象重新分析。")
+
+    return "\n".join(parts)
+
+
+def generate_risk_chat_reply(
+    customer: dict,
+    latest_risk: dict | None,
+    customer_memory: dict | None,
+    conversation_memory: dict | None,
+    user_message: str,
+) -> str:
+    """生成 Risk Agent 的客户对话回复；LLM 失败时自动降级为规则回复。"""
+    system_prompt = (
+        "你是 InsightPilot 的 Risk Agent。"
+        "你只负责围绕单个客户给出经营与跟进建议，不能虚构已经执行过的动作。"
+        "你必须结合客户长期记忆和当前会话记忆，避免把每次问题都当成全新上下文。"
+        "回答保持简洁、可执行，优先指出下一步最值得做的动作。"
+    )
+    user_payload = {
+        "customer": customer,
+        "latest_risk": latest_risk or {},
+        "customer_memory": customer_memory or {},
+        "conversation_memory": {
+            "history_summary": (conversation_memory or {}).get("history_summary", ""),
+            "recent_messages": (conversation_memory or {}).get("recent_messages", []),
+        },
+        "current_user_message": user_message,
+        "response_rules": [
+            "不要声称已经调用外部系统或已经联系客户",
+            "如果存在长期记忆或历史摘要，要显式基于这些信息回答",
+            "优先输出下一步建议，不要写成空泛鸡汤",
+        ],
+    }
+    reply = structured_complete(
+        system_prompt,
+        json.dumps(user_payload, ensure_ascii=False, default=str),
+        RiskConversationReply,
+    )
+    if reply and reply.reply.strip():
+        return reply.reply.strip()
+    return fallback_risk_chat_reply(customer, latest_risk, customer_memory, conversation_memory, user_message)
 
 
 def _review_evidence_snapshot(

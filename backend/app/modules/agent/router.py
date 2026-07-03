@@ -5,7 +5,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.modules.agent import conversation_memory_service, memory_service
+from app.modules.agent.schemas import RiskChatMessageRequest
 from app.modules.auth.dependencies import require_permission
+from app.modules.crm import service as crm_service
+from app.modules.llm.client import generate_risk_chat_reply
 from app.shared.response import success
 
 router = APIRouter()
@@ -34,6 +38,62 @@ def _collect_trace_ids_from_step(step: dict) -> list[str]:
             if trace_id:
                 trace_ids.append(trace_id)
     return trace_ids
+
+
+def _load_latest_customer_risk_snapshot(db: Session, tenant_id: str, customer_id: str) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT risk_snapshot_id, risk_score, risk_level, llm_reason, llm_suggestion, status, created_at
+            FROM customer_risk_snapshot
+            WHERE tenant_id = :tenant_id AND customer_id = :customer_id
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "customer_id": customer_id},
+    ).mappings().first()
+    return dict(row) if row else {}
+
+
+def _load_customer_memory_item(db: Session, tenant_id: str, customer_id: str) -> dict:
+    return memory_service.load_customer_memory_map(db, tenant_id, [customer_id]).get(customer_id, {})
+
+
+def _build_risk_chat_session_payload(
+    db: Session,
+    current_user: dict,
+    customer_id: str,
+) -> dict:
+    customer = crm_service.load_customer_or_404(db, current_user, customer_id)
+    latest_risk = _load_latest_customer_risk_snapshot(db, current_user["tenant_id"], customer_id)
+    customer_memory = _load_customer_memory_item(db, current_user["tenant_id"], customer_id)
+    conversation_memory = conversation_memory_service.load_conversation_memory(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id,
+    )
+    return {
+        "session_key": conversation_memory["session_key"],
+        "recent_messages": conversation_memory["recent_messages"],
+        "history_summary": conversation_memory["history_summary"],
+        "memory_window": conversation_memory["memory_window"],
+        "updated_at": conversation_memory["updated_at"],
+        "customer_brief": {
+            "customer_id": customer["customer_id"],
+            "customer_name": customer.get("customer_name"),
+            "owner_user_id": customer.get("owner_user_id"),
+            "owner_user_name": customer.get("owner_user_name"),
+            "lifecycle_stage": customer.get("lifecycle_stage"),
+            "intent_level": customer.get("intent_level"),
+            "last_follow_up_at": customer.get("last_follow_up_at"),
+            "next_follow_up_at": customer.get("next_follow_up_at"),
+            "last_sentiment": customer.get("last_sentiment"),
+        },
+        "latest_risk": latest_risk,
+        "customer_memory_summary": customer_memory.get("summary_text", ""),
+        "customer_memory_updated_at": customer_memory.get("last_compiled_at"),
+    }
 
 
 @router.get("/runs")
@@ -155,3 +215,90 @@ def get_agent_run_detail(
         "查询成功",
         total=len(steps),
     )
+
+
+@router.get("/risk-chat/customers/{customer_id}/session")
+def get_risk_chat_session(
+    customer_id: str,
+    current_user: dict = Depends(require_permission("agent:run:risk_analysis")),
+    db: Session = Depends(get_db),
+):
+    """读取当前用户在当前客户下的 Risk Agent 对话会话和记忆窗口。"""
+    data = _build_risk_chat_session_payload(db, current_user, customer_id)
+    return success(data, "查询成功")
+
+
+@router.post("/risk-chat/customers/{customer_id}/message")
+def send_risk_chat_message(
+    customer_id: str,
+    body: RiskChatMessageRequest,
+    current_user: dict = Depends(require_permission("agent:run:risk_analysis")),
+    db: Session = Depends(get_db),
+):
+    """发送一条 Risk Agent 对话消息，并把短期记忆压缩为最近 5 轮全量 + 历史摘要。"""
+    customer = crm_service.load_customer_or_404(db, current_user, customer_id)
+    latest_risk = _load_latest_customer_risk_snapshot(db, current_user["tenant_id"], customer_id)
+    customer_memory = _load_customer_memory_item(db, current_user["tenant_id"], customer_id)
+    conversation_memory = conversation_memory_service.load_conversation_memory(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id,
+    )
+
+    reply = generate_risk_chat_reply(
+        customer=customer,
+        latest_risk=latest_risk,
+        customer_memory=customer_memory,
+        conversation_memory={
+            "history_summary": conversation_memory.get("history_summary", ""),
+            "recent_messages": [
+                *list(conversation_memory.get("recent_messages", [])),
+                {
+                    "role": "user",
+                    "content": body.message,
+                    "created_at": "pending",
+                },
+            ],
+        },
+        user_message=body.message,
+    )
+    saved_memory, compacted = conversation_memory_service.append_conversation_messages(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id,
+        messages=[
+            {"role": "user", "content": body.message},
+            {"role": "assistant", "content": reply},
+        ],
+    )
+
+    return success(
+        {
+            "reply": reply,
+            "session_key": saved_memory["session_key"],
+            "recent_messages": saved_memory["recent_messages"],
+            "history_summary": saved_memory["history_summary"],
+            "memory_window": saved_memory["memory_window"],
+            "updated_at": saved_memory["updated_at"],
+            "compacted": compacted,
+            "customer_memory_summary": customer_memory.get("summary_text", ""),
+            "latest_risk": latest_risk,
+        },
+        "回复成功",
+    )
+
+
+@router.delete("/risk-chat/customers/{customer_id}/session")
+def clear_risk_chat_session(
+    customer_id: str,
+    current_user: dict = Depends(require_permission("agent:run:risk_analysis")),
+    db: Session = Depends(get_db),
+):
+    """清空当前用户在该客户下的 Risk Agent 短期会话记忆。"""
+    crm_service.load_customer_or_404(db, current_user, customer_id)
+    conversation_memory_service.clear_conversation_memory(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id,
+    )
+    return success({"customer_id": customer_id}, "会话记忆已清空")
