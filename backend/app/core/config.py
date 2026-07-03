@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     dashscope_api_key: str = Field("", validation_alias="DASHSCOPE_API_KEY")
     aliyun_api_key: str = Field("", validation_alias="ALIYUN_API_KEY")
 
+    # 中文注释：邮件通道先基于 SMTP 打通，后续企业微信、飞书等可继续挂到统一 Gateway。
+    smtp_host: str = Field("", validation_alias="SMTP_HOST")
+    smtp_port: int = Field(465, validation_alias="SMTP_PORT")
+    sender_email: str = Field("", validation_alias="SENDER_EMAIL")
+    smtp_auth_code: str = Field("", validation_alias="SMTP_AUTH_CODE")
+    smtp_sender_name: str = Field("InsightPilot", validation_alias="SMTP_SENDER_NAME")
+    smtp_use_tls: bool = Field(True, validation_alias="SMTP_USE_TLS")
+    smtp_use_ssl: bool | None = Field(None, validation_alias="SMTP_USE_SSL")
+    smtp_timeout_seconds: int = Field(15, validation_alias="SMTP_TIMEOUT_SECONDS")
+
     milvus_uri: str = Field("http://localhost:19530", validation_alias="MILVUS_URI")
     milvus_db_name: str = Field("insightpilot_rag", validation_alias="MILVUS_DB_NAME")
     rag_document_collection: str = Field("insightpilot_document_chunks", validation_alias="RAG_DOCUMENT_COLLECTION")

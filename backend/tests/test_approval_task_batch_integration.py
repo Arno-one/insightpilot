@@ -6,6 +6,7 @@ from sqlalchemy import bindparam, text
 
 from app.core.database import SessionLocal
 from app.main import app
+from app.modules.notification import email_service
 
 
 def _ensure_workflow_event_table_exists():
@@ -248,7 +249,19 @@ def _cleanup_temp_records(tenant_id: str, customer_id: str):
         db.commit()
 
 
-def test_batch_approval_and_task_flow_against_real_mysql():
+def test_batch_approval_and_task_flow_against_real_mysql(monkeypatch):
+    monkeypatch.setattr(
+        email_service,
+        "send_task_assignment_email",
+        lambda **kwargs: {
+            "provider": "smtp",
+            "sender_email": "no-reply@insightpilot.local",
+            "recipient_email": kwargs["recipient_email"],
+            "recipient_name": kwargs.get("recipient_name"),
+            "subject": f"mock:{kwargs['task']['title']}",
+        },
+    )
+
     client = TestClient(app)
     _ensure_workflow_event_table_exists()
     headers, tenant_id = _build_headers(client)
@@ -355,6 +368,17 @@ def test_batch_approval_and_task_flow_against_real_mysql():
                 ),
                 {"tenant_id": tenant_id, "customer_id": customer_id},
             ).scalar_one()
+            notification_channels = db.execute(
+                text(
+                    """
+                    SELECT channel, COUNT(1) AS total
+                    FROM internal_notification
+                    WHERE tenant_id = :tenant_id AND customer_id = :customer_id
+                    GROUP BY channel
+                    """
+                ),
+                {"tenant_id": tenant_id, "customer_id": customer_id},
+            ).mappings().all()
             calendar_count = db.execute(
                 text(
                     """
@@ -373,6 +397,7 @@ def test_batch_approval_and_task_flow_against_real_mysql():
         assert event_counts.get("task_reassigned") == 2
         assert event_counts.get("task_in_progress") == 2
         assert notification_count == 2
+        assert {row["channel"]: row["total"] for row in notification_channels} == {"email": 2}
         assert calendar_count == 2
     finally:
         _cleanup_temp_records(tenant_id, customer_id)

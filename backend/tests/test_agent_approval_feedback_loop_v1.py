@@ -6,6 +6,7 @@ from sqlalchemy import bindparam, text
 
 from app.core.database import SessionLocal
 from app.main import app
+from app.modules.notification import email_service
 
 
 def _ensure_workflow_event_table_exists():
@@ -290,7 +291,19 @@ def _cleanup_agent_run_feedback_fixture(tenant_id: str, run_id: str, customer_id
         db.commit()
 
 
-def test_agent_run_feedback_loop_updates_output_and_status():
+def test_agent_run_feedback_loop_updates_output_and_status(monkeypatch):
+    monkeypatch.setattr(
+        email_service,
+        "send_task_assignment_email",
+        lambda **kwargs: {
+            "provider": "smtp",
+            "sender_email": "no-reply@insightpilot.local",
+            "recipient_email": kwargs["recipient_email"],
+            "recipient_name": kwargs.get("recipient_name"),
+            "subject": f"mock:{kwargs['task']['title']}",
+        },
+    )
+
     client = TestClient(app)
     _ensure_workflow_event_table_exists()
     headers, tenant_id, requester_user_id = _build_headers(client)
@@ -322,6 +335,12 @@ def test_agent_run_feedback_loop_updates_output_and_status():
         assert approved_item["task_id"]
         assert approved_item["human_review"]["reviewer_user_id"] == requester_user_id
         assert len(approved_item["human_review"]["tool_calling_records"]) == 3
+        notification_record = next(
+            item
+            for item in approved_item["human_review"]["tool_calling_records"]
+            if item["tool_name"] == "notify.send_task_assignment"
+        )
+        assert notification_record["output"]["channel"] == "email"
         assert pending_item.get("approval_status") is None
         assert output["approval_summary"]["approved_count"] == 1
         assert output["approval_summary"]["pending_count"] == 1

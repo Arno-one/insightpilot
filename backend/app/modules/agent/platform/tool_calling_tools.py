@@ -67,7 +67,7 @@ def build_tool_calling_internal_tools() -> list[ToolDefinition]:
         ),
         ToolDefinition(
             name="notify.send_task_assignment",
-            description="向任务负责人发送平台内任务通知，为后续企业微信和邮件通道预留 adapter。",
+            description="向任务负责人发送任务通知，当前优先走邮件通道，失败时自动回退平台内通知。",
             handler=send_notification_tool,
         ),
         ToolDefinition(
