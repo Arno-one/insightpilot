@@ -148,6 +148,7 @@ def sync_agent_run_after_approval_review(
     reviewer_user_id: str,
     reviewer_user_name: str | None,
     task_id: str | None = None,
+    tool_calling_records: list[dict[str, Any]] | None = None,
 ) -> None:
     """把人工审批结果回写到 Agent Run，补齐 Agent Trace 的人工闭环。"""
     run_id = approval.get("run_id")
@@ -183,6 +184,7 @@ def sync_agent_run_after_approval_review(
         "reviewer_user_id": reviewer_user_id,
         "reviewer_user_name": reviewer_user_name,
         "task_id": task_id,
+        "tool_calling_records": list(tool_calling_records or []),
     }
 
     matched = False

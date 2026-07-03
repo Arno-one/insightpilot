@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
 from app.core.database import get_db
+from app.modules.agent.platform import execute_post_approval_action_flow
 from app.modules.approval.schemas import (
     ApproveWithChangesRequest,
     BatchReviewRequest,
@@ -226,13 +227,14 @@ def _approve_approval(
         },
         happened_at=reviewed_at,
     )
-    task_id = _create_task_from_approval(
+    action_flow_result = execute_post_approval_action_flow(
         db,
-        approval,
-        payload,
-        current_user["user_id"],
+        current_user=current_user,
+        approval=approval,
+        proposed_payload=payload,
         happened_at=reviewed_at,
     )
+    task_id = action_flow_result["task_id"]
     _update_risk_snapshot_status(
         db,
         current_user["tenant_id"],
@@ -249,6 +251,7 @@ def _approve_approval(
         reviewer_user_id=current_user["user_id"],
         reviewer_user_name=current_user.get("real_name") or current_user.get("username"),
         task_id=task_id,
+        tool_calling_records=action_flow_result["tool_executions"],
     )
     return {
         "approval_id": approval["approval_id"],
@@ -256,6 +259,7 @@ def _approve_approval(
         "task_id": task_id,
         "reviewed_at": reviewed_at.isoformat(),
         "review_comment": review_comment,
+        "tool_calling": action_flow_result,
     }
 
 

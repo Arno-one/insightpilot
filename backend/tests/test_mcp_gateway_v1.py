@@ -28,8 +28,11 @@ def test_mcp_gateway_returns_unified_tool_specs_for_shared_servers():
         "report.query",
         "report.generate",
         "approval.create_draft",
+        "task.create_from_approval",
+        "notify.send_task_assignment",
+        "calendar.create_follow_up_event",
     }
-    assert server_names >= {"crm", "report", "approval"}
+    assert server_names >= {"crm", "report", "approval", "task", "notify", "calendar"}
     assert all(item["protocol"] == "mcp" for item in specs)
 
 

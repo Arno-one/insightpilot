@@ -39,6 +39,62 @@ def _ensure_workflow_event_table_exists():
                 """
             )
         )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS internal_notification (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  notification_id VARCHAR(64) NOT NULL,
+                  task_id VARCHAR(64) NOT NULL,
+                  approval_id VARCHAR(64) NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  recipient_user_id VARCHAR(64) NOT NULL,
+                  sender_user_id VARCHAR(64) NOT NULL,
+                  notification_type VARCHAR(50) NOT NULL,
+                  channel VARCHAR(30) NOT NULL DEFAULT 'internal',
+                  title VARCHAR(150) NOT NULL,
+                  content TEXT NOT NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'sent',
+                  delivered_at DATETIME NULL,
+                  read_at DATETIME NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_notification_id (notification_id),
+                  UNIQUE KEY uk_task_recipient_type (tenant_id, task_id, recipient_user_id, notification_type),
+                  KEY idx_tenant_recipient_status (tenant_id, recipient_user_id, status),
+                  KEY idx_tenant_task (tenant_id, task_id),
+                  KEY idx_tenant_customer (tenant_id, customer_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS internal_calendar_event (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  event_id VARCHAR(64) NOT NULL,
+                  task_id VARCHAR(64) NOT NULL,
+                  approval_id VARCHAR(64) NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  owner_user_id VARCHAR(64) NOT NULL,
+                  title VARCHAR(150) NOT NULL,
+                  description TEXT NULL,
+                  start_at DATETIME NOT NULL,
+                  end_at DATETIME NOT NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'scheduled',
+                  created_by_user_id VARCHAR(64) NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_event_id (event_id),
+                  UNIQUE KEY uk_task_owner (tenant_id, task_id, owner_user_id),
+                  KEY idx_tenant_owner_start (tenant_id, owner_user_id, start_at),
+                  KEY idx_tenant_task (tenant_id, task_id),
+                  KEY idx_tenant_customer (tenant_id, customer_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
         db.commit()
 
 
@@ -166,6 +222,14 @@ def _cleanup_temp_records(tenant_id: str, customer_id: str):
             {"tenant_id": tenant_id, "customer_id": customer_id},
         )
         db.execute(
+            text("DELETE FROM internal_notification WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
+        db.execute(
+            text("DELETE FROM internal_calendar_event WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
+        db.execute(
             text("DELETE FROM sales_task WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
             {"tenant_id": tenant_id, "customer_id": customer_id},
         )
@@ -281,10 +345,34 @@ def test_batch_approval_and_task_flow_against_real_mysql():
                 {"tenant_id": tenant_id, "customer_id": customer_id},
             ).mappings().all()
             event_counts = {row["action_type"]: row["total"] for row in event_rows}
+            notification_count = db.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM internal_notification
+                    WHERE tenant_id = :tenant_id AND customer_id = :customer_id
+                    """
+                ),
+                {"tenant_id": tenant_id, "customer_id": customer_id},
+            ).scalar_one()
+            calendar_count = db.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
+                    FROM internal_calendar_event
+                    WHERE tenant_id = :tenant_id AND customer_id = :customer_id
+                    """
+                ),
+                {"tenant_id": tenant_id, "customer_id": customer_id},
+            ).scalar_one()
 
         assert event_counts.get("approval_approved") == 2
         assert event_counts.get("task_created") == 2
+        assert event_counts.get("notification_sent") == 2
+        assert event_counts.get("calendar_event_created") == 2
         assert event_counts.get("task_reassigned") == 2
         assert event_counts.get("task_in_progress") == 2
+        assert notification_count == 2
+        assert calendar_count == 2
     finally:
         _cleanup_temp_records(tenant_id, customer_id)

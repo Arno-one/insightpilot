@@ -6,6 +6,8 @@ from app.modules.agent.platform.mcp_gateway import (
     build_internal_mcp_server,
     build_shared_mcp_gateway,
 )
+from app.modules.agent.platform.tool_calling_orchestrator import execute_post_approval_action_flow
+from app.modules.agent.platform.tool_calling_tools import build_tool_calling_internal_tools
 from app.modules.agent.platform.tool_registry import InternalToolRegistry, ToolDefinition, ToolExecutionContext
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "MCPToolDefinition",
     "build_internal_mcp_server",
     "build_shared_mcp_gateway",
+    "build_tool_calling_internal_tools",
+    "execute_post_approval_action_flow",
 ]

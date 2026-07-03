@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable
 
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
+from app.modules.agent.platform.tool_calling_tools import build_tool_calling_internal_tools
 from app.modules.agent.platform.tool_registry import ToolDefinition, ToolExecutionContext
 
 
@@ -96,7 +98,7 @@ class MCPGateway:
         tool = adapter.get_tool(qualified_name) if adapter else None
         if not tool:
             raise ValueError(f"未注册的 MCP 工具: {qualified_name}")
-        request_payload = copy.deepcopy(payload)
+        request_payload = _to_json_safe(copy.deepcopy(payload))
         output = tool.handler(context, payload)
         return {
             "protocol": tool.protocol,
@@ -116,6 +118,20 @@ class MCPGateway:
                 "run_id": context.run_id,
             },
         }
+
+
+def _to_json_safe(value: Any) -> Any:
+    """中文注释：Tool Calling 审计记录后续要进 Trace 和 JSON 字段，这里统一转成可序列化结构。"""
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _to_json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_to_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_json_safe(item) for item in value]
+    return value
 
 
 def _tool_name_without_server(tool_name: str, server_name: str) -> str:
@@ -143,13 +159,16 @@ def build_internal_mcp_server(server_name: str, display_name: str, tools: list[T
 
 
 def build_shared_mcp_gateway() -> MCPGateway:
-    """中文注释：先把 CRM / Report / Approval 三个内生模块接成 MCP Gateway V1。"""
+    """中文注释：把当前平台内生能力统一接成 MCP Gateway，共享给 Agent 和审批后的动作链。"""
 
-    shared_tools = build_shared_internal_tools()
+    shared_tools = [*build_shared_internal_tools(), *build_tool_calling_internal_tools()]
     return MCPGateway(
         [
             build_internal_mcp_server("crm", "CRM MCP", shared_tools),
             build_internal_mcp_server("report", "Report MCP", shared_tools),
             build_internal_mcp_server("approval", "Approval MCP", shared_tools),
+            build_internal_mcp_server("task", "Task MCP", shared_tools),
+            build_internal_mcp_server("notify", "Notify MCP", shared_tools),
+            build_internal_mcp_server("calendar", "Calendar MCP", shared_tools),
         ]
     )

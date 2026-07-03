@@ -38,6 +38,62 @@ def _ensure_workflow_event_table_exists():
                 """
             )
         )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS internal_notification (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  notification_id VARCHAR(64) NOT NULL,
+                  task_id VARCHAR(64) NOT NULL,
+                  approval_id VARCHAR(64) NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  recipient_user_id VARCHAR(64) NOT NULL,
+                  sender_user_id VARCHAR(64) NOT NULL,
+                  notification_type VARCHAR(50) NOT NULL,
+                  channel VARCHAR(30) NOT NULL DEFAULT 'internal',
+                  title VARCHAR(150) NOT NULL,
+                  content TEXT NOT NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'sent',
+                  delivered_at DATETIME NULL,
+                  read_at DATETIME NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_notification_id (notification_id),
+                  UNIQUE KEY uk_task_recipient_type (tenant_id, task_id, recipient_user_id, notification_type),
+                  KEY idx_tenant_recipient_status (tenant_id, recipient_user_id, status),
+                  KEY idx_tenant_task (tenant_id, task_id),
+                  KEY idx_tenant_customer (tenant_id, customer_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS internal_calendar_event (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  event_id VARCHAR(64) NOT NULL,
+                  task_id VARCHAR(64) NOT NULL,
+                  approval_id VARCHAR(64) NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  owner_user_id VARCHAR(64) NOT NULL,
+                  title VARCHAR(150) NOT NULL,
+                  description TEXT NULL,
+                  start_at DATETIME NOT NULL,
+                  end_at DATETIME NOT NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'scheduled',
+                  created_by_user_id VARCHAR(64) NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_event_id (event_id),
+                  UNIQUE KEY uk_task_owner (tenant_id, task_id, owner_user_id),
+                  KEY idx_tenant_owner_start (tenant_id, owner_user_id, start_at),
+                  KEY idx_tenant_task (tenant_id, task_id),
+                  KEY idx_tenant_customer (tenant_id, customer_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
         db.commit()
 
 
@@ -192,6 +248,18 @@ def _cleanup_agent_run_feedback_fixture(tenant_id: str, run_id: str, customer_id
             {"tenant_id": tenant_id, "customer_ids": customer_ids},
         )
         db.execute(
+            text("DELETE FROM internal_notification WHERE tenant_id = :tenant_id AND customer_id IN :customer_ids").bindparams(
+                bindparam("customer_ids", expanding=True)
+            ),
+            {"tenant_id": tenant_id, "customer_ids": customer_ids},
+        )
+        db.execute(
+            text("DELETE FROM internal_calendar_event WHERE tenant_id = :tenant_id AND customer_id IN :customer_ids").bindparams(
+                bindparam("customer_ids", expanding=True)
+            ),
+            {"tenant_id": tenant_id, "customer_ids": customer_ids},
+        )
+        db.execute(
             text("DELETE FROM sales_task WHERE tenant_id = :tenant_id AND customer_id IN :customer_ids").bindparams(
                 bindparam("customer_ids", expanding=True)
             ),
@@ -253,6 +321,7 @@ def test_agent_run_feedback_loop_updates_output_and_status():
         assert approved_item["approval_status"] == "approved"
         assert approved_item["task_id"]
         assert approved_item["human_review"]["reviewer_user_id"] == requester_user_id
+        assert len(approved_item["human_review"]["tool_calling_records"]) == 3
         assert pending_item.get("approval_status") is None
         assert output["approval_summary"]["approved_count"] == 1
         assert output["approval_summary"]["pending_count"] == 1
