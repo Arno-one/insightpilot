@@ -331,6 +331,25 @@ CREATE TABLE IF NOT EXISTS agent_step (
   KEY idx_tenant_tool (tenant_id, tool_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent 节点执行记录表';
 
+CREATE TABLE IF NOT EXISTS customer_memory (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '���ݿ���������',
+  tenant_id VARCHAR(64) NOT NULL COMMENT '�����⻧ ID',
+  memory_id VARCHAR(64) NOT NULL COMMENT '�ͻ�����ҵ������',
+  customer_id VARCHAR(64) NOT NULL COMMENT '�����ͻ� ID',
+  memory_scope VARCHAR(30) NOT NULL DEFAULT 'customer' COMMENT '���䷶Χ��V1 �̶�Ϊ customer',
+  summary_text TEXT NOT NULL COMMENT '�� Planner / Reviewer ֱ�����ѵ�ѹ��������ժҪ',
+  summary_json JSON NULL COMMENT '�ṹ���ͻ����� JSON',
+  source_run_id VARCHAR(64) NULL COMMENT '���һ�θ�����ü���� Agent Run ID',
+  last_compiled_at DATETIME NOT NULL COMMENT '���һ�α����ͻ������ʱ��',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '����ʱ��',
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '����ʱ��',
+  UNIQUE KEY uk_memory_id (memory_id),
+  UNIQUE KEY uk_tenant_customer_scope (tenant_id, customer_id, memory_scope),
+  KEY idx_tenant_customer (tenant_id, customer_id),
+  KEY idx_tenant_compiled_at (tenant_id, last_compiled_at),
+  KEY idx_source_run_id (source_run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='�ͻ����ڼ������V1 �ȷ��� Risk Agent';
+
 CREATE TABLE IF NOT EXISTS business_report (
   id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '数据库自增主键',
   tenant_id VARCHAR(64) NOT NULL COMMENT '所属租户 ID',

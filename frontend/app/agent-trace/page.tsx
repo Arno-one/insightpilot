@@ -102,6 +102,11 @@ const STEP_META: Record<string, StepMeta> = {
     label: "风险处置规划",
     description: "Planner 先决定要调用哪些内部工具，以及调用顺序。",
   },
+  load_customer_memory: {
+    stage: "Memory",
+    label: "加载客户记忆",
+    description: "先读取客户长期记忆，给 Planner 和 Reviewer 提供历史上下文。",
+  },
   execute_risk_tools: {
     stage: "Executor",
     label: "执行内部工具",
@@ -116,6 +121,11 @@ const STEP_META: Record<string, StepMeta> = {
     stage: "Approval",
     label: "创建审批草稿",
     description: "只把通过复核的建议写成审批草稿，仍然保持人审后落地。",
+  },
+  persist_customer_memory: {
+    stage: "Memory",
+    label: "回写客户记忆",
+    description: "将本次风险判断、审批草稿和执行证据沉淀为客户长期记忆。",
   },
   persist_agent_trace: {
     stage: "Trace",
@@ -203,6 +213,14 @@ function summarizeStepOutput(step: AgentStep): StepSummaryItem[] {
     ];
   }
 
+  if (step.node_name === "load_customer_memory") {
+    return [
+      { label: "客户数", value: formatValue(output.customer_count) },
+      { label: "命中记忆", value: formatValue(output.memory_hit_count) },
+      { label: "未命中", value: formatValue(output.memory_miss_count) },
+    ];
+  }
+
   if (step.node_name === "execute_risk_tools") {
     return [
       { label: "执行客户数", value: formatValue(output.execution_count) },
@@ -230,8 +248,14 @@ function summarizeStepOutput(step: AgentStep): StepSummaryItem[] {
     return [
       { label: "风险结果", value: formatValue(output.risk_count) },
       { label: "审批草稿", value: formatValue(output.approval_count) },
+      { label: "记忆命中", value: formatValue(output.memory_hit_count) },
+      { label: "记忆更新", value: formatValue(output.memory_updated_count) },
       { label: "最终状态", value: formatValue(output.status) },
     ];
+  }
+
+  if (step.node_name === "persist_customer_memory") {
+    return [{ label: "更新记忆", value: formatValue(output.memory_updated_count) }];
   }
 
   return Object.entries(output)
@@ -248,6 +272,9 @@ function getStepPreviewRows(step: AgentStep): StepPreviewRecord[] {
   if (step.node_name === "plan_risk_actions" && Array.isArray(output.plan_preview)) {
     return output.plan_preview.filter(isRecord);
   }
+  if (step.node_name === "load_customer_memory" && Array.isArray(output.memory_preview)) {
+    return output.memory_preview.filter(isRecord);
+  }
   if (step.node_name === "execute_risk_tools" && Array.isArray(output.execution_preview)) {
     return output.execution_preview.filter(isRecord);
   }
@@ -256,6 +283,9 @@ function getStepPreviewRows(step: AgentStep): StepPreviewRecord[] {
   }
   if (step.node_name === "create_approval_drafts" && Array.isArray(output.created_preview)) {
     return output.created_preview.filter(isRecord);
+  }
+  if (step.node_name === "persist_customer_memory" && Array.isArray(output.memory_preview)) {
+    return output.memory_preview.filter(isRecord);
   }
 
   return [];
@@ -275,6 +305,19 @@ function renderPreviewRow(step: AgentStep, row: StepPreviewRecord, index: number
               {String(toolName)}
             </span>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (step.node_name === "load_customer_memory") {
+    return (
+      <div className="summary-item" key={`${step.step_id}-memory-load-${index}`}>
+        <strong>{customerName}</strong>
+        <p>{row.memory_hit ? "已命中历史客户记忆，可直接参与本次规划。" : "当前还没有沉淀好的客户记忆，本次运行会首次建立。"}</p>
+        <div className="meta-row">
+          <span className="meta-chip">{row.memory_hit ? "Memory Hit" : "Memory Miss"}</span>
+          {row.last_compiled_at ? <span className="meta-chip">上次编译 {String(row.last_compiled_at)}</span> : null}
         </div>
       </div>
     );
@@ -324,6 +367,19 @@ function renderPreviewRow(step: AgentStep, row: StepPreviewRecord, index: number
         <div className="meta-row">
           <span className="meta-chip">风险分 {formatValue(row.risk_score)}</span>
           <span className="meta-chip">等级 {formatValue(row.risk_level)}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (step.node_name === "persist_customer_memory") {
+    return (
+      <div className="summary-item" key={`${step.step_id}-memory-write-${index}`}>
+        <strong>{customerName}</strong>
+        <p>{formatValue(row.summary_text)}</p>
+        <div className="meta-row">
+          <span className="meta-chip">Memory {formatValue(row.memory_id)}</span>
+          <span className="meta-chip">编译于 {formatValue(row.last_compiled_at)}</span>
         </div>
       </div>
     );

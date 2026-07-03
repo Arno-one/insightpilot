@@ -174,18 +174,28 @@ def fallback_risk_tool_plan(
     deal: dict | None,
     risk_result: dict,
     available_tools: list[dict[str, str]],
+    customer_memory: dict | None = None,
 ) -> RiskToolPlan:
     """LLM 不可用时的保底规划，也尽量按风险场景动态选择最合适的工具。"""
     available_tool_names = _risk_tool_names(available_tools)
     steps: list[RiskToolPlanStep] = []
+    memory_summary = customer_memory.get("summary_json", {}) if isinstance(customer_memory, dict) else {}
+    memory_approval_state = memory_summary.get("approval_state", {}) if isinstance(memory_summary, dict) else {}
+    memory_task_state = memory_summary.get("task_state", {}) if isinstance(memory_summary, dict) else {}
+    memory_risk_state = memory_summary.get("risk_state", {}) if isinstance(memory_summary, dict) else {}
     needs_customer_detail = bool(
         risk_result.get("risk_level") == "high"
         or customer.get("competitor_involved")
         or _has_customer_follow_up_gap(customer)
+        or memory_approval_state.get("pending_count", 0)
+        or memory_task_state.get("active_count", 0)
+        or memory_risk_state.get("recent_medium_or_high_risk_count", 0)
     )
     needs_report_context = bool(
         risk_result.get("risk_score", 0) >= 60
         or _deal_amount_value(deal) >= 50000
+        or memory_risk_state.get("latest_risk_level") == "high"
+        or memory_summary.get("report_state", {}).get("report_count", 0)
     )
 
     if needs_customer_detail and "crm.get_customer_detail" in available_tool_names:
@@ -220,9 +230,9 @@ def fallback_risk_tool_plan(
     selected_tool_names = [step.tool_name for step in steps]
     return RiskToolPlan(
         thinking=(
-            "先按风险等级补齐客户经营上下文，再生成结构化建议，最后交给 Reviewer 判定是否进入人工审批。"
+            "先结合客户长期记忆和当前风险等级补齐经营上下文，再生成结构化建议，最后交给 Reviewer 判定是否进入人工审批。"
             if any(tool_name in selected_tool_names for tool_name in ("crm.get_customer_detail", "report.query"))
-            else "先补充可用上下文，再生成结构化建议，最后交给 Reviewer 判定是否进入人工审批。"
+            else "先结合已有记忆补充可用上下文，再生成结构化建议，最后交给 Reviewer 判定是否进入人工审批。"
         ),
         steps=steps,
     )
@@ -233,24 +243,27 @@ def plan_risk_tool_calls(
     deal: dict | None,
     risk_result: dict,
     available_tools: list[dict[str, str]],
+    customer_memory: dict | None = None,
 ) -> RiskToolPlan:
     """让 Planner 决定本次风险处置需要按什么顺序调用内部工具。"""
     system_prompt = (
         "你是 InsightPilot 风险 Agent 的 Planner。"
         "你只能从给定内部工具里挑选最少步骤，不能创建正式任务，不能跳过人工审批。"
         "当前阶段只允许规划 Review 之前的分析工具，不要输出审批创建动作。"
-        "如果客户风险较高、跟进缺口明显或需要历史经营视角，可以优先选择 CRM / Report 工具补充上下文。"
+        "如果客户风险较高、跟进缺口明显、历史记忆显示已有重复风险，或需要历史经营视角，可以优先选择 CRM / Report 工具补充上下文。"
     )
     user_message = json.dumps(
         {
             "customer": customer,
             "deal": deal,
             "risk_result": risk_result,
+            "customer_memory": customer_memory or {},
             "available_tools": available_tools,
             "planning_rules": [
                 "优先选择能补齐上下文和生成结构化建议的工具",
                 "当客户跟进缺口明显、审批任务较多或高风险时，可以先用 crm.get_customer_detail",
                 "当需要近期经营趋势、历史风险摘要或高金额商机背景时，可以用 report.query",
+                "如果客户长期记忆已经显示重复风险、待审批动作或活跃任务，需要先补上下文再给新建议",
                 "步骤按实际执行顺序输出",
                 "不要输出未提供的工具名",
                 "不要输出 review 或审批创建动作",
@@ -261,19 +274,25 @@ def plan_risk_tool_calls(
     )
     plan = structured_complete(system_prompt, user_message, RiskToolPlan)
     if not plan:
-        return fallback_risk_tool_plan(customer, deal, risk_result, available_tools)
+        return fallback_risk_tool_plan(customer, deal, risk_result, available_tools, customer_memory=customer_memory)
 
     valid_steps = _finalize_risk_plan_steps(plan.steps, available_tools)
     if not valid_steps:
-        return fallback_risk_tool_plan(customer, deal, risk_result, available_tools)
+        return fallback_risk_tool_plan(customer, deal, risk_result, available_tools, customer_memory=customer_memory)
     return RiskToolPlan(thinking=plan.thinking, steps=valid_steps)
 
 
-def generate_risk_advice(customer: dict, deal: dict | None, risk_result: dict, rag_context: str = "") -> RiskAdvice:
+def generate_risk_advice(
+    customer: dict,
+    deal: dict | None,
+    risk_result: dict,
+    rag_context: str = "",
+    customer_memory: dict | None = None,
+) -> RiskAdvice:
     """生成客户风险解释、建议和任务草稿。"""
     system_prompt = (
         "你是 InsightPilot 的企业运营参谋。"
-        "风险分由规则引擎计算，你只能基于规则命中、客户资料和知识库上下文生成解释和建议。"
+        "风险分由规则引擎计算，你只能基于规则命中、客户资料、客户长期记忆和知识库上下文生成解释和建议。"
         "不要声称已经联系客户，不要绕过人工审批。"
     )
     user_message = json.dumps(
@@ -282,6 +301,7 @@ def generate_risk_advice(customer: dict, deal: dict | None, risk_result: dict, r
             "deal": deal,
             "risk_result": risk_result,
             "rag_context": rag_context,
+            "customer_memory": customer_memory or {},
             "allowed_task_types": [
                 "quote_follow",
                 "objection_handle",
@@ -302,15 +322,18 @@ def _review_evidence_snapshot(
     customer_detail: dict | None,
     related_reports: list[dict] | None,
     tool_executions: list[dict] | None,
+    customer_memory: dict | None = None,
 ) -> dict[str, object]:
     """把 Reviewer 会用到的上下文证据压缩成简单快照，便于规则和 LLM 共用。"""
     related_reports = related_reports or []
     tool_executions = tool_executions or []
     customer_detail = customer_detail or {}
+    customer_memory = customer_memory or {}
 
     approvals = customer_detail.get("approvals", []) if isinstance(customer_detail, dict) else []
     tasks = customer_detail.get("tasks", []) if isinstance(customer_detail, dict) else []
     follow_ups = customer_detail.get("follow_ups", []) if isinstance(customer_detail, dict) else []
+    memory_summary = customer_memory.get("summary_json", {}) if isinstance(customer_memory, dict) else {}
 
     evidence_used: list[str] = []
     if rag_result.get("status") == "success" and rag_result.get("hit_count", 0):
@@ -319,17 +342,30 @@ def _review_evidence_snapshot(
         evidence_used.append("crm.get_customer_detail")
     if related_reports:
         evidence_used.append("report.query")
+    if customer_memory:
+        evidence_used.append("customer_memory")
 
     pending_approvals = sum(1 for item in approvals if item.get("status") == "pending")
     active_tasks = sum(1 for item in tasks if item.get("status") in {"pending", "in_progress"})
+    if not pending_approvals:
+        pending_approvals = int(memory_summary.get("approval_state", {}).get("pending_count", 0) or 0)
+    if not active_tasks:
+        active_tasks = int(memory_summary.get("task_state", {}).get("active_count", 0) or 0)
+    follow_up_count = len(follow_ups)
+    if not follow_up_count:
+        follow_up_count = int(memory_summary.get("follow_up_state", {}).get("count", 0) or 0)
+    report_count = len(related_reports)
+    if not report_count:
+        report_count = int(memory_summary.get("report_state", {}).get("report_count", 0) or 0)
 
     return {
         "evidence_used": evidence_used,
         "has_context_evidence": bool(evidence_used),
         "pending_approvals": pending_approvals,
         "active_tasks": active_tasks,
-        "follow_up_count": len(follow_ups),
-        "report_count": len(related_reports),
+        "follow_up_count": follow_up_count,
+        "report_count": report_count,
+        "memory_summary_text": customer_memory.get("summary_text", "") if isinstance(customer_memory, dict) else "",
         "tool_names": [item.get("tool_name") for item in tool_executions if item.get("tool_name")],
     }
 
@@ -341,11 +377,18 @@ def fallback_risk_review_decision(
     customer_detail: dict | None = None,
     related_reports: list[dict] | None = None,
     tool_executions: list[dict] | None = None,
+    customer_memory: dict | None = None,
 ) -> RiskReviewDecision:
     """LLM 不可用时的规则化 Reviewer，除了结构完整性，也会参考上下文证据与重复处置风险。"""
     required_fields = ["reason", "suggestion", "task_type", "task_title", "priority", "recommended_script"]
     missing_fields = [field for field in required_fields if not advice_data or not advice_data.get(field)]
-    evidence = _review_evidence_snapshot(rag_result, customer_detail, related_reports, tool_executions)
+    evidence = _review_evidence_snapshot(
+        rag_result,
+        customer_detail,
+        related_reports,
+        tool_executions,
+        customer_memory=customer_memory,
+    )
     if missing_fields:
         return RiskReviewDecision(
             approved=False,
@@ -391,13 +434,21 @@ def review_risk_tool_results(
     customer_detail: dict | None = None,
     related_reports: list[dict] | None = None,
     tool_executions: list[dict] | None = None,
+    customer_memory: dict | None = None,
 ) -> RiskReviewDecision:
     """让 Reviewer 判断当前建议是否值得进入审批草稿。"""
-    evidence = _review_evidence_snapshot(rag_result, customer_detail, related_reports, tool_executions)
+    evidence = _review_evidence_snapshot(
+        rag_result,
+        customer_detail,
+        related_reports,
+        tool_executions,
+        customer_memory=customer_memory,
+    )
     system_prompt = (
         "你是 InsightPilot 风险 Agent 的 Reviewer。"
         "你只能判断当前建议是否应进入人工审批草稿，不能直接创建正式任务。"
         "如果建议字段缺失、风险解释空泛、证据不足，或客户已有待审批/在执行动作而重复创建处置，应拒绝通过。"
+        "客户长期记忆可以作为辅助证据，但不能忽略当前风险快照。"
     )
     user_message = json.dumps(
         {
@@ -424,6 +475,10 @@ def review_risk_tool_results(
                 "tool_names": evidence["tool_names"],
                 "evidence_used": evidence["evidence_used"],
             },
+            "customer_memory": {
+                "summary_text": evidence["memory_summary_text"][:300],
+                "summary_json": (customer_memory or {}).get("summary_json", {}) if isinstance(customer_memory, dict) else {},
+            },
             "advice": advice_data,
             "review_rules": [
                 "保持先审后落地",
@@ -443,6 +498,7 @@ def review_risk_tool_results(
         customer_detail=customer_detail,
         related_reports=related_reports,
         tool_executions=tool_executions,
+        customer_memory=customer_memory,
     )
 
 

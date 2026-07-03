@@ -11,10 +11,16 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.modules.agent.memory_service import (
+    build_customer_memory_snapshot,
+    load_customer_memory_map,
+    upsert_customer_memory,
+)
 from app.modules.agent.platform import InternalToolRegistry, ToolDefinition, ToolExecutionContext, build_shared_internal_tools
 from app.modules.llm.client import RiskAdvice, generate_risk_advice, plan_risk_tool_calls, review_risk_tool_results
 from app.modules.risk.rules import calculate_risk_score
 from app.shared.ids import new_id
+from app.shared.workflow_event import log_workflow_event
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +40,13 @@ class RiskAnalysisState(TypedDict, total=False):
     started_ts: float
     customers: list[dict[str, Any]]
     deals_by_customer: dict[str, dict[str, Any]]
+    memories_by_customer: dict[str, dict[str, Any]]
     risk_candidates: list[RiskCandidate]
     planned_actions: list[dict[str, Any]]
     executed_actions: list[dict[str, Any]]
     reviewed_actions: list[dict[str, Any]]
     created: list[dict[str, Any]]
+    memory_updates: list[dict[str, Any]]
     status: str
     output: dict[str, Any]
 
@@ -232,6 +240,10 @@ def _with_rag_evidence(risk_result: dict[str, Any], rag_result: dict[str, Any]) 
 def _build_additional_advice_context(payload: dict[str, Any]) -> str:
     """把内部工具补充到的客户经营上下文压缩成文本，供建议生成阶段直接消费。"""
     parts: list[str] = []
+
+    customer_memory = payload.get("customer_memory")
+    if isinstance(customer_memory, dict) and customer_memory.get("summary_text"):
+        parts.append(f"客户长期记忆：{str(customer_memory.get('summary_text'))[:240]}")
 
     customer_detail = payload.get("customer_detail")
     if isinstance(customer_detail, dict):
@@ -474,6 +486,7 @@ def _build_risk_tool_registry() -> InternalToolRegistry:
             payload.get("deal"),
             enriched_risk_result,
             rag_context=merged_context,
+            customer_memory=payload.get("customer_memory"),
         )
         return {
             "advice": advice.model_dump(),
@@ -593,6 +606,36 @@ def build_risk_analysis_graph(db: Session):
 
         return run_node(state, "load_crm_data", "crm_query_tool", handler)
 
+    def load_customer_memory(state: RiskAnalysisState) -> dict[str, Any]:
+        def handler(current_state: RiskAnalysisState):
+            customers = current_state.get("customers", [])
+            customer_ids = [item["customer_id"] for item in customers if item.get("customer_id")]
+            memories_by_customer = load_customer_memory_map(db, current_state["tenant_id"], customer_ids)
+            hit_count = sum(1 for customer_id in customer_ids if customer_id in memories_by_customer)
+            return (
+                {
+                    "customer_count": len(customer_ids),
+                    "memory_hit_count": hit_count,
+                    "memory_miss_count": max(len(customer_ids) - hit_count, 0),
+                    "memory_preview": [
+                        {
+                            "customer_id": customer["customer_id"],
+                            "customer_name": customer.get("customer_name"),
+                            "memory_hit": customer["customer_id"] in memories_by_customer,
+                            "last_compiled_at": (
+                                memories_by_customer.get(customer["customer_id"], {}).get("last_compiled_at").isoformat()
+                                if memories_by_customer.get(customer["customer_id"], {}).get("last_compiled_at")
+                                else None
+                            ),
+                        }
+                        for customer in customers[:5]
+                    ],
+                },
+                {"memories_by_customer": memories_by_customer},
+            )
+
+        return run_node(state, "load_customer_memory", "customer_memory_loader", handler)
+
     def calculate_rule_risk_node(state: RiskAnalysisState) -> dict[str, Any]:
         def handler(current_state: RiskAnalysisState):
             candidates: list[RiskCandidate] = []
@@ -618,13 +661,15 @@ def build_risk_analysis_graph(db: Session):
             planned_actions = []
             total_steps = 0
             for candidate in current_state.get("risk_candidates", []):
+                customer_memory = current_state.get("memories_by_customer", {}).get(candidate["customer"]["customer_id"])
                 plan = plan_risk_tool_calls(
                     candidate["customer"],
                     candidate["deal"],
                     candidate["risk_result"],
                     planner_tools,
+                    customer_memory=customer_memory,
                 )
-                planned_actions.append({**candidate, "plan": plan.model_dump()})
+                planned_actions.append({**candidate, "plan": plan.model_dump(), "customer_memory": customer_memory})
                 total_steps += len(plan.steps)
             return (
                 {
@@ -636,6 +681,7 @@ def build_risk_analysis_graph(db: Session):
                             "customer_name": item["customer"].get("customer_name"),
                             "thinking": item["plan"]["thinking"],
                             "tools": [step["tool_name"] for step in item["plan"]["steps"]],
+                            "memory_hit": bool(item.get("customer_memory")),
                         }
                         for item in planned_actions[:5]
                     ],
@@ -660,6 +706,7 @@ def build_risk_analysis_graph(db: Session):
                     "customer": item["customer"],
                     "deal": item["deal"],
                     "risk_result": item["risk_result"],
+                    "customer_memory": item.get("customer_memory"),
                     "customer_id": item["customer"]["customer_id"],
                     "owner_user_id": item["customer"].get("owner_user_id"),
                 }
@@ -708,6 +755,7 @@ def build_risk_analysis_graph(db: Session):
                             "rag_trace_id": item.get("rag_result", {}).get("trace_id"),
                             "report_count": len(item.get("related_reports", [])),
                             "detail_loaded": bool(item.get("customer_detail")),
+                            "memory_hit": bool(item.get("customer_memory")),
                             "advice_ready": bool(item.get("advice")),
                         }
                         for item in executed_actions[:5]
@@ -739,6 +787,7 @@ def build_risk_analysis_graph(db: Session):
                     customer_detail=item.get("customer_detail"),
                     related_reports=item.get("related_reports"),
                     tool_executions=item.get("tool_executions"),
+                    customer_memory=item.get("customer_memory"),
                 )
                 reviewed_actions.append({**item, "review": review.model_dump()})
                 if review.approved:
@@ -755,6 +804,7 @@ def build_risk_analysis_graph(db: Session):
                             "approved": item["review"]["approved"],
                             "review_note": item["review"]["review_note"],
                             "evidence_used": item["review"].get("evidence_used", []),
+                            "memory_hit": bool(item.get("customer_memory")),
                         }
                         for item in reviewed_actions[:5]
                     ],
@@ -821,14 +871,73 @@ def build_risk_analysis_graph(db: Session):
 
         return run_node(state, "create_approval_drafts", "approval.create_risk_draft", handler)
 
+    def persist_customer_memory(state: RiskAnalysisState) -> dict[str, Any]:
+        def handler(current_state: RiskAnalysisState):
+            created_by_customer = {
+                item["customer_id"]: item
+                for item in current_state.get("created", [])
+                if isinstance(item, dict) and item.get("customer_id")
+            }
+            updated_items: list[dict[str, Any]] = []
+            for item in current_state.get("reviewed_actions", []):
+                snapshot = build_customer_memory_snapshot(
+                    db,
+                    tenant_id=current_state["tenant_id"],
+                    customer_id=item["customer"]["customer_id"],
+                    source_run_id=current_state["run_id"],
+                    runtime_context={
+                        "review": item.get("review", {}),
+                        "advice": item.get("advice", {}),
+                        "tool_executions": item.get("tool_executions", []),
+                        "created": created_by_customer.get(item["customer"]["customer_id"], {}),
+                    },
+                )
+                if not snapshot:
+                    continue
+                updated_items.append(
+                    upsert_customer_memory(
+                        db,
+                        tenant_id=current_state["tenant_id"],
+                        memory_snapshot=snapshot,
+                    )
+                )
+            return (
+                {
+                    "memory_updated_count": len(updated_items),
+                    "memory_preview": [
+                        {
+                            "customer_id": item["customer_id"],
+                            "memory_id": item["memory_id"],
+                            "summary_text": item["summary_text"][:120],
+                            "last_compiled_at": item["last_compiled_at"],
+                        }
+                        for item in updated_items[:5]
+                    ],
+                },
+                {"memory_updates": updated_items},
+            )
+
+        return run_node(state, "persist_customer_memory", "customer_memory_writer", handler)
+
     def persist_agent_trace(state: RiskAnalysisState) -> dict[str, Any]:
         def handler(current_state: RiskAnalysisState):
             created = current_state.get("created", [])
+            memory_updates = current_state.get("memory_updates", [])
+            memory_hits = sum(
+                1
+                for item in current_state.get("planned_actions", [])
+                if isinstance(item, dict) and item.get("customer_memory")
+            )
             status = "awaiting_approval" if created else "success"
             output = {
                 "risk_count": len(created),
                 "approval_count": len(created),
                 "items": created,
+                "memory_summary": {
+                    "memory_hit_count": memory_hits,
+                    "memory_updated_count": len(memory_updates),
+                    "memory_customer_count": len(current_state.get("customers", [])),
+                },
             }
             db.execute(
                 text(
@@ -851,7 +960,13 @@ def build_risk_analysis_graph(db: Session):
                 },
             )
             return (
-                {"status": status, "risk_count": len(created), "approval_count": len(created)},
+                {
+                    "status": status,
+                    "risk_count": len(created),
+                    "approval_count": len(created),
+                    "memory_hit_count": memory_hits,
+                    "memory_updated_count": len(memory_updates),
+                },
                 {"status": status, "output": output},
             )
 
@@ -859,20 +974,24 @@ def build_risk_analysis_graph(db: Session):
 
     graph = StateGraph(RiskAnalysisState)
     graph.add_node("load_crm_data", load_crm_data)
+    graph.add_node("load_customer_memory", load_customer_memory)
     graph.add_node("calculate_rule_risk", calculate_rule_risk_node)
     graph.add_node("plan_risk_actions", plan_risk_actions)
     graph.add_node("execute_risk_tools", execute_risk_tools)
     graph.add_node("review_risk_actions", review_risk_actions)
     graph.add_node("create_approval_drafts", create_approval_drafts)
+    graph.add_node("persist_customer_memory", persist_customer_memory)
     graph.add_node("persist_agent_trace", persist_agent_trace)
 
     graph.add_edge(START, "load_crm_data")
-    graph.add_edge("load_crm_data", "calculate_rule_risk")
+    graph.add_edge("load_crm_data", "load_customer_memory")
+    graph.add_edge("load_customer_memory", "calculate_rule_risk")
     graph.add_edge("calculate_rule_risk", "plan_risk_actions")
     graph.add_edge("plan_risk_actions", "execute_risk_tools")
     graph.add_edge("execute_risk_tools", "review_risk_actions")
     graph.add_edge("review_risk_actions", "create_approval_drafts")
-    graph.add_edge("create_approval_drafts", "persist_agent_trace")
+    graph.add_edge("create_approval_drafts", "persist_customer_memory")
+    graph.add_edge("persist_customer_memory", "persist_agent_trace")
     graph.add_edge("persist_agent_trace", END)
     return graph.compile()
 
