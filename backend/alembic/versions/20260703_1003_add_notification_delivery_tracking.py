@@ -1,6 +1,6 @@
 """为通知表补充邮件投递状态与重试字段
-Revision ID: 20260703_0004
-Revises: 20260703_0003
+Revision ID: 20260703_notification_delivery
+Revises: 20260703_tool_calling
 Create Date: 2026-07-03 18:30:00
 """
 
@@ -8,8 +8,8 @@ from alembic import op
 from sqlalchemy import text
 
 
-revision = "20260703_0004"
-down_revision = "20260703_0003"
+revision = "20260703_notification_delivery"
+down_revision = "20260703_tool_calling"
 branch_labels = None
 depends_on = None
 

@@ -1,6 +1,6 @@
 """新增客户记忆表
 
-Revision ID: 20260703_0003
+Revision ID: 20260703_customer_memory
 Revises: 20260702_0002
 Create Date: 2026-07-03 10:30:00
 """
@@ -8,7 +8,7 @@ Create Date: 2026-07-03 10:30:00
 from alembic import op
 
 
-revision = "20260703_0003"
+revision = "20260703_customer_memory"
 down_revision = "20260702_0002"
 branch_labels = None
 depends_on = None
