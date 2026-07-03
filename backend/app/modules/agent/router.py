@@ -5,8 +5,12 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.agent import conversation_memory_service, memory_service
-from app.modules.agent.schemas import RiskChatMessageRequest
+from app.modules.agent import chat_session_service, conversation_memory_service, memory_service
+from app.modules.agent.schemas import (
+    AgentChatMessageCreateRequest,
+    AgentChatSessionCreateRequest,
+    RiskChatMessageRequest,
+)
 from app.modules.auth.dependencies import require_permission
 from app.modules.crm import service as crm_service
 from app.modules.llm.client import generate_risk_chat_reply
@@ -134,6 +138,18 @@ def _load_latest_customer_risk_snapshot(db: Session, tenant_id: str, customer_id
 
 def _load_customer_memory_item(db: Session, tenant_id: str, customer_id: str) -> dict:
     return memory_service.load_customer_memory_map(db, tenant_id, [customer_id]).get(customer_id, {})
+
+
+def _load_chat_session_or_404(db: Session, current_user: dict, session_id: str) -> dict:
+    try:
+        return chat_session_service.get_chat_session(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def _build_risk_chat_session_payload(
@@ -312,6 +328,120 @@ def get_agent_run_detail(
         "查询成功",
         total=len(steps),
     )
+
+
+@router.post("/chat/sessions")
+def create_agent_chat_session(
+    body: AgentChatSessionCreateRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """创建统一 Agent 对话会话；V1 先做入口和持久化，不触发具体 Agent Runtime。"""
+    if body.related_customer_id:
+        # 中文注释：如果会话挂客户，必须先复用 CRM 权限校验，避免越权创建客户上下文会话。
+        crm_service.load_customer_or_404(db, current_user, body.related_customer_id)
+
+    data = chat_session_service.create_chat_session(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        agent_scope=body.agent_scope,
+        intent=body.intent,
+        title=body.title,
+        related_customer_id=body.related_customer_id,
+        context_json=body.context_json,
+    )
+    return success(data, "统一 Agent 对话会话已创建")
+
+
+@router.get("/chat/sessions")
+def list_agent_chat_sessions(
+    agent_scope: str | None = None,
+    status: str = "active",
+    limit: int = 50,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """查询当前用户的统一 Agent 对话会话列表。"""
+    data = chat_session_service.list_chat_sessions(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        agent_scope=agent_scope,
+        status=status,
+        limit=limit,
+    )
+    return success(data, "查询成功", total=len(data))
+
+
+@router.get("/chat/sessions/{session_id}")
+def get_agent_chat_session_detail(
+    session_id: str,
+    limit: int = 100,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """查询统一 Agent 对话会话详情和消息明细。"""
+    session = _load_chat_session_or_404(db, current_user, session_id)
+    messages = chat_session_service.list_chat_messages(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+        limit=limit,
+    )
+    return success({"session": session, "messages": messages}, "查询成功", total=len(messages))
+
+
+@router.post("/chat/sessions/{session_id}/messages")
+def append_agent_chat_user_message(
+    session_id: str,
+    body: AgentChatMessageCreateRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """统一入口写入用户消息；Agent 回复会在后续 Runtime 接入时由服务层写入。"""
+    if body.role != "user":
+        raise HTTPException(status_code=400, detail="统一对话入口 V1 仅允许直接写入用户消息")
+
+    _load_chat_session_or_404(db, current_user, session_id)
+    message = chat_session_service.append_chat_message(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+        role="user",
+        content=body.content,
+        intent=body.intent,
+        tool_name=body.tool_name,
+        run_id=body.run_id,
+        trace_id=body.trace_id,
+        metadata_json=body.metadata_json,
+    )
+    session = chat_session_service.get_chat_session(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+    )
+    return success({"session": session, "message": message}, "消息已写入统一 Agent 对话")
+
+
+@router.post("/chat/sessions/{session_id}/close")
+def close_agent_chat_session(
+    session_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """关闭统一 Agent 对话会话，保留消息审计记录。"""
+    _load_chat_session_or_404(db, current_user, session_id)
+    data = chat_session_service.close_chat_session(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+    )
+    return success(data, "统一 Agent 对话会话已关闭")
 
 
 @router.get("/risk-chat/customers/{customer_id}/session")
