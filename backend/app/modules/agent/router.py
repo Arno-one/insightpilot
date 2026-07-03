@@ -220,7 +220,7 @@ def get_agent_run_detail(
 @router.get("/risk-chat/customers/{customer_id}/session")
 def get_risk_chat_session(
     customer_id: str,
-    current_user: dict = Depends(require_permission("agent:run:risk_analysis")),
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
     """读取当前用户在当前客户下的 Risk Agent 对话会话和记忆窗口。"""
@@ -228,11 +228,23 @@ def get_risk_chat_session(
     return success(data, "查询成功")
 
 
+@router.get("/risk-chat/sessions")
+def list_risk_chat_sessions(
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+):
+    """返回当前用户的对话历史索引，供客户工作台左侧会话列表直接展示。"""
+    data = conversation_memory_service.list_conversation_sessions(
+        current_user["tenant_id"],
+        current_user["user_id"],
+    )
+    return success(data, "查询成功", total=len(data))
+
+
 @router.post("/risk-chat/customers/{customer_id}/message")
 def send_risk_chat_message(
     customer_id: str,
     body: RiskChatMessageRequest,
-    current_user: dict = Depends(require_permission("agent:run:risk_analysis")),
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
     """发送一条 Risk Agent 对话消息，并把短期记忆压缩为最近 5 轮全量 + 历史摘要。"""
@@ -271,6 +283,16 @@ def send_risk_chat_message(
             {"role": "assistant", "content": reply},
         ],
     )
+    session_items = conversation_memory_service.upsert_conversation_session_index(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id=customer_id,
+        customer_name=customer.get("customer_name") or customer_id,
+        session_key=saved_memory["session_key"],
+        recent_messages=saved_memory["recent_messages"],
+        updated_at=saved_memory["updated_at"],
+        latest_risk_level=latest_risk.get("risk_level"),
+    )
 
     return success(
         {
@@ -283,6 +305,7 @@ def send_risk_chat_message(
             "compacted": compacted,
             "customer_memory_summary": customer_memory.get("summary_text", ""),
             "latest_risk": latest_risk,
+            "session_history": session_items,
         },
         "回复成功",
     )
@@ -291,7 +314,7 @@ def send_risk_chat_message(
 @router.delete("/risk-chat/customers/{customer_id}/session")
 def clear_risk_chat_session(
     customer_id: str,
-    current_user: dict = Depends(require_permission("agent:run:risk_analysis")),
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
     """清空当前用户在该客户下的 Risk Agent 短期会话记忆。"""
@@ -301,4 +324,9 @@ def clear_risk_chat_session(
         current_user["user_id"],
         customer_id,
     )
-    return success({"customer_id": customer_id}, "会话记忆已清空")
+    session_items = conversation_memory_service.remove_conversation_session_index(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id=customer_id,
+    )
+    return success({"customer_id": customer_id, "session_history": session_items}, "会话记忆已清空")

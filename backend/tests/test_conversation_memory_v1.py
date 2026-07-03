@@ -54,8 +54,13 @@ def _ensure_customer_memory_table_exists():
         db.commit()
 
 
-def _build_headers(client: TestClient) -> tuple[dict[str, str], str, str]:
-    login = client.post("/api/auth/login", json={"username": "manager", "password": "Manager@123456"})
+def _build_headers(
+    client: TestClient,
+    *,
+    username: str = "manager",
+    password: str = "Manager@123456",
+) -> tuple[dict[str, str], str, str]:
+    login = client.post("/api/auth/login", json={"username": username, "password": password})
     assert login.status_code == 200
     login_body = login.json()["data"]
     return (
@@ -256,6 +261,37 @@ def test_conversation_memory_is_isolated_by_user_and_customer():
     assert memory_b["recent_messages"][0]["content"] == "用户B消息"
 
 
+def test_conversation_session_index_keeps_recent_title_and_preview():
+    fake_redis = _FakeRedis()
+    memory, _ = conversation_memory_service.append_conversation_messages(
+        "tenant_demo",
+        "user_demo",
+        "customer_demo",
+        messages=[
+            {"role": "user", "content": "这个客户现在应该怎么回访？"},
+            {"role": "assistant", "content": "建议先确认真实采购时间。"},
+        ],
+        redis_client=fake_redis,
+    )
+
+    items = conversation_memory_service.upsert_conversation_session_index(
+        "tenant_demo",
+        "user_demo",
+        customer_id="customer_demo",
+        customer_name="演示客户",
+        session_key=memory["session_key"],
+        recent_messages=memory["recent_messages"],
+        updated_at=memory["updated_at"],
+        latest_risk_level="high",
+        redis_client=fake_redis,
+    )
+
+    assert len(items) == 1
+    assert items[0]["title"] == "这个客户现在应该怎么"
+    assert "Risk Agent" in items[0]["preview"]
+    assert items[0]["latest_risk_level"] == "high"
+
+
 def test_risk_chat_api_persists_messages_and_supports_clear(monkeypatch):
     client = TestClient(app)
     fake_redis = _FakeRedis()
@@ -283,9 +319,12 @@ def test_risk_chat_api_persists_messages_and_supports_clear(monkeypatch):
         assert len(message_data["recent_messages"]) == 2
         assert message_data["recent_messages"][0]["role"] == "user"
         assert message_data["recent_messages"][1]["role"] == "assistant"
+        assert len(message_data["session_history"]) == 1
+        assert message_data["session_history"][0]["customer_id"] == customer_id
 
         clear_response = client.delete(f"/api/agent/risk-chat/customers/{customer_id}/session", headers=headers)
         assert clear_response.status_code == 200
+        assert clear_response.json()["data"]["session_history"] == []
 
         refreshed_session = client.get(f"/api/agent/risk-chat/customers/{customer_id}/session", headers=headers)
         assert refreshed_session.status_code == 200
@@ -322,5 +361,34 @@ def test_risk_chat_api_compacts_history_after_more_than_five_rounds(monkeypatch)
         assert len(session_data["recent_messages"]) == 10
         assert session_data["recent_messages"][0]["content"] == "第2轮怎么回访这个客户？"
         assert "第1轮怎么回访这个客户？" in session_data["history_summary"]
+    finally:
+        _cleanup_risk_chat_fixture(tenant_id, customer_id, risk_snapshot_id)
+
+
+def test_risk_chat_history_api_lists_recent_sessions_and_salesperson_can_access(monkeypatch):
+    client = TestClient(app)
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(conversation_memory_service, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
+    _ensure_customer_memory_table_exists()
+    headers, tenant_id, user_id = _build_headers(client, username="sales01", password="Sales@123456")
+    customer_id, risk_snapshot_id = _create_risk_chat_fixture(tenant_id, user_id)
+
+    try:
+        message_response = client.post(
+            f"/api/agent/risk-chat/customers/{customer_id}/message",
+            headers=headers,
+            json={"message": "帮我判断这个客户今天要不要继续跟进"},
+        )
+        assert message_response.status_code == 200
+
+        history_response = client.get("/api/agent/risk-chat/sessions", headers=headers)
+        assert history_response.status_code == 200
+        history_items = history_response.json()["data"]
+
+        assert len(history_items) == 1
+        assert history_items[0]["customer_id"] == customer_id
+        assert len(history_items[0]["title"]) <= 10
+        assert history_items[0]["customer_name"] == "对话记忆专项测试客户"
     finally:
         _cleanup_risk_chat_fixture(tenant_id, customer_id, risk_snapshot_id)

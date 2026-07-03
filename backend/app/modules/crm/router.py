@@ -38,11 +38,13 @@ async def import_crm_csv(
 
 @router.get("/customers")
 def list_customers(
+    keyword: str | None = None,
+    limit: int = 100,
     current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
     """客户列表页复用统一服务层，后续内部工具和 MCP 也走同一套查询逻辑。"""
-    rows = crm_service.search_customers(db, current_user)
+    rows = crm_service.search_customers(db, current_user, keyword=keyword, limit=limit)
     return success(rows, "查询成功", total=len(rows))
 
 

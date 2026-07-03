@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { clearSession, CurrentUser, fetchCurrentUser, getDefaultRoute, getStoredUser, hasAnyPermission, saveStoredUser } from "@/lib/api";
 
@@ -13,6 +13,8 @@ type NavItem = {
   eyebrow: string;
   summary: string;
 };
+
+const SIDEBAR_SCROLL_KEY = "insightpilot_sidebar_scroll_top";
 
 const navItems: NavItem[] = [
   {
@@ -28,6 +30,13 @@ const navItems: NavItem[] = [
     permissions: ["crm:customer:read:self"],
     eyebrow: "CRM Intake",
     summary: "把客户、商机和跟进记录按统一模板导入系统，并在入库前就拿到清晰校验反馈。"
+  },
+  {
+    label: "客户工作台",
+    href: "/customers",
+    permissions: ["crm:customer:read:self"],
+    eyebrow: "Customer Workbench",
+    summary: "按客户维度恢复历史对话、查看风险摘要，并直接和 Risk Agent 连续协作。"
   },
   {
     label: "客户风险中心",
@@ -101,9 +110,14 @@ function roleLabel(roleCodes: string[] | undefined) {
   return role;
 }
 
+function isNavActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const sidebarRef = useRef<HTMLElement | null>(null);
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -144,16 +158,43 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // 中文注释：导航仍然由权限控制，保证演示态和真实接口权限校验保持一致。
   const visibleNav = useMemo(() => navItems.filter((item) => hasAnyPermission(user, item.permissions)), [user]);
-  const currentSection = visibleNav.find((item) => pathname === item.href) || visibleNav[0] || navItems[0];
+  const currentSection = visibleNav.find((item) => isNavActive(pathname, item.href)) || visibleNav[0] || navItems[0];
 
   useEffect(() => {
     if (!ready || !user || !visibleNav.length) {
       return;
     }
-    if (!visibleNav.some((item) => item.href === pathname)) {
+    if (!visibleNav.some((item) => isNavActive(pathname, item.href))) {
       router.replace(getDefaultRoute(user));
     }
   }, [pathname, ready, router, user, visibleNav]);
+
+  useEffect(() => {
+    if (!ready || typeof window === "undefined" || !sidebarRef.current) {
+      return;
+    }
+    // 中文注释：记住左侧导航自己的滚动位置，切模块时只刷新右侧工作区，不把导航强行拉回顶部。
+    const raw = window.sessionStorage.getItem(SIDEBAR_SCROLL_KEY);
+    if (!raw) {
+      return;
+    }
+    const scrollTop = Number(raw);
+    if (Number.isNaN(scrollTop)) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (sidebarRef.current) {
+        sidebarRef.current.scrollTop = scrollTop;
+      }
+    });
+  }, [ready, pathname]);
+
+  function handleSidebarScroll() {
+    if (typeof window === "undefined" || !sidebarRef.current) {
+      return;
+    }
+    window.sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String(sidebarRef.current.scrollTop));
+  }
 
   function handleLogout() {
     clearSession();
@@ -174,7 +215,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="shell">
-      <aside className="sidebar">
+      <aside
+        className="sidebar"
+        ref={sidebarRef}
+        onScroll={handleSidebarScroll}
+        style={{ maxHeight: "100vh", overflowY: "auto", overscrollBehavior: "contain" }}
+      >
         <div className="brand-block">
           <span className="brand-mark">IP</span>
           <div>
@@ -195,7 +241,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <nav className="nav" aria-label="主导航">
           {visibleNav.map((item) => (
-            <Link className={pathname === item.href ? "active" : ""} key={item.href} href={item.href}>
+            <Link className={isNavActive(pathname, item.href) ? "active" : ""} key={item.href} href={item.href}>
               <span>{item.label}</span>
               <small>{item.eyebrow}</small>
             </Link>

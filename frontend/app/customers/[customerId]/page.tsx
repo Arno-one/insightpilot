@@ -410,6 +410,9 @@ export default function CustomerDetailPage() {
           <h1>{detail?.customer.customer_name || customerId}</h1>
         </div>
         <div className="page-actions">
+          <Link className="button-secondary" href={`/customers?customerId=${customerId}`}>
+            打开 AI 对话工作台
+          </Link>
           <Link className="button-secondary" href="/risks">
             返回风险中心
           </Link>

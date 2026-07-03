@@ -8,11 +8,17 @@ MAX_RECENT_ROUNDS = 5
 MAX_RECENT_MESSAGES = MAX_RECENT_ROUNDS * 2
 SUMMARY_CHAR_LIMIT = 2000
 MESSAGE_PREVIEW_LIMIT = 120
+SESSION_TITLE_LIMIT = 10
 
 
 def build_session_key(tenant_id: str, user_id: str, customer_id: str) -> str:
     """统一 Risk Agent 对话会话键，保证租户、用户、客户三层隔离。"""
     return f"risk_chat:{tenant_id}:{user_id}:{customer_id}"
+
+
+def build_session_index_key(tenant_id: str, user_id: str) -> str:
+    """统一当前用户的对话历史索引键，供客户工作台左侧历史列表复用。"""
+    return f"risk_chat_index:{tenant_id}:{user_id}"
 
 
 def _default_memory(session_key: str) -> dict[str, Any]:
@@ -52,6 +58,13 @@ def _clip_text(text: str, limit: int = MESSAGE_PREVIEW_LIMIT) -> str:
     return f"{text[:limit].rstrip()}..."
 
 
+def _clip_title(text: str, limit: int = SESSION_TITLE_LIMIT) -> str:
+    normalized = _normalize_message_content(text)
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit].rstrip()
+
+
 def _message_label(role: str) -> str:
     return "用户" if role == "user" else "Risk Agent"
 
@@ -81,6 +94,26 @@ def _merge_history_summary(existing_summary: str, new_summary: str) -> str:
     if len(merged) <= SUMMARY_CHAR_LIMIT:
         return merged
     return merged[-SUMMARY_CHAR_LIMIT:]
+
+
+def build_session_title(customer_name: str, recent_messages: list[dict[str, Any]]) -> str:
+    """优先从第一条用户问题里提炼 10 字内标题，没有就退回客户名。"""
+    for item in recent_messages:
+        if item.get("role") == "user":
+            content = _clip_title(str(item.get("content") or ""))
+            if content:
+                return content
+    return _clip_title(customer_name or "新对话") or "新对话"
+
+
+def build_session_preview(recent_messages: list[dict[str, Any]]) -> str:
+    """左侧历史列表使用最后一条消息做预览，让用户更快找回上下文。"""
+    if not recent_messages:
+        return ""
+    latest = recent_messages[-1]
+    role = _message_label(str(latest.get("role") or "assistant"))
+    content = _clip_text(_normalize_message_content(latest.get("content")), 32)
+    return f"{role}：{content}" if content else ""
 
 
 def load_conversation_memory(
@@ -124,6 +157,74 @@ def save_conversation_memory(
     client = redis_client or get_redis()
     client.set(session_key, _dumps_json(payload))
     return payload
+
+
+def list_conversation_sessions(tenant_id: str, user_id: str, *, redis_client=None) -> list[dict[str, Any]]:
+    client = redis_client or get_redis()
+    stored = _loads_json(client.get(build_session_index_key(tenant_id, user_id)))
+    items = list(stored.get("items") or [])
+    return sorted(
+        [item for item in items if isinstance(item, dict)],
+        key=lambda item: str(item.get("updated_at") or ""),
+        reverse=True,
+    )
+
+
+def _save_conversation_sessions(
+    tenant_id: str,
+    user_id: str,
+    items: list[dict[str, Any]],
+    *,
+    redis_client=None,
+) -> None:
+    client = redis_client or get_redis()
+    client.set(
+        build_session_index_key(tenant_id, user_id),
+        _dumps_json({"items": items}),
+    )
+
+
+def upsert_conversation_session_index(
+    tenant_id: str,
+    user_id: str,
+    *,
+    customer_id: str,
+    customer_name: str,
+    session_key: str,
+    recent_messages: list[dict[str, Any]],
+    updated_at: str | None,
+    latest_risk_level: str | None = None,
+    redis_client=None,
+) -> list[dict[str, Any]]:
+    """把会话元信息写入左侧历史列表索引，方便 ChatGPT 风格工作台快速恢复。"""
+    items = list_conversation_sessions(tenant_id, user_id, redis_client=redis_client)
+    item = {
+        "customer_id": customer_id,
+        "customer_name": customer_name,
+        "session_key": session_key,
+        "title": build_session_title(customer_name, recent_messages),
+        "preview": build_session_preview(recent_messages),
+        "updated_at": updated_at or datetime.now().isoformat(),
+        "latest_risk_level": latest_risk_level,
+    }
+    filtered_items = [existing for existing in items if existing.get("customer_id") != customer_id]
+    filtered_items.append(item)
+    filtered_items.sort(key=lambda current: str(current.get("updated_at") or ""), reverse=True)
+    _save_conversation_sessions(tenant_id, user_id, filtered_items, redis_client=redis_client)
+    return filtered_items
+
+
+def remove_conversation_session_index(
+    tenant_id: str,
+    user_id: str,
+    *,
+    customer_id: str,
+    redis_client=None,
+) -> list[dict[str, Any]]:
+    items = list_conversation_sessions(tenant_id, user_id, redis_client=redis_client)
+    filtered_items = [item for item in items if item.get("customer_id") != customer_id]
+    _save_conversation_sessions(tenant_id, user_id, filtered_items, redis_client=redis_client)
+    return filtered_items
 
 
 def compact_conversation_memory(memory: dict[str, Any]) -> tuple[dict[str, Any], bool]:

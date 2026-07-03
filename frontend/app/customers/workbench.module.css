@@ -1,0 +1,255 @@
+.workbench {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.sidebar,
+.chatMain,
+.sessionList,
+.customerList,
+.chatThread,
+.promptList {
+  display: grid;
+  gap: 12px;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+}
+
+.sidebarPanel {
+  gap: 16px;
+}
+
+.sessionItem,
+.customerItem {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.03);
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.sessionItem:hover,
+.customerItem:hover {
+  transform: translateY(-1px);
+  border-color: rgba(151, 184, 210, 0.34);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sessionItemActive,
+.customerItemActive {
+  border-color: rgba(57, 208, 255, 0.42);
+  background:
+    linear-gradient(135deg, rgba(57, 208, 255, 0.12), rgba(57, 208, 255, 0.04)),
+    rgba(255, 255, 255, 0.04);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+.sessionItemTop {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sessionItem strong,
+.customerItem strong {
+  font-size: 16px;
+}
+
+.sessionItem p,
+.sessionItem small,
+.customerItem p,
+.customerItem small {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.65;
+}
+
+.sessionItem span {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.searchInput {
+  min-height: 54px;
+  padding: 0 18px;
+}
+
+.chatMain {
+  gap: 18px;
+  min-width: 0;
+}
+
+.chatHeaderPanel,
+.chatPanel {
+  gap: 16px;
+}
+
+.chatHeader {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.riskSummary {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top right, rgba(57, 208, 255, 0.12), transparent 32%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.riskSummaryMain,
+.historyBrief {
+  display: grid;
+  gap: 10px;
+}
+
+.riskSummaryMain strong,
+.historyBrief strong {
+  font-size: 18px;
+}
+
+.riskSummaryMain p,
+.historyBrief p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.75;
+}
+
+.historyBrief {
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+}
+
+.chatPanel {
+  min-height: 780px;
+}
+
+.chatThread {
+  align-content: start;
+  min-height: 420px;
+  max-height: 620px;
+  padding-right: 4px;
+  overflow-y: auto;
+}
+
+.chatBubble {
+  display: grid;
+  gap: 10px;
+  max-width: min(860px, 88%);
+  padding: 18px 20px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+}
+
+.chatBubbleUser {
+  justify-self: end;
+  background: linear-gradient(135deg, rgba(57, 208, 255, 0.18), rgba(57, 208, 255, 0.08));
+  border-color: rgba(57, 208, 255, 0.28);
+}
+
+.chatBubbleAssistant {
+  justify-self: start;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.chatBubbleMeta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chatBubbleMeta strong {
+  font-size: 15px;
+}
+
+.chatBubbleMeta span {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.chatBubble p {
+  margin: 0;
+  color: #e5f0f7;
+  line-height: 1.85;
+  white-space: pre-wrap;
+}
+
+.chatEmpty {
+  display: grid;
+  gap: 14px;
+  padding: 28px;
+  border: 1px dashed rgba(151, 184, 210, 0.26);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.chatEmpty strong {
+  font-size: 22px;
+}
+
+.chatEmpty p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.75;
+}
+
+.promptList {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.chatComposer {
+  display: grid;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.memoryNote {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.chatTextarea {
+  min-height: 148px;
+}
+
+@media (max-width: 1180px) {
+  .workbench {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: static;
+  }
+
+  .chatHeader {
+    display: grid;
+  }
+}
+
+@media (max-width: 640px) {
+  .chatThread {
+    max-height: none;
+  }
+}
