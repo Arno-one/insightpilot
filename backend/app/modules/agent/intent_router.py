@@ -1,0 +1,137 @@
+from dataclasses import dataclass
+
+
+INTENT_RISK_ANALYSIS = "risk_analysis"
+INTENT_CUSTOMER_QUERY = "customer_query"
+INTENT_REPORT_QUERY = "report_query"
+INTENT_DATA_QUERY = "data_query"
+INTENT_UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class IntentRouteResult:
+    intent: str
+    confidence: float
+    reason: str
+    matched_keywords: list[str]
+
+    def model_dump(self) -> dict:
+        return {
+            "intent": self.intent,
+            "confidence": self.confidence,
+            "reason": self.reason,
+            "matched_keywords": self.matched_keywords,
+        }
+
+
+INTENT_KEYWORDS: dict[str, list[str]] = {
+    INTENT_DATA_QUERY: [
+        "多少",
+        "几个",
+        "总数",
+        "统计",
+        "查询",
+        "排行",
+        "top",
+        "sql",
+        "数据",
+        "本月",
+        "同比",
+        "环比",
+    ],
+    INTENT_RISK_ANALYSIS: [
+        "风险",
+        "流失",
+        "预警",
+        "竞品",
+        "高风险",
+        "跟进断档",
+        "为什么升高",
+        "风险原因",
+    ],
+    INTENT_REPORT_QUERY: [
+        "报告",
+        "日报",
+        "周报",
+        "月报",
+        "经营简报",
+        "趋势",
+        "复盘",
+        "总结",
+    ],
+    INTENT_CUSTOMER_QUERY: [
+        "客户",
+        "联系人",
+        "商机",
+        "报价",
+        "跟进",
+        "回访",
+        "负责人",
+        "客户画像",
+    ],
+}
+
+INTENT_REASON_LABELS = {
+    INTENT_RISK_ANALYSIS: "命中风险分析相关表达",
+    INTENT_CUSTOMER_QUERY: "命中客户经营相关表达",
+    INTENT_REPORT_QUERY: "命中经营报告相关表达",
+    INTENT_DATA_QUERY: "命中数据查询相关表达",
+    INTENT_UNKNOWN: "暂未命中明确意图",
+}
+
+
+def _normalize_question(question: str) -> str:
+    return " ".join(str(question or "").lower().split()).strip()
+
+
+def _matched_keywords(question: str, keywords: list[str]) -> list[str]:
+    normalized = _normalize_question(question)
+    return [keyword for keyword in keywords if keyword.lower() in normalized]
+
+
+def _score_intent(question: str, intent: str, keywords: list[str]) -> tuple[int, list[str]]:
+    matched = _matched_keywords(question, keywords)
+    score = len(matched)
+    # 中文注释：数据查询和风险问题都可能提到“客户”，用更具体的关键词数量作为第一优先级。
+    if intent == INTENT_DATA_QUERY and any(keyword in matched for keyword in ["多少", "几个", "统计", "排行", "sql"]):
+        score += 2
+    if intent == INTENT_RISK_ANALYSIS and any(keyword in matched for keyword in ["风险", "流失", "预警", "竞品"]):
+        score += 2
+    if intent == INTENT_REPORT_QUERY and any(keyword in matched for keyword in ["报告", "日报", "周报", "月报", "经营简报"]):
+        score += 2
+    return score, matched
+
+
+def route_intent(question: str) -> IntentRouteResult:
+    """V1 使用确定性关键词路由，先保证稳定可测，后续再接 Planner / LLM Router。"""
+    normalized = _normalize_question(question)
+    if not normalized:
+        return IntentRouteResult(
+            intent=INTENT_UNKNOWN,
+            confidence=0.0,
+            reason="问题为空，无法判断意图",
+            matched_keywords=[],
+        )
+
+    candidates: list[tuple[int, str, list[str]]] = []
+    for intent, keywords in INTENT_KEYWORDS.items():
+        score, matched = _score_intent(normalized, intent, keywords)
+        candidates.append((score, intent, matched))
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_intent, matched_keywords = candidates[0]
+    if best_score <= 0:
+        return IntentRouteResult(
+            intent=INTENT_UNKNOWN,
+            confidence=0.2,
+            reason=INTENT_REASON_LABELS[INTENT_UNKNOWN],
+            matched_keywords=[],
+        )
+
+    confidence = min(0.95, 0.45 + best_score * 0.15)
+    return IntentRouteResult(
+        intent=best_intent,
+        confidence=confidence,
+        reason=INTENT_REASON_LABELS[best_intent],
+        matched_keywords=matched_keywords,
+    )

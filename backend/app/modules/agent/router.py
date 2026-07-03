@@ -5,8 +5,9 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.agent import chat_session_service, conversation_memory_service, memory_service
+from app.modules.agent import chat_session_service, conversation_memory_service, intent_router, memory_service
 from app.modules.agent.schemas import (
+    AgentChatIntentRouteRequest,
     AgentChatMessageCreateRequest,
     AgentChatSessionCreateRequest,
     RiskChatMessageRequest,
@@ -393,6 +394,17 @@ def get_agent_chat_session_detail(
     return success({"session": session, "messages": messages}, "查询成功", total=len(messages))
 
 
+@router.post("/chat/intent")
+def route_agent_chat_intent(
+    body: AgentChatIntentRouteRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+):
+    """识别统一 Agent 对话意图；V1 只返回路由结果，不执行具体工具。"""
+    _ = current_user
+    result = intent_router.route_intent(body.question)
+    return success(result.model_dump(), "意图识别完成")
+
+
 @router.post("/chat/sessions/{session_id}/messages")
 def append_agent_chat_user_message(
     session_id: str,
@@ -405,6 +417,8 @@ def append_agent_chat_user_message(
         raise HTTPException(status_code=400, detail="统一对话入口 V1 仅允许直接写入用户消息")
 
     _load_chat_session_or_404(db, current_user, session_id)
+    route_result = intent_router.route_intent(body.content)
+    resolved_intent = body.intent or route_result.intent
     message = chat_session_service.append_chat_message(
         db,
         tenant_id=current_user["tenant_id"],
@@ -412,11 +426,14 @@ def append_agent_chat_user_message(
         session_id=session_id,
         role="user",
         content=body.content,
-        intent=body.intent,
+        intent=resolved_intent,
         tool_name=body.tool_name,
         run_id=body.run_id,
         trace_id=body.trace_id,
-        metadata_json=body.metadata_json,
+        metadata_json={
+            **(body.metadata_json or {}),
+            "intent_route": route_result.model_dump(),
+        },
     )
     session = chat_session_service.get_chat_session(
         db,
@@ -424,7 +441,7 @@ def append_agent_chat_user_message(
         user_id=current_user["user_id"],
         session_id=session_id,
     )
-    return success({"session": session, "message": message}, "消息已写入统一 Agent 对话")
+    return success({"session": session, "message": message, "intent_route": route_result.model_dump()}, "消息已写入统一 Agent 对话")
 
 
 @router.post("/chat/sessions/{session_id}/close")

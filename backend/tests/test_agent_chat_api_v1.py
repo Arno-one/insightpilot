@@ -138,6 +138,8 @@ def test_unified_agent_chat_api_creates_session_appends_message_and_closes():
         message_data = message_response.json()["data"]
         assert message_data["message"]["role"] == "user"
         assert message_data["message"]["metadata_json"]["from"] == "unified_api"
+        assert message_data["intent_route"]["intent"] == "risk_analysis"
+        assert message_data["message"]["metadata_json"]["intent_route"]["intent"] == "risk_analysis"
         assert message_data["session"]["message_count"] == 1
         assert message_data["session"]["last_message_role"] == "user"
 
@@ -190,6 +192,23 @@ def test_unified_agent_chat_api_rejects_assistant_message_from_direct_entry():
         assert "仅允许直接写入用户消息" in message_response.json()["detail"]
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
+
+
+def test_unified_agent_chat_intent_route_api_returns_deterministic_result():
+    client = TestClient(app)
+    headers, _, _ = _build_headers(client)
+
+    response = client.post(
+        "/api/agent/chat/intent",
+        headers=headers,
+        json={"question": "统计一下本月客户总数和高风险客户数量"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["intent"] == "data_query"
+    assert data["confidence"] >= 0.6
+    assert "统计" in data["matched_keywords"]
 
 
 def test_unified_agent_chat_api_isolated_by_current_user():

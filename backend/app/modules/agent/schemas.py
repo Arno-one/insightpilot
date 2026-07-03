@@ -23,3 +23,7 @@ class AgentChatMessageCreateRequest(BaseModel):
     run_id: str | None = Field(None, max_length=64)
     trace_id: str | None = Field(None, max_length=64)
     metadata_json: dict | None = None
+
+
+class AgentChatIntentRouteRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4000)
