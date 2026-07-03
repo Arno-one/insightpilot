@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
+from app.modules.agent.platform.mail_mcp_tools import build_mail_mcp_tools
 from app.modules.agent.platform.tool_calling_tools import build_tool_calling_internal_tools
 from app.modules.agent.platform.tool_registry import ToolDefinition, ToolExecutionContext
 
@@ -161,7 +162,11 @@ def build_internal_mcp_server(server_name: str, display_name: str, tools: list[T
 def build_shared_mcp_gateway() -> MCPGateway:
     """中文注释：把当前平台内生能力统一接成 MCP Gateway，共享给 Agent 和审批后的动作链。"""
 
-    shared_tools = [*build_shared_internal_tools(), *build_tool_calling_internal_tools()]
+    shared_tools = [
+        *build_shared_internal_tools(),
+        *build_tool_calling_internal_tools(),
+        *build_mail_mcp_tools(),
+    ]
     return MCPGateway(
         [
             build_internal_mcp_server("crm", "CRM MCP", shared_tools),
@@ -169,6 +174,7 @@ def build_shared_mcp_gateway() -> MCPGateway:
             build_internal_mcp_server("approval", "Approval MCP", shared_tools),
             build_internal_mcp_server("task", "Task MCP", shared_tools),
             build_internal_mcp_server("notify", "Notify MCP", shared_tools),
+            build_internal_mcp_server("mail", "Mail MCP", shared_tools),
             build_internal_mcp_server("calendar", "Calendar MCP", shared_tools),
         ]
     )

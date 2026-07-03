@@ -30,9 +30,13 @@ def test_mcp_gateway_returns_unified_tool_specs_for_shared_servers():
         "approval.create_draft",
         "task.create_from_approval",
         "notify.send_task_assignment",
+        "mail.send_task_assignment",
+        "mail.get_delivery_status",
+        "mail.list_failed_deliveries",
+        "mail.retry_failed_delivery",
         "calendar.create_follow_up_event",
     }
-    assert server_names >= {"crm", "report", "approval", "task", "notify", "calendar"}
+    assert server_names >= {"crm", "report", "approval", "task", "notify", "mail", "calendar"}
     assert all(item["protocol"] == "mcp" for item in specs)
 
 
@@ -134,3 +138,34 @@ def test_shared_mcp_gateway_can_execute_internal_crm_tool(monkeypatch):
     assert result["output"]["total"] == 1
     assert result["output"]["items"][0]["customer_id"] == "cust_001"
     assert result["audit_record"]["request_payload"] == {"keyword": "华东"}
+
+
+def test_shared_mcp_gateway_can_execute_mail_status_tool(monkeypatch):
+    from app.modules.notification import service as notification_service
+
+    monkeypatch.setattr(
+        notification_service,
+        "load_notification_operator_context",
+        lambda db, tenant_id, user_id: {
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "permission_codes": ["task:read:team"],
+        },
+    )
+    monkeypatch.setattr(
+        notification_service,
+        "get_notification_delivery_status",
+        lambda db, current_user, notification_id: {
+            "notification_id": notification_id,
+            "delivery_status": "fallback_internal",
+            "retry_count": 1,
+        },
+    )
+
+    gateway = build_shared_mcp_gateway()
+    result = gateway.execute("mail.get_delivery_status", _tool_context(), {"notification_id": "notify_001"})
+
+    assert result["server_name"] == "mail"
+    assert result["tool_name"] == "mail.get_delivery_status"
+    assert result["output"]["notification_id"] == "notify_001"
+    assert result["output"]["delivery_status"] == "fallback_internal"

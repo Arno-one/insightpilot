@@ -58,6 +58,13 @@ def _ensure_workflow_event_table_exists():
                   status VARCHAR(30) NOT NULL DEFAULT 'sent',
                   delivered_at DATETIME NULL,
                   read_at DATETIME NULL,
+                  delivery_status VARCHAR(30) NOT NULL DEFAULT 'pending',
+                  provider VARCHAR(30) NULL,
+                  provider_message_id VARCHAR(128) NULL,
+                  retry_count INT NOT NULL DEFAULT 0,
+                  last_attempted_at DATETIME NULL,
+                  next_retry_at DATETIME NULL,
+                  last_error TEXT NULL,
                   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                   UNIQUE KEY uk_notification_id (notification_id),
                   UNIQUE KEY uk_task_recipient_type (tenant_id, task_id, recipient_user_id, notification_type),
@@ -68,6 +75,19 @@ def _ensure_workflow_event_table_exists():
                 """
             )
         )
+        existing_columns = set(db.execute(text("SHOW COLUMNS FROM internal_notification")).scalars().all())
+        missing_columns = [
+            ("delivery_status", "ALTER TABLE internal_notification ADD COLUMN delivery_status VARCHAR(30) NOT NULL DEFAULT 'pending'"),
+            ("provider", "ALTER TABLE internal_notification ADD COLUMN provider VARCHAR(30) NULL"),
+            ("provider_message_id", "ALTER TABLE internal_notification ADD COLUMN provider_message_id VARCHAR(128) NULL"),
+            ("retry_count", "ALTER TABLE internal_notification ADD COLUMN retry_count INT NOT NULL DEFAULT 0"),
+            ("last_attempted_at", "ALTER TABLE internal_notification ADD COLUMN last_attempted_at DATETIME NULL"),
+            ("next_retry_at", "ALTER TABLE internal_notification ADD COLUMN next_retry_at DATETIME NULL"),
+            ("last_error", "ALTER TABLE internal_notification ADD COLUMN last_error TEXT NULL"),
+        ]
+        for column_name, alter_sql in missing_columns:
+            if column_name not in existing_columns:
+                db.execute(text(alter_sql))
         db.execute(
             text(
                 """

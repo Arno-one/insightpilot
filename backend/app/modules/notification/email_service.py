@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import smtplib
 from email.message import EmailMessage
+from email.utils import make_msgid
 from typing import Any
 
 from app.core.config import settings
@@ -26,7 +27,7 @@ def _should_use_ssl() -> bool:
 
 
 def send_email_message(*, recipient_email: str, subject: str, content: str) -> dict[str, Any]:
-    """中文注释：统一封装 SMTP 发送，后续切换到真实 Mail MCP 时只需要替换这一层。"""
+    """中文注释：统一封装 SMTP 发信，后续替换成真实 Mail MCP 时只需要替换这一层。"""
 
     if not smtp_is_configured():
         raise RuntimeError("SMTP 配置不完整，无法发送邮件")
@@ -34,6 +35,8 @@ def send_email_message(*, recipient_email: str, subject: str, content: str) -> d
         raise RuntimeError("收件人邮箱为空，无法发送邮件")
 
     message = EmailMessage()
+    message_id = make_msgid()
+    message["Message-ID"] = message_id
     message["Subject"] = subject
     message["From"] = f"{settings.smtp_sender_name} <{settings.sender_email}>"
     message["To"] = recipient_email
@@ -58,6 +61,7 @@ def send_email_message(*, recipient_email: str, subject: str, content: str) -> d
         "sender_email": settings.sender_email,
         "recipient_email": recipient_email,
         "subject": subject,
+        "provider_message_id": message_id,
     }
 
 

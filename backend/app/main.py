@@ -18,6 +18,7 @@ from app.modules.approval.router import router as approval_router
 from app.modules.task.router import router as task_router
 from app.modules.report.router import router as report_router
 from app.modules.agent.router import router as agent_router
+from app.modules.notification.router import router as notification_router
 from app.modules.rag.router import router as rag_router
 from app.modules.system.router import router as system_router
 
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(risk_router, prefix="/api/risk", tags=["风险分析"])
     app.include_router(approval_router, prefix="/api/approvals", tags=["人工审批"])
     app.include_router(task_router, prefix="/api/tasks", tags=["销售任务"])
+    app.include_router(notification_router, prefix="/api/notifications", tags=["通知投递"])
     app.include_router(report_router, prefix="/api/reports", tags=["经营报告"])
     app.include_router(agent_router, prefix="/api/agent", tags=["Agent执行追踪"])
     app.include_router(rag_router, prefix="/api/rag", tags=["RAG知识库"])

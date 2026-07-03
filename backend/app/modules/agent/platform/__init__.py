@@ -1,4 +1,5 @@
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
+from app.modules.agent.platform.mail_mcp_tools import build_mail_mcp_tools
 from app.modules.agent.platform.mcp_gateway import (
     MCPGateway,
     MCPServerAdapter,
@@ -15,6 +16,7 @@ __all__ = [
     "ToolDefinition",
     "ToolExecutionContext",
     "build_shared_internal_tools",
+    "build_mail_mcp_tools",
     "MCPGateway",
     "MCPServerAdapter",
     "MCPToolDefinition",
