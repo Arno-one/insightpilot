@@ -115,6 +115,61 @@ def _ensure_workflow_event_table_exists():
                 """
             )
         )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS agent_action_run (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  action_run_id VARCHAR(64) NOT NULL,
+                  chain_code VARCHAR(64) NOT NULL,
+                  approval_id VARCHAR(64) NULL,
+                  customer_id VARCHAR(64) NULL,
+                  trigger_source VARCHAR(50) NOT NULL DEFAULT 'approval',
+                  triggered_by_user_id VARCHAR(64) NOT NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'running',
+                  current_step_code VARCHAR(64) NULL,
+                  context_payload_json JSON NULL,
+                  error_message TEXT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  finished_at DATETIME NULL,
+                  UNIQUE KEY uk_action_run_id (action_run_id),
+                  KEY idx_tenant_status_created (tenant_id, status, created_at),
+                  KEY idx_tenant_approval_created (tenant_id, approval_id, created_at),
+                  KEY idx_tenant_customer_created (tenant_id, customer_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS agent_action_run_step (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  step_run_id VARCHAR(64) NOT NULL,
+                  action_run_id VARCHAR(64) NOT NULL,
+                  approval_id VARCHAR(64) NULL,
+                  customer_id VARCHAR(64) NULL,
+                  step_code VARCHAR(64) NOT NULL,
+                  tool_name VARCHAR(120) NOT NULL,
+                  step_order INT NOT NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'running',
+                  input_payload_json JSON NULL,
+                  output_payload_json JSON NULL,
+                  error_message TEXT NULL,
+                  retry_count INT NOT NULL DEFAULT 0,
+                  started_at DATETIME NULL,
+                  finished_at DATETIME NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_step_run_id (step_run_id),
+                  UNIQUE KEY uk_action_run_step (tenant_id, action_run_id, step_code),
+                  KEY idx_tenant_action_run (tenant_id, action_run_id, step_order),
+                  KEY idx_tenant_status_created (tenant_id, status, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
         db.commit()
 
 
@@ -276,6 +331,18 @@ def _cleanup_agent_run_feedback_fixture(tenant_id: str, run_id: str, customer_id
         )
         db.execute(
             text("DELETE FROM internal_calendar_event WHERE tenant_id = :tenant_id AND customer_id IN :customer_ids").bindparams(
+                bindparam("customer_ids", expanding=True)
+            ),
+            {"tenant_id": tenant_id, "customer_ids": customer_ids},
+        )
+        db.execute(
+            text("DELETE FROM agent_action_run_step WHERE tenant_id = :tenant_id AND customer_id IN :customer_ids").bindparams(
+                bindparam("customer_ids", expanding=True)
+            ),
+            {"tenant_id": tenant_id, "customer_ids": customer_ids},
+        )
+        db.execute(
+            text("DELETE FROM agent_action_run WHERE tenant_id = :tenant_id AND customer_id IN :customer_ids").bindparams(
                 bindparam("customer_ids", expanding=True)
             ),
             {"tenant_id": tenant_id, "customer_ids": customer_ids},

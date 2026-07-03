@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
 from app.core.database import get_db
-from app.modules.agent.platform import execute_post_approval_action_flow
+from app.modules.agent.platform import (
+    execute_post_approval_action_flow,
+    get_post_approval_action_run_detail,
+    list_failed_post_approval_action_runs,
+    retry_post_approval_action_run,
+)
 from app.modules.approval.schemas import (
     ApproveWithChangesRequest,
     BatchReviewRequest,
@@ -19,6 +24,12 @@ from app.shared.response import success
 from app.shared.workflow_event import log_workflow_event
 
 router = APIRouter()
+
+
+def _translate_action_run_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
 
 
 def _parse_filter_datetime(value: str | None, field_name: str, end_of_day: bool = False) -> datetime | None:
@@ -257,6 +268,8 @@ def _approve_approval(
         "approval_id": approval["approval_id"],
         "status": "approved",
         "task_id": task_id,
+        "action_run_id": action_flow_result["action_run_id"],
+        "action_status": action_flow_result["status"],
         "reviewed_at": reviewed_at.isoformat(),
         "review_comment": review_comment,
         "tool_calling": action_flow_result,
@@ -470,7 +483,14 @@ def approve(
         action_type="approval_approved",
     )
     db.commit()
-    return success({"task_id": result["task_id"]}, result["review_comment"])
+    return success(
+        {
+            "task_id": result["task_id"],
+            "action_run_id": result["action_run_id"],
+            "action_status": result["action_status"],
+        },
+        result["review_comment"],
+    )
 
 
 @router.post("/{approval_id}/reject")
@@ -489,6 +509,59 @@ def reject(
     )
     db.commit()
     return success(None, result["review_comment"])
+
+
+@router.get("/action-runs/failed")
+def list_failed_action_runs(
+    limit: int = 20,
+    current_user: dict = Depends(require_permission("approval:review:agent_task")),
+    db: Session = Depends(get_db),
+):
+    try:
+        items = list_failed_post_approval_action_runs(
+            db,
+            current_user=current_user,
+            limit=limit,
+        )
+    except Exception as exc:  # pragma: no cover - 失败映射由下层服务测试间接覆盖
+        raise _translate_action_run_error(exc) from exc
+    return success(items, "查询成功", total=len(items))
+
+
+@router.get("/action-runs/{action_run_id}")
+def get_action_run_detail(
+    action_run_id: str,
+    current_user: dict = Depends(require_permission("approval:review:agent_task")),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = get_post_approval_action_run_detail(
+            db,
+            current_user=current_user,
+            action_run_id=action_run_id,
+        )
+    except Exception as exc:  # pragma: no cover - 失败映射由下层服务测试间接覆盖
+        raise _translate_action_run_error(exc) from exc
+    return success(result, "查询成功")
+
+
+@router.post("/action-runs/{action_run_id}/retry")
+def retry_action_run(
+    action_run_id: str,
+    current_user: dict = Depends(require_permission("approval:review:agent_task")),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = retry_post_approval_action_run(
+            db,
+            current_user=current_user,
+            action_run_id=action_run_id,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise _translate_action_run_error(exc) from exc
+    return success(result, "动作链重试完成")
 
 
 @router.post("/{approval_id}/approve-with-changes")

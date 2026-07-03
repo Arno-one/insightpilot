@@ -1,17 +1,19 @@
+from __future__ import annotations
+
 import json
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
 from app.core.database import SessionLocal
 from app.main import app
+from app.modules.calendar import service as calendar_service
 from app.modules.notification import email_service
 
 
-def _ensure_workflow_event_table_exists():
+def _ensure_action_chain_tables_exist():
     with SessionLocal() as db:
-        # 中文注释：测试环境可能还没手动执行最新迁移，这里补一层幂等建表，保证真实数据库集成测试可重复运行。
         db.execute(
             text(
                 """
@@ -76,19 +78,6 @@ def _ensure_workflow_event_table_exists():
                 """
             )
         )
-        existing_columns = set(db.execute(text("SHOW COLUMNS FROM internal_notification")).scalars().all())
-        missing_columns = [
-            ("delivery_status", "ALTER TABLE internal_notification ADD COLUMN delivery_status VARCHAR(30) NOT NULL DEFAULT 'pending'"),
-            ("provider", "ALTER TABLE internal_notification ADD COLUMN provider VARCHAR(30) NULL"),
-            ("provider_message_id", "ALTER TABLE internal_notification ADD COLUMN provider_message_id VARCHAR(128) NULL"),
-            ("retry_count", "ALTER TABLE internal_notification ADD COLUMN retry_count INT NOT NULL DEFAULT 0"),
-            ("last_attempted_at", "ALTER TABLE internal_notification ADD COLUMN last_attempted_at DATETIME NULL"),
-            ("next_retry_at", "ALTER TABLE internal_notification ADD COLUMN next_retry_at DATETIME NULL"),
-            ("last_error", "ALTER TABLE internal_notification ADD COLUMN last_error TEXT NULL"),
-        ]
-        for column_name, alter_sql in missing_columns:
-            if column_name not in existing_columns:
-                db.execute(text(alter_sql))
         db.execute(
             text(
                 """
@@ -174,62 +163,27 @@ def _ensure_workflow_event_table_exists():
         db.commit()
 
 
-def _build_headers(client: TestClient) -> tuple[dict[str, str], str]:
+def _build_headers(client: TestClient) -> tuple[dict[str, str], str, str]:
     login = client.post("/api/auth/login", json={"username": "manager", "password": "Manager@123456"})
     assert login.status_code == 200
-    login_body = login.json()
-    token = login_body["data"]["token"]
-    tenant_id = login_body["data"]["user"]["tenant_id"]
-    return {"Authorization": f"Bearer {token}"}, tenant_id
+    login_body = login.json()["data"]
+    return (
+        {"Authorization": f"Bearer {login_body['token']}"},
+        login_body["user"]["tenant_id"],
+        login_body["user"]["user_id"],
+    )
 
 
-def _load_assignable_user_ids(tenant_id: str) -> tuple[str, list[str]]:
-    with SessionLocal() as db:
-        manager_user_id = db.execute(
-            text(
-                """
-                SELECT user_id
-                FROM sys_user
-                WHERE tenant_id = :tenant_id AND username = 'manager' AND status = 1 AND is_deleted = 0
-                LIMIT 1
-                """
-            ),
-            {"tenant_id": tenant_id},
-        ).scalar_one()
-        rows = db.execute(
-            text(
-                """
-                SELECT DISTINCT u.user_id
-                FROM sys_user u
-                JOIN sys_user_role ur
-                  ON ur.tenant_id = u.tenant_id
-                 AND ur.user_id = u.user_id
-                JOIN sys_role r
-                  ON r.tenant_id = ur.tenant_id
-                 AND r.role_id = ur.role_id
-                WHERE u.tenant_id = :tenant_id
-                  AND u.status = 1
-                  AND u.is_deleted = 0
-                  AND r.status = 1
-                  AND r.role_code IN ('owner', 'manager', 'salesperson')
-                ORDER BY u.user_id ASC
-                """
-            ),
-            {"tenant_id": tenant_id},
-        ).scalars().all()
-        assignable_user_ids = list(dict.fromkeys(rows))
-    return manager_user_id, assignable_user_ids
-
-
-def _create_temp_customer_and_approvals(
-    tenant_id: str,
-    owner_user_id: str,
-    assignee_user_id: str,
-    requested_by_user_id: str,
-) -> tuple[str, list[str]]:
-    customer_id = f"cust_it_{uuid4().hex[:10]}"
-    approval_ids = [f"approval_it_{uuid4().hex[:10]}", f"approval_it_{uuid4().hex[:10]}"]
-
+def _create_temp_approval(tenant_id: str, owner_user_id: str, requested_by_user_id: str) -> tuple[str, str]:
+    customer_id = f"cust_chain_{uuid4().hex[:10]}"
+    approval_id = f"appr_chain_{uuid4().hex[:10]}"
+    payload = {
+        "assignee_user_id": owner_user_id,
+        "task_type": "quote_follow",
+        "title": "动作链失败恢复测试任务",
+        "description": "用于验证审批后动作链运行记录、失败恢复与重试能力。",
+        "priority": "high",
+    }
     with SessionLocal() as db:
         db.execute(
             text(
@@ -238,71 +192,46 @@ def _create_temp_customer_and_approvals(
                   tenant_id, customer_id, customer_name, owner_user_id, lifecycle_stage
                 )
                 VALUES (
-                  :tenant_id, :customer_id, :customer_name, :owner_user_id, :lifecycle_stage
+                  :tenant_id, :customer_id, :customer_name, :owner_user_id, 'opportunity'
                 )
                 """
             ),
             {
                 "tenant_id": tenant_id,
                 "customer_id": customer_id,
-                "customer_name": f"批量集成测试客户 {customer_id}",
+                "customer_name": f"动作链测试客户 {customer_id}",
                 "owner_user_id": owner_user_id,
-                "lifecycle_stage": "opportunity",
             },
         )
-
-        for index, approval_id in enumerate(approval_ids, start=1):
-            payload = {
-                "assignee_user_id": assignee_user_id,
-                "task_type": "quote_follow",
-                "title": f"批量集成测试任务 {index}",
-                "description": "用于批量审批与任务执行闭环的真实数据库集成测试",
-                "priority": "high",
-            }
-            db.execute(
-                text(
-                    """
-                    INSERT INTO approval_record (
-                      tenant_id, approval_id, approval_type, customer_id, proposed_payload_json,
-                      status, requested_by_user_id
-                    )
-                    VALUES (
-                      :tenant_id, :approval_id, :approval_type, :customer_id, :proposed_payload_json,
-                      'pending', :requested_by_user_id
-                    )
-                    """
-                ),
-                {
-                    "tenant_id": tenant_id,
-                    "approval_id": approval_id,
-                    "approval_type": "agent_task_draft",
-                    "customer_id": customer_id,
-                    "proposed_payload_json": json.dumps(payload, ensure_ascii=False),
-                    "requested_by_user_id": requested_by_user_id,
-                },
-            )
+        db.execute(
+            text(
+                """
+                INSERT INTO approval_record (
+                  tenant_id, approval_id, approval_type, customer_id, proposed_payload_json,
+                  status, requested_by_user_id
+                )
+                VALUES (
+                  :tenant_id, :approval_id, 'agent_task_draft', :customer_id, :proposed_payload_json,
+                  'pending', :requested_by_user_id
+                )
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "approval_id": approval_id,
+                "customer_id": customer_id,
+                "proposed_payload_json": json.dumps(payload, ensure_ascii=False),
+                "requested_by_user_id": requested_by_user_id,
+            },
+        )
         db.commit()
-
-    return customer_id, approval_ids
+    return customer_id, approval_id
 
 
 def _cleanup_temp_records(tenant_id: str, customer_id: str):
     with SessionLocal() as db:
-        # 中文注释：按客户维度统一清理，避免真实数据库里遗留测试客户、审批、任务和轨迹记录。
         db.execute(
             text("DELETE FROM approval_task_event WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
-            {"tenant_id": tenant_id, "customer_id": customer_id},
-        )
-        db.execute(
-            text("DELETE FROM crm_follow_up_record WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
-            {"tenant_id": tenant_id, "customer_id": customer_id},
-        )
-        db.execute(
-            text("DELETE FROM internal_notification WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
-            {"tenant_id": tenant_id, "customer_id": customer_id},
-        )
-        db.execute(
-            text("DELETE FROM internal_calendar_event WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
             {"tenant_id": tenant_id, "customer_id": customer_id},
         )
         db.execute(
@@ -314,15 +243,19 @@ def _cleanup_temp_records(tenant_id: str, customer_id: str):
             {"tenant_id": tenant_id, "customer_id": customer_id},
         )
         db.execute(
+            text("DELETE FROM internal_notification WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
+        db.execute(
+            text("DELETE FROM internal_calendar_event WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
+        db.execute(
             text("DELETE FROM sales_task WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
             {"tenant_id": tenant_id, "customer_id": customer_id},
         )
         db.execute(
             text("DELETE FROM approval_record WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
-            {"tenant_id": tenant_id, "customer_id": customer_id},
-        )
-        db.execute(
-            text("DELETE FROM customer_risk_snapshot WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
             {"tenant_id": tenant_id, "customer_id": customer_id},
         )
         db.execute(
@@ -332,7 +265,14 @@ def _cleanup_temp_records(tenant_id: str, customer_id: str):
         db.commit()
 
 
-def test_batch_approval_and_task_flow_against_real_mysql(monkeypatch):
+def test_action_chain_runtime_supports_failed_step_resume(monkeypatch):
+    client = TestClient(app)
+    _ensure_action_chain_tables_exist()
+    headers, tenant_id, user_id = _build_headers(client)
+    customer_id, approval_id = _create_temp_approval(tenant_id, user_id, user_id)
+    original_create_calendar_event = calendar_service.create_follow_up_calendar_event
+    calendar_call_count = {"value": 0}
+
     monkeypatch.setattr(
         email_service,
         "send_task_assignment_email",
@@ -342,105 +282,84 @@ def test_batch_approval_and_task_flow_against_real_mysql(monkeypatch):
             "recipient_email": kwargs["recipient_email"],
             "recipient_name": kwargs.get("recipient_name"),
             "subject": f"mock:{kwargs['task']['title']}",
+            "provider_message_id": "<mock-action-chain@insightpilot.local>",
         },
     )
 
-    client = TestClient(app)
-    _ensure_workflow_event_table_exists()
-    headers, tenant_id = _build_headers(client)
-    manager_user_id, assignable_user_ids = _load_assignable_user_ids(tenant_id)
+    def _flaky_calendar(*args, **kwargs):
+        calendar_call_count["value"] += 1
+        if calendar_call_count["value"] == 1:
+            raise RuntimeError("calendar provider temporarily unavailable")
+        return original_create_calendar_event(*args, **kwargs)
 
-    assert len(assignable_user_ids) >= 2, "至少需要两个可分配负责人，才能验证批量改派场景"
-
-    initial_assignee_user_id = assignable_user_ids[0]
-    reassigned_user_id = next(user_id for user_id in assignable_user_ids if user_id != initial_assignee_user_id)
-    customer_id, approval_ids = _create_temp_customer_and_approvals(
-        tenant_id=tenant_id,
-        owner_user_id=initial_assignee_user_id,
-        assignee_user_id=initial_assignee_user_id,
-        requested_by_user_id=initial_assignee_user_id,
-    )
+    monkeypatch.setattr(calendar_service, "create_follow_up_calendar_event", _flaky_calendar)
 
     try:
-        approval_response = client.post(
-            "/api/approvals/batch-review",
-            headers=headers,
-            json={"approval_ids": approval_ids, "action": "approve"},
-        )
-        assert approval_response.status_code == 200
-        approval_body = approval_response.json()["data"]
-        assert approval_body["success_count"] == 2
-        assert approval_body["failed_count"] == 0
+        approve_response = client.post(f"/api/approvals/{approval_id}/approve", headers=headers)
+        assert approve_response.status_code == 200
+        approve_body = approve_response.json()["data"]
+        action_run_id = approve_body["action_run_id"]
+        assert approve_body["task_id"]
+        assert approve_body["action_status"] == "failed"
+
+        failed_response = client.get("/api/approvals/action-runs/failed?limit=10", headers=headers)
+        assert failed_response.status_code == 200
+        failed_items = failed_response.json()["data"]
+        failed_item = next(item for item in failed_items if item["action_run_id"] == action_run_id)
+        assert failed_item["current_step_code"] == "create_calendar_event"
+        assert failed_item["can_retry"] is True
+
+        detail_response = client.get(f"/api/approvals/action-runs/{action_run_id}", headers=headers)
+        assert detail_response.status_code == 200
+        detail_body = detail_response.json()["data"]
+        assert detail_body["status"] == "failed"
+        assert detail_body["current_step_code"] == "create_calendar_event"
+        assert len(detail_body["tool_executions"]) == 3
+        assert detail_body["tool_executions"][-1]["status"] == "failed"
+        assert "calendar provider temporarily unavailable" in detail_body["tool_executions"][-1]["error_message"]
+
+        retry_response = client.post(f"/api/approvals/action-runs/{action_run_id}/retry", headers=headers)
+        assert retry_response.status_code == 200
+        retry_body = retry_response.json()["data"]
+        assert retry_body["status"] == "success"
+        assert retry_body["calendar_event"]["event_id"]
+        assert retry_body["tool_executions"][-1]["status"] == "success"
 
         with SessionLocal() as db:
-            task_rows = db.execute(
+            run_row = db.execute(
                 text(
                     """
-                    SELECT task_id, approval_id, assignee_user_id, status
-                    FROM sales_task
-                    WHERE tenant_id = :tenant_id AND approval_id IN :approval_ids
-                    ORDER BY approval_id ASC
+                    SELECT status, current_step_code, error_message
+                    FROM agent_action_run
+                    WHERE tenant_id = :tenant_id AND action_run_id = :action_run_id
+                    LIMIT 1
                     """
-                ).bindparams(bindparam("approval_ids", expanding=True)),
-                {"tenant_id": tenant_id, "approval_ids": approval_ids},
-            ).mappings().all()
-            assert len(task_rows) == 2
-            task_ids = [row["task_id"] for row in task_rows]
-            assert all(row["status"] == "pending" for row in task_rows)
-            assert all(row["assignee_user_id"] == initial_assignee_user_id for row in task_rows)
-
-        assign_response = client.patch(
-            "/api/tasks/batch/assignee",
-            headers=headers,
-            json={"task_ids": task_ids, "assignee_user_id": reassigned_user_id},
-        )
-        assert assign_response.status_code == 200
-        assign_body = assign_response.json()["data"]
-        assert assign_body["success_count"] == 2
-        assert assign_body["failed_count"] == 0
-
-        status_response = client.patch(
-            "/api/tasks/batch/status",
-            headers=headers,
-            json={
-                "task_ids": task_ids,
-                "status": "in_progress",
-                "result_note": "真实数据库集成测试批量启动任务",
-            },
-        )
-        assert status_response.status_code == 200
-        status_body = status_response.json()["data"]
-        assert status_body["success_count"] == 2
-        assert status_body["failed_count"] == 0
-
-        with SessionLocal() as db:
-            updated_tasks = db.execute(
+                ),
+                {"tenant_id": tenant_id, "action_run_id": action_run_id},
+            ).mappings().first()
+            step_row = db.execute(
                 text(
                     """
-                    SELECT task_id, assignee_user_id, status
+                    SELECT status, retry_count, error_message
+                    FROM agent_action_run_step
+                    WHERE tenant_id = :tenant_id
+                      AND action_run_id = :action_run_id
+                      AND step_code = 'create_calendar_event'
+                    LIMIT 1
+                    """
+                ),
+                {"tenant_id": tenant_id, "action_run_id": action_run_id},
+            ).mappings().first()
+            task_count = db.execute(
+                text(
+                    """
+                    SELECT COUNT(1)
                     FROM sales_task
                     WHERE tenant_id = :tenant_id AND customer_id = :customer_id
-                    ORDER BY task_id ASC
                     """
                 ),
                 {"tenant_id": tenant_id, "customer_id": customer_id},
-            ).mappings().all()
-            assert len(updated_tasks) == 2
-            assert all(row["assignee_user_id"] == reassigned_user_id for row in updated_tasks)
-            assert all(row["status"] == "in_progress" for row in updated_tasks)
-
-            event_rows = db.execute(
-                text(
-                    """
-                    SELECT action_type, COUNT(*) AS total
-                    FROM approval_task_event
-                    WHERE tenant_id = :tenant_id AND customer_id = :customer_id
-                    GROUP BY action_type
-                    """
-                ),
-                {"tenant_id": tenant_id, "customer_id": customer_id},
-            ).mappings().all()
-            event_counts = {row["action_type"]: row["total"] for row in event_rows}
+            ).scalar_one()
             notification_count = db.execute(
                 text(
                     """
@@ -451,17 +370,6 @@ def test_batch_approval_and_task_flow_against_real_mysql(monkeypatch):
                 ),
                 {"tenant_id": tenant_id, "customer_id": customer_id},
             ).scalar_one()
-            notification_channels = db.execute(
-                text(
-                    """
-                    SELECT channel, COUNT(1) AS total
-                    FROM internal_notification
-                    WHERE tenant_id = :tenant_id AND customer_id = :customer_id
-                    GROUP BY channel
-                    """
-                ),
-                {"tenant_id": tenant_id, "customer_id": customer_id},
-            ).mappings().all()
             calendar_count = db.execute(
                 text(
                     """
@@ -473,14 +381,16 @@ def test_batch_approval_and_task_flow_against_real_mysql(monkeypatch):
                 {"tenant_id": tenant_id, "customer_id": customer_id},
             ).scalar_one()
 
-        assert event_counts.get("approval_approved") == 2
-        assert event_counts.get("task_created") == 2
-        assert event_counts.get("notification_sent") == 2
-        assert event_counts.get("calendar_event_created") == 2
-        assert event_counts.get("task_reassigned") == 2
-        assert event_counts.get("task_in_progress") == 2
-        assert notification_count == 2
-        assert {row["channel"]: row["total"] for row in notification_channels} == {"email": 2}
-        assert calendar_count == 2
+        assert run_row is not None
+        assert run_row["status"] == "success"
+        assert run_row["current_step_code"] is None
+        assert run_row["error_message"] is None
+        assert step_row is not None
+        assert step_row["status"] == "success"
+        assert step_row["retry_count"] == 2
+        assert step_row["error_message"] is None
+        assert task_count == 1
+        assert notification_count == 1
+        assert calendar_count == 1
     finally:
         _cleanup_temp_records(tenant_id, customer_id)
