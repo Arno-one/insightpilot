@@ -60,6 +60,13 @@ const navItems: NavItem[] = [
     summary: "聚焦谁来做、何时做、做到哪一步，让建议真正变成落地动作。"
   },
   {
+    label: "通知中心",
+    href: "/notifications",
+    permissions: ["task:read:self", "task:read:team", "task:read:all", "approval:review:agent_task"],
+    eyebrow: "Delivery Recovery",
+    summary: "集中查看失败通知、补发邮件与追踪投递状态，让动作闭环真正落到人。"
+  },
+  {
     label: "经营报告",
     href: "/reports",
     permissions: ["report:read:team", "report:read:all"],
