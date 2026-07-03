@@ -16,7 +16,7 @@ from app.modules.agent.memory_service import (
     load_customer_memory_map,
     upsert_customer_memory,
 )
-from app.modules.agent.platform import InternalToolRegistry, ToolDefinition, ToolExecutionContext, build_shared_internal_tools
+from app.modules.agent.platform import MCPGateway, MCPServerAdapter, MCPToolDefinition, ToolExecutionContext, build_shared_mcp_gateway
 from app.modules.llm.client import RiskAdvice, generate_risk_advice, plan_risk_tool_calls, review_risk_tool_results
 from app.modules.risk.rules import calculate_risk_score
 from app.shared.ids import new_id
@@ -454,8 +454,8 @@ def _insert_risk_and_approval(
     }
 
 
-def _build_risk_tool_registry() -> InternalToolRegistry:
-    """统一注册风险 Agent 第一阶段可调用的内部工具。"""
+def _build_risk_mcp_gateway() -> MCPGateway:
+    """中文注释：在共享 MCP Gateway 上继续挂载 Risk Agent 运行时专属工具。"""
 
     def rag_retrieval_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
         return _retrieve_rag_context(
@@ -521,6 +521,51 @@ def _build_risk_tool_registry() -> InternalToolRegistry:
             context_summary=payload.get("context_summary", ""),
         )
 
+    gateway = build_shared_mcp_gateway()
+    gateway.register_server(
+        MCPServerAdapter(
+            "rag",
+            "RAG MCP",
+            [
+                MCPToolDefinition(
+                    server_name="rag",
+                    tool_name="retrieve_sales_context",
+                    description="从销售知识库检索当前客户风险处置所需的 SOP、话术和案例上下文。",
+                    handler=rag_retrieval_tool,
+                )
+            ],
+        )
+    )
+    gateway.register_server(
+        MCPServerAdapter(
+            "risk",
+            "Risk MCP",
+            [
+                MCPToolDefinition(
+                    server_name="risk",
+                    tool_name="generate_advice",
+                    description="基于规则命中和知识上下文生成结构化风险建议。",
+                    handler=risk_advice_tool,
+                )
+            ],
+        )
+    )
+    gateway.register_server(
+        MCPServerAdapter(
+            "approval",
+            "Approval MCP",
+            [
+                MCPToolDefinition(
+                    server_name="approval",
+                    tool_name="create_risk_draft",
+                    description="把已通过复核的风险建议写入风险快照和人工审批草稿。",
+                    handler=create_risk_draft_tool,
+                )
+            ],
+        )
+    )
+    return gateway
+
     return InternalToolRegistry(
         [
             *build_shared_internal_tools(),
@@ -566,8 +611,8 @@ def _update_failed_run(db: Session, tenant_id: str, run_id: str, exc: Exception,
 
 
 def build_risk_analysis_graph(db: Session):
-    """构建风险扫描图，把中间处理升级成 Planner / Tool Calling / Reviewer 闭环。"""
-    tool_registry = _build_risk_tool_registry()
+    """构建风险扫描图，把工具发现与执行统一切到 MCP Gateway V1。"""
+    tool_gateway = _build_risk_mcp_gateway()
 
     def run_node(
         state: RiskAnalysisState,
@@ -655,7 +700,7 @@ def build_risk_analysis_graph(db: Session):
         def handler(current_state: RiskAnalysisState):
             planner_tools = [
                 tool
-                for tool in tool_registry.list_tool_specs()
+                for tool in tool_gateway.list_tool_specs()
                 if tool["name"] in {"crm.get_customer_detail", "report.query", "rag.retrieve_sales_context", "risk.generate_advice"}
             ]
             planned_actions = []
@@ -712,11 +757,14 @@ def build_risk_analysis_graph(db: Session):
                 }
                 execution_records = []
                 for step in item["plan"]["steps"]:
-                    execution = tool_registry.execute(step["tool_name"], context, payload)
+                    execution = tool_gateway.execute(step["tool_name"], context, payload)
                     execution_records.append(
                         {
+                            "protocol": execution["protocol"],
+                            "server_name": execution["server_name"],
                             "tool_name": execution["tool_name"],
                             "reason": step["reason"],
+                            "audit_record": execution["audit_record"],
                             "output": execution["output"],
                         }
                     )
@@ -834,7 +882,7 @@ def build_risk_analysis_graph(db: Session):
                         }
                     )
                     continue
-                created_record = tool_registry.execute(
+                created_record = tool_gateway.execute(
                     "approval.create_risk_draft",
                     context,
                     {
