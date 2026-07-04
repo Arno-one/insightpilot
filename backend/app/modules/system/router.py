@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.modules.auth.dependencies import require_permission
 from app.modules.system.schemas import UpdateRolePermissionsRequest, UpdateUserRolesRequest
 from app.shared.audit_policy import summarize_audit_policy
+from app.shared.deployment_readiness import summarize_deployment_readiness
 from app.shared.event_bus import event_bus
 from app.shared.response import success
 
@@ -271,6 +272,16 @@ def get_event_bus_overview(
     """中文注释：只读输出内部事件总线概览，V1 不依赖外部消息中间件。"""
     overview = event_bus.overview(tenant_id=current_user["tenant_id"])
     return success(overview, "查询成功", total=overview["event_count"])
+
+
+@router.get("/deployment-readiness")
+def get_deployment_readiness(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+):
+    """中文注释：受 RBAC 保护的部署体检详情，只输出脱敏配置状态和风险建议。"""
+    _ = current_user
+    readiness = summarize_deployment_readiness(public=False)
+    return success(readiness, "查询成功", total=sum(readiness["check_counts"].values()))
 
 
 @router.get("/access-control")

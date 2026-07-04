@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 # 中文注释：兼容 PyCharm 直接运行 backend/app/main.py 的场景，同时保持项目内部统一使用 app.* 导入。
@@ -25,6 +25,8 @@ from app.modules.evaluation.router import router as evaluation_router
 from app.modules.memory.router import router as memory_router
 from app.modules.agent_studio.router import router as agent_studio_router
 from app.modules.system.router import router as system_router
+from app.shared.deployment_readiness import summarize_deployment_readiness
+from app.shared.response import success
 
 
 def create_app() -> FastAPI:
@@ -64,6 +66,14 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health():
         return {"code": 200, "msg": "success", "data": {"status": "ok"}, "total": None}
+
+    @app.get("/health/readiness")
+    def health_readiness(response: Response):
+        # 中文注释：给容器探针和负载均衡使用，只返回无敏感信息的部署就绪摘要。
+        readiness = summarize_deployment_readiness(public=True)
+        if readiness["overall_status"] == "blocked":
+            response.status_code = 503
+        return success(readiness)
 
     return app
 
