@@ -12,6 +12,7 @@ from app.shared.enterprise_hardening import summarize_enterprise_hardening
 from app.shared.event_bus import event_bus
 from app.shared.release_gate import summarize_release_gate
 from app.shared.response import success
+from app.shared.smoke_test_plan import summarize_smoke_test_plan
 
 router = APIRouter()
 
@@ -313,6 +314,16 @@ def get_release_gate(
     """中文注释：发布准入清单只做判断，不自动发布、不自动修复。"""
     checklist = summarize_release_gate(tenant_id=current_user["tenant_id"])
     return success(checklist, "查询成功", total=checklist["item_count"])
+
+
+@router.get("/smoke-test-plan")
+def get_smoke_test_plan(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+):
+    """中文注释：企业试点冒烟测试计划只读输出，不自动执行测试步骤。"""
+    _ = current_user
+    plan = summarize_smoke_test_plan()
+    return success(plan, "查询成功", total=plan["step_count"])
 
 
 @router.get("/access-control")

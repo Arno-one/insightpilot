@@ -124,11 +124,45 @@ type ReleaseGateChecklist = {
   };
 };
 
+type SmokeTestStep = {
+  step_id: string;
+  module: string;
+  title: string;
+  priority: "p0" | "p1" | "p2";
+  mode: "manual" | "readonly_api" | "visual_check";
+  route_or_api: string;
+  operator_action: string;
+  expected_evidence: string;
+  rollback_hint: string;
+  side_effect_boundary: string;
+};
+
+type SmokeTestPlan = {
+  plan_version: string;
+  overall_status: string;
+  step_count: number;
+  priority_counts: StatusCounts;
+  mode_counts: StatusCounts;
+  steps: SmokeTestStep[];
+  operator_recording: {
+    enabled: boolean;
+    mode: string;
+    description: string;
+  };
+  execution_boundary: {
+    auto_execute_enabled: boolean;
+    external_write_enabled: boolean;
+    data_mutation_enabled: boolean;
+    description: string;
+  };
+};
+
 type HealthConsoleData = {
   hardening: EnterpriseHardeningReport;
   readiness: DeploymentReadiness;
   backup: BackupRecovery;
   releaseGate: ReleaseGateChecklist;
+  smokePlan: SmokeTestPlan;
 };
 
 const statusText: Record<string, string> = {
@@ -171,23 +205,26 @@ export default function SystemHealthPage() {
   const [data, setData] = useState<HealthConsoleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"hardening" | "deployment" | "backup" | "release">("hardening");
+  const [activeTab, setActiveTab] = useState<"hardening" | "deployment" | "backup" | "release" | "smoke">("hardening");
+  const [smokeDrafts, setSmokeDrafts] = useState<Record<string, string>>({});
 
   async function loadHealthConsole() {
     setLoading(true);
     setError("");
     try {
-      const [hardening, readiness, backup, releaseGate] = await Promise.all([
+      const [hardening, readiness, backup, releaseGate, smokePlan] = await Promise.all([
         apiFetch<EnterpriseHardeningReport>("/api/system/enterprise-hardening"),
         apiFetch<DeploymentReadiness>("/api/system/deployment-readiness"),
         apiFetch<BackupRecovery>("/api/system/backup-recovery"),
-        apiFetch<ReleaseGateChecklist>("/api/system/release-gate")
+        apiFetch<ReleaseGateChecklist>("/api/system/release-gate"),
+        apiFetch<SmokeTestPlan>("/api/system/smoke-test-plan")
       ]);
       setData({
         hardening: hardening.data,
         readiness: readiness.data,
         backup: backup.data,
-        releaseGate: releaseGate.data
+        releaseGate: releaseGate.data,
+        smokePlan: smokePlan.data
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "系统健康数据加载失败。");
@@ -247,6 +284,11 @@ export default function SystemHealthPage() {
               <span className="metric-label">备份恢复域</span>
               <p className="metric-detail">覆盖 {data.backup.table_count} 张关键表，真实对象存储仍需部署侧确认。</p>
             </article>
+            <article className="metric-card">
+              <strong className="metric-value">{data.smokePlan.step_count}</strong>
+              <span className="metric-label">冒烟测试项</span>
+              <p className="metric-detail">覆盖登录、CRM、Trace、NL2SQL、RAG、通知、审批任务和系统健康。</p>
+            </article>
           </section>
 
           <section className="command-panel">
@@ -286,12 +328,13 @@ export default function SystemHealthPage() {
                   ["hardening", "硬化报告"],
                   ["deployment", "部署就绪"],
                   ["backup", "备份恢复"],
-                  ["release", "发布门禁"]
+                  ["release", "发布门禁"],
+                  ["smoke", "冒烟计划"]
                 ].map(([key, label]) => (
                   <button
                     className={`workspace-tab ${activeTab === key ? "workspace-tab-active" : ""}`}
                     key={key}
-                    onClick={() => setActiveTab(key as "hardening" | "deployment" | "backup" | "release")}
+                    onClick={() => setActiveTab(key as "hardening" | "deployment" | "backup" | "release" | "smoke")}
                     type="button"
                   >
                     <span className="workspace-tab-dot" />
@@ -407,6 +450,69 @@ export default function SystemHealthPage() {
                         <h3>{item.title}</h3>
                         <p>{item.required_action}</p>
                       </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {activeTab === "smoke" ? (
+              <div className="health-smoke-layout">
+                <article className="summary-item">
+                  <strong>执行方式</strong>
+                  <p>{data.smokePlan.execution_boundary.description}</p>
+                </article>
+                <article className="summary-item">
+                  <strong>人工记录</strong>
+                  <p>{data.smokePlan.operator_recording.description}</p>
+                </article>
+                <article className="summary-item">
+                  <strong>优先级分布</strong>
+                  <p>P0 {data.smokePlan.priority_counts.p0 || 0} / P1 {data.smokePlan.priority_counts.p1 || 0} / P2 {data.smokePlan.priority_counts.p2 || 0}</p>
+                </article>
+                <div className="card-stack">
+                  {data.smokePlan.steps.map((step) => (
+                    <article className="health-smoke-card" key={step.step_id}>
+                      <div className="health-control-header">
+                        <div>
+                          <p className="eyebrow">{step.module} / {step.mode}</p>
+                          <h3>{step.title}</h3>
+                        </div>
+                        <span className={`meta-chip ${step.priority === "p0" ? "tone-danger" : step.priority === "p1" ? "tone-warning" : "tone-info"}`}>
+                          {step.priority.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="health-smoke-grid">
+                        <div>
+                          <strong>路径</strong>
+                          <p>{step.route_or_api}</p>
+                        </div>
+                        <div>
+                          <strong>操作</strong>
+                          <p>{step.operator_action}</p>
+                        </div>
+                        <div>
+                          <strong>预期证据</strong>
+                          <p>{step.expected_evidence}</p>
+                        </div>
+                        <div>
+                          <strong>边界</strong>
+                          <p>{step.side_effect_boundary}</p>
+                        </div>
+                      </div>
+                      <label className="health-smoke-note">
+                        <span>人工记录草稿</span>
+                        <textarea
+                          value={smokeDrafts[step.step_id] || ""}
+                          onChange={(event) =>
+                            setSmokeDrafts((current) => ({
+                              ...current,
+                              [step.step_id]: event.target.value
+                            }))
+                          }
+                          placeholder="仅保存在当前页面状态；刷新后清空，不写入后端。"
+                        />
+                      </label>
                     </article>
                   ))}
                 </div>

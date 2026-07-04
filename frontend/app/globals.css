@@ -2111,6 +2111,73 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   grid-column: 1 / -1;
 }
 
+.health-smoke-layout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.health-smoke-layout .card-stack {
+  grid-column: 1 / -1;
+}
+
+.health-smoke-card {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.health-smoke-card h3 {
+  margin: 6px 0 0;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.health-smoke-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.health-smoke-grid div,
+.health-smoke-note {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.health-smoke-grid strong,
+.health-smoke-note span {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.health-smoke-grid p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.65;
+}
+
+.health-smoke-note textarea {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  padding: 12px 14px;
+  border: 1px solid rgba(151, 184, 210, 0.24);
+  border-radius: 12px;
+  color: var(--text);
+  background: rgba(5, 13, 22, 0.42);
+  line-height: 1.6;
+}
+
 @media (max-width: 1180px) {
   .metric-grid,
   .trace-overview {
@@ -2123,6 +2190,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   .health-backup-layout,
   .health-gate-grid,
   .health-release-layout,
+  .health-smoke-layout,
+  .health-smoke-grid,
   .workspace-grid,
   .system-grid,
   .auth-shell,
