@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from app.modules.agent.platform.data_mcp_tools import build_data_mcp_tools
+from app.modules.agent.platform.execution_mcp_tools import build_execution_mcp_tools
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
 from app.modules.agent.platform.mail_mcp_tools import build_mail_mcp_tools
 from app.modules.agent.platform.manager_mcp_tools import build_manager_mcp_tools
@@ -169,6 +170,7 @@ def build_shared_mcp_gateway() -> MCPGateway:
     shared_tools = [
         *build_shared_internal_tools(),
         *build_data_mcp_tools(),
+        *build_execution_mcp_tools(),
         *build_manager_mcp_tools(),
         *build_tool_calling_internal_tools(),
         *build_mail_mcp_tools(),
@@ -179,6 +181,7 @@ def build_shared_mcp_gateway() -> MCPGateway:
             build_internal_mcp_server("report", "Report MCP", shared_tools),
             build_internal_mcp_server("approval", "Approval MCP", shared_tools),
             build_internal_mcp_server("data", "Data MCP", shared_tools),
+            build_internal_mcp_server("execution", "Execution MCP", shared_tools),
             build_internal_mcp_server("manager", "Manager MCP", shared_tools),
             build_internal_mcp_server("task", "Task MCP", shared_tools),
             build_internal_mcp_server("notify", "Notify MCP", shared_tools),

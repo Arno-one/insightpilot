@@ -9,6 +9,7 @@ from app.modules.agent import (
     chat_session_service,
     conversation_memory_service,
     data_analyst_tool,
+    execution_tool,
     intent_router,
     manager_tool,
     memory_service,
@@ -190,6 +191,20 @@ def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
             "row_count": metadata.get("row_count"),
         }
     return None
+
+
+def _load_latest_manager_decision_actions(messages: list[dict]) -> list[dict]:
+    """读取最近一次经理决策里的建议动作，供执行 Agent 转成审批草稿。"""
+    for item in reversed(messages):
+        if item.get("role") != "assistant":
+            continue
+        metadata = item.get("metadata_json") or {}
+        if metadata.get("runtime_handler") != "manager.make_decision":
+            continue
+        decision = metadata.get("decision") or {}
+        actions = decision.get("recommended_actions")
+        return actions if isinstance(actions, list) else []
+    return []
 
 
 def _build_risk_chat_session_payload(
@@ -678,6 +693,42 @@ def append_agent_chat_user_message(
             "reply": manager_result["reply"],
             "manager": manager_payload,
         }
+    elif resolved_intent == intent_router.INTENT_ACTION_EXECUTION:
+        actions = _load_latest_manager_decision_actions(existing_messages)
+        if actions:
+            execution_result = execution_tool.run_execution_proposal_tool(
+                db,
+                current_user,
+                actions=actions,
+            )
+            assistant_message = chat_session_service.append_chat_message(
+                db,
+                tenant_id=current_user["tenant_id"],
+                user_id=current_user["user_id"],
+                session_id=session_id,
+                role="assistant",
+                content=execution_result["reply"],
+                intent=resolved_intent,
+                tool_name="execution.propose_actions",
+                metadata_json={
+                    "runtime_handler": "execution.propose_actions",
+                    "approval_count": execution_result["approval_count"],
+                    "approvals": execution_result["approvals"],
+                    "execution": execution_result["execution_result"],
+                },
+            )
+            runtime_result = {
+                "handled": True,
+                "handler": "execution.propose_actions",
+                "reply": execution_result["reply"],
+                "execution": execution_result["execution_result"],
+            }
+        else:
+            runtime_result = {
+                "handled": False,
+                "handler": "execution.propose_actions",
+                "reason": "当前会话没有可提交审批的上一轮建议动作",
+            }
     elif resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
         risk_result = _run_risk_agent_chat_reply(
             db,
