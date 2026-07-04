@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     mysql_user: str = Field("root", validation_alias=AliasChoices("MYSQL_USER", "DB_USER"))
     mysql_password: str = Field("", validation_alias=AliasChoices("MYSQL_PASSWORD", "DB_PASSWORD"))
     mysql_database: str = Field("insightpilot", validation_alias=AliasChoices("MYSQL_DATABASE", "DB_NAME"))
+    mysql_readonly_user: str | None = Field(None, validation_alias="MYSQL_READONLY_USER")
+    mysql_readonly_password: str | None = Field(None, validation_alias="MYSQL_READONLY_PASSWORD")
 
     redis_host: str = Field("localhost", validation_alias="REDIS_HOST")
     redis_port: int = Field(6379, validation_alias="REDIS_PORT")
@@ -43,6 +46,7 @@ class Settings(BaseSettings):
 
     deepseek_api_key: str = Field("", validation_alias="DEEPSEEK_API_KEY")
     deepseek_base_url: str = Field("https://api.deepseek.com", validation_alias="DEEPSEEK_BASE_URL")
+    nl2sql_model: str = Field("deepseek-chat", validation_alias="NL2SQL_MODEL")
 
     dashscope_api_key: str = Field("", validation_alias="DASHSCOPE_API_KEY")
     aliyun_api_key: str = Field("", validation_alias="ALIYUN_API_KEY")
@@ -73,6 +77,12 @@ class Settings(BaseSettings):
             f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
             f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}?charset=utf8mb4"
         )
+
+    @property
+    def mysql_readonly_url(self) -> str:
+        user = self.mysql_readonly_user or self.mysql_user
+        password = self.mysql_readonly_password if self.mysql_readonly_password is not None else self.mysql_password
+        return f"mysql+pymysql://{user}:{password}@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}?charset=utf8mb4"
 
     @property
     def redis_url(self) -> str:
