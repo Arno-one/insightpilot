@@ -85,6 +85,12 @@ type NL2SQLMessageMeta = {
   error: string;
 };
 
+type RecoveryPlanItem = {
+  action?: string;
+  title?: string;
+  description?: string;
+};
+
 function intentLabel(intent: string | null | undefined) {
   const labels: Record<string, string> = {
     risk_analysis: "风险分析",
@@ -154,6 +160,14 @@ function getMessageRunId(item: AgentChatMessage) {
   return item.run_id || getStringMeta(item.metadata_json || {}, "runtime_run_id");
 }
 
+function getRecoveryPlan(item: AgentChatMessage): RecoveryPlanItem[] {
+  const value = item.metadata_json?.recovery_plan;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is RecoveryPlanItem => typeof entry === "object" && entry !== null);
+}
+
 function MessageTraceLink({ item }: { item: AgentChatMessage }) {
   const runId = getMessageRunId(item);
   if (!runId) {
@@ -168,8 +182,14 @@ function MessageTraceLink({ item }: { item: AgentChatMessage }) {
 
 function MessageBody({ item }: { item: AgentChatMessage }) {
   const nl2sqlMeta = getNL2SQLMeta(item);
+  const recoveryPlan = getRecoveryPlan(item);
   if (!nl2sqlMeta) {
-    return <p>{item.content}</p>;
+    return (
+      <>
+        <p>{item.content}</p>
+        {recoveryPlan.length ? <RecoveryPlanList items={recoveryPlan} /> : null}
+      </>
+    );
   }
 
   const [summary, ...previewLines] = item.content.split("\n");
@@ -201,6 +221,20 @@ function MessageBody({ item }: { item: AgentChatMessage }) {
         {nl2sqlMeta.queryId ? <span>Query {nl2sqlMeta.queryId}</span> : null}
         {nl2sqlMeta.sessionId ? <span>Session {nl2sqlMeta.sessionId}</span> : null}
       </div>
+      {recoveryPlan.length ? <RecoveryPlanList items={recoveryPlan} /> : null}
+    </div>
+  );
+}
+
+function RecoveryPlanList({ items }: { items: RecoveryPlanItem[] }) {
+  return (
+    <div className={styles.recoveryPlan}>
+      {items.map((item, index) => (
+        <div className={styles.recoveryItem} key={`${item.action || "recovery"}-${index}`}>
+          <strong>{item.title || item.action || "恢复建议"}</strong>
+          <span>{item.description || "请查看 Trace 详情后继续处理。"}</span>
+        </div>
+      ))}
     </div>
   );
 }
