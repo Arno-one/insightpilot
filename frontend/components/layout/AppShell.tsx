@@ -102,7 +102,14 @@ const navItems: NavItem[] = [
     summary: "把 Agent 节点、工具输出和 RAG 证据串成一条可审计的执行链路。"
   },
   {
-    label: "系统管理",
+    label: "系统健康",
+    href: "/system/health",
+    permissions: ["system:rbac:manage"],
+    eyebrow: "Health Console",
+    summary: "集中查看企业级硬化、部署就绪、备份恢复和上线前风险，让试点准入有明确证据。"
+  },
+  {
+    label: "权限管理",
     href: "/system/access-control",
     permissions: ["system:rbac:manage", "system:user_role:manage"],
     eyebrow: "Access Control",

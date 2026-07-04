@@ -2006,6 +2006,100 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   gap: 14px;
 }
 
+.health-hero-panel {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.health-status-card {
+  border-color: currentColor;
+}
+
+.health-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.health-control-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.health-control-card,
+.health-check-row {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.health-control-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.health-control-header h3,
+.health-check-row h3 {
+  margin: 6px 0 0;
+  font-size: 18px;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.health-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.health-evidence-item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.health-evidence-item span {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.health-evidence-item strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+}
+
+.health-check-row {
+  grid-template-columns: 108px 1fr;
+  align-items: start;
+}
+
+.health-check-row p {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.health-backup-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.9fr);
+  gap: 16px;
+  align-items: start;
+}
+
 @media (max-width: 1180px) {
   .metric-grid,
   .trace-overview {
@@ -2015,6 +2109,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   .report-command-bar,
   .report-workspace-grid,
   .report-risk-layout,
+  .health-backup-layout,
+  .health-gate-grid,
   .workspace-grid,
   .system-grid,
   .auth-shell,
@@ -2036,6 +2132,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   }
 
   .shell-topbar,
+  .health-hero-panel,
   .page-hero,
   .page-heading,
   .panel-header,
@@ -2071,6 +2168,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
   .metric-grid,
   .highlight-strip,
+  .health-check-row,
   .report-overview-grid,
   .report-owner-stats,
   .trace-overview,
