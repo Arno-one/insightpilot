@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.agent.platform import list_agent_chat_tool_specs
 from app.shared.ids import new_id
+from app.shared.tenant_boundary import require_current_tenant, tenant_params
 
 
 def _dumps(value: Any) -> str:
@@ -26,6 +27,7 @@ def _loads(value: Any) -> dict[str, Any]:
 
 def _row_to_agent_definition(row: dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
+    item.pop("_tenant_id", None)
     item["config_json"] = _loads(item.get("config_json"))
     item["tool_policy_json"] = _loads(item.get("tool_policy_json"))
     item["memory_policy_json"] = _loads(item.get("memory_policy_json"))
@@ -922,7 +924,8 @@ def get_agent_definition(db: Session, current_user: dict[str, Any], *, definitio
     row = db.execute(
         text(
             """
-            SELECT definition_id, agent_code, agent_name, description, agent_type, runtime_type,
+            SELECT tenant_id AS _tenant_id,
+                   definition_id, agent_code, agent_name, description, agent_type, runtime_type,
                    status, version, config_json, tool_policy_json, memory_policy_json,
                    created_by_user_id, updated_by_user_id, created_at, updated_at
             FROM agent_definition
@@ -930,8 +933,9 @@ def get_agent_definition(db: Session, current_user: dict[str, Any], *, definitio
             LIMIT 1
             """
         ),
-        {"tenant_id": current_user["tenant_id"], "definition_id": definition_id},
+        tenant_params(current_user, definition_id=definition_id),
     ).mappings().first()
     if not row:
         raise ValueError("Agent Definition 不存在")
+    require_current_tenant(current_user, row["_tenant_id"], resource_name="Agent Definition")
     return _row_to_agent_definition(row)
