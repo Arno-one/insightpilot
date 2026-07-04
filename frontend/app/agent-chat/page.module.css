@@ -191,6 +191,20 @@
   text-decoration: underline;
 }
 
+.recoverySummary {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 200, 87, 0.18);
+}
+
+.recoverySummary span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .recoveryPlan {
   display: grid;
   gap: 8px;

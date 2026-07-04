@@ -133,6 +133,14 @@ type RecoveryEvent = {
   error?: string;
 };
 
+type RecoveryEventSummary = {
+  total: number;
+  failedCount: number;
+  succeededCount: number;
+  runningCount: number;
+  lastEvent: RecoveryEvent;
+};
+
 function intentLabel(intent: string | null | undefined) {
   const labels: Record<string, string> = {
     risk_analysis: "风险分析",
@@ -242,6 +250,20 @@ function recoveryEventStatusLabel(status: RecoveryEvent["status"]) {
     return "失败";
   }
   return "已记录";
+}
+
+function buildRecoveryEventSummary(messages: AgentChatMessage[]): RecoveryEventSummary | null {
+  const events = messages.map(getRecoveryEvent).filter((event): event is RecoveryEvent => Boolean(event));
+  if (!events.length) {
+    return null;
+  }
+  return {
+    total: events.length,
+    failedCount: events.filter((event) => event.status === "failed").length,
+    succeededCount: events.filter((event) => event.status === "succeeded").length,
+    runningCount: events.filter((event) => event.status === "running").length,
+    lastEvent: events[events.length - 1],
+  };
 }
 
 function MessageTraceLink({ item }: { item: AgentChatMessage }) {
@@ -434,6 +456,7 @@ function AgentChatContent() {
     () => sessions.find((item) => item.session_id === activeSessionId) || null,
     [activeSessionId, sessions]
   );
+  const recoveryEventSummary = useMemo(() => buildRecoveryEventSummary(messages), [messages]);
 
   async function loadSessionDetail(sessionId: string, options?: { preserveRecoveryAction?: boolean }) {
     const response = await apiFetch<AgentChatDetail>(`/api/agent/chat/sessions/${sessionId}`);
@@ -830,6 +853,32 @@ function AgentChatContent() {
                   </div>
                 ) : null}
               </div>
+              {recoveryEventSummary ? (
+                <div className="summary-item">
+                  <strong>恢复事件</strong>
+                  <p>
+                    已记录 {recoveryEventSummary.total} 条，成功 {recoveryEventSummary.succeededCount} 条，失败{" "}
+                    {recoveryEventSummary.failedCount} 条。
+                  </p>
+                  <div className={styles.recoverySummary}>
+                    <span>最近状态：{recoveryEventStatusLabel(recoveryEventSummary.lastEvent.status)}</span>
+                    {recoveryEventSummary.runningCount ? <span>仍有 {recoveryEventSummary.runningCount} 条执行中事件。</span> : null}
+                    {recoveryEventSummary.lastEvent.error ? <span>最近错误：{recoveryEventSummary.lastEvent.error}</span> : null}
+                    <div className={styles.recoveryStatusLinks}>
+                      {recoveryEventSummary.lastEvent.source_run_id ? (
+                        <Link href={`/agent-trace?runId=${encodeURIComponent(recoveryEventSummary.lastEvent.source_run_id)}`}>
+                          原 Trace {shortRunId(recoveryEventSummary.lastEvent.source_run_id)}
+                        </Link>
+                      ) : null}
+                      {recoveryEventSummary.lastEvent.new_run_id ? (
+                        <Link href={`/agent-trace?runId=${encodeURIComponent(recoveryEventSummary.lastEvent.new_run_id)}`}>
+                          新 Trace {shortRunId(recoveryEventSummary.lastEvent.new_run_id)}
+                        </Link>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               <div className="summary-item">
                 <strong>能力边界</strong>
                 <p>当前版本已接 Risk Agent 和 NL2SQL 数据查询。报告解释和执行 Agent 会在后续版本挂入同一入口。</p>
