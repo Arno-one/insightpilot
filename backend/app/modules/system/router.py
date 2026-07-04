@@ -144,6 +144,114 @@ def _ensure_not_remove_last_admin(db: Session, tenant_id: str, user_id: str, nex
         raise HTTPException(status_code=400, detail="系统中至少需要保留一个 admin 账号")
 
 
+def _derive_team_scope(role_codes: list[str], permission_codes: list[str]) -> str:
+    """中文注释：Org / Team V1 先从角色和权限推导团队层级，后续可平滑替换为组织表。"""
+    role_set = set(role_codes)
+    permission_set = set(permission_codes)
+    if {"admin", "owner"} & role_set or "crm:customer:read:all" in permission_set:
+        return "tenant_admin"
+    if "manager" in role_set or "crm:customer:read:team" in permission_set:
+        return "team_manager"
+    if "salesperson" in role_set or "crm:customer:read:self" in permission_set:
+        return "team_member"
+    return "limited_member"
+
+
+def _derive_crm_visibility(permission_codes: list[str]) -> str:
+    permission_set = set(permission_codes)
+    if "crm:customer:read:all" in permission_set:
+        return "all"
+    if "crm:customer:read:team" in permission_set:
+        return "team"
+    if "crm:customer:read:self" in permission_set:
+        return "self"
+    return "none"
+
+
+def _list_user_permission_codes(db: Session, tenant_id: str, user_id: str) -> list[str]:
+    return db.execute(
+        text(
+            """
+            SELECT DISTINCT p.permission_code
+            FROM sys_user_role ur
+            JOIN sys_role_permission rp ON rp.tenant_id = ur.tenant_id AND rp.role_id = ur.role_id
+            JOIN sys_permission p ON p.permission_id = rp.permission_id
+            WHERE ur.tenant_id = :tenant_id
+              AND ur.user_id = :user_id
+              AND p.status = 1
+            ORDER BY p.permission_code ASC
+            """
+        ),
+        {"tenant_id": tenant_id, "user_id": user_id},
+    ).scalars().all()
+
+
+@router.get("/team-model")
+def get_team_model(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    tenant_id = current_user["tenant_id"]
+    user_rows = db.execute(
+        text(
+            """
+            SELECT user_id, username, real_name, status
+            FROM sys_user
+            WHERE tenant_id = :tenant_id AND is_deleted = 0
+            ORDER BY username ASC
+            """
+        ),
+        {"tenant_id": tenant_id},
+    ).mappings().all()
+
+    users = []
+    scope_counts: dict[str, int] = {}
+    for row in user_rows:
+        user = dict(row)
+        role_links = db.execute(
+            text(
+                """
+                SELECT r.role_id, r.role_code, r.role_name
+                FROM sys_user_role ur
+                JOIN sys_role r ON r.tenant_id = ur.tenant_id AND r.role_id = ur.role_id
+                WHERE ur.tenant_id = :tenant_id AND ur.user_id = :user_id AND r.status = 1
+                ORDER BY r.role_code ASC
+                """
+            ),
+            {"tenant_id": tenant_id, "user_id": user["user_id"]},
+        ).mappings().all()
+        role_codes = [item["role_code"] for item in role_links]
+        permission_codes = _list_user_permission_codes(db, tenant_id, user["user_id"])
+        team_scope = _derive_team_scope(role_codes, permission_codes)
+        scope_counts[team_scope] = scope_counts.get(team_scope, 0) + 1
+        users.append(
+            {
+                **user,
+                "role_ids": [item["role_id"] for item in role_links],
+                "role_codes": role_codes,
+                "role_names": [item["role_name"] for item in role_links],
+                "permission_codes": permission_codes,
+                "team_scope": team_scope,
+                "crm_visibility": _derive_crm_visibility(permission_codes),
+                "can_manage_team": "crm:customer:read:team" in permission_codes,
+                "can_review_approval": "approval:review:agent_task" in permission_codes,
+                "can_manage_system": SYSTEM_RBAC_PERMISSION in permission_codes,
+            }
+        )
+
+    return success(
+        {
+            "model_version": "org_team_model_v1",
+            "tenant_id": tenant_id,
+            "user_count": len(users),
+            "scope_counts": scope_counts,
+            "users": users,
+        },
+        "查询成功",
+        total=len(users),
+    )
+
+
 @router.get("/access-control")
 def get_access_control_data(
     current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
