@@ -114,6 +114,17 @@ def validate_agent_memory_policy_by_code(
     return success(item, "Agent Memory Policy 校验完成")
 
 
+@router.get("/definitions/by-code/{agent_code}/publish-audits")
+def list_agent_publish_audits_by_code(
+    agent_code: str,
+    limit: int = 50,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    rows = service.list_agent_publish_audits(db, current_user, agent_code=agent_code, limit=limit)
+    return success(rows, "查询成功", total=len(rows))
+
+
 @router.get("/definitions/{definition_id}")
 def get_agent_definition(
     definition_id: str,
@@ -177,6 +188,17 @@ def validate_agent_memory_policy(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return success(item, "Agent Memory Policy 校验完成")
+
+
+@router.get("/definitions/{definition_id}/publish-audits")
+def list_agent_publish_audits(
+    definition_id: str,
+    limit: int = 50,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    rows = service.list_agent_publish_audits(db, current_user, definition_id=definition_id, limit=limit)
+    return success(rows, "查询成功", total=len(rows))
 
 
 @router.post("/definitions/{definition_id}/clone")

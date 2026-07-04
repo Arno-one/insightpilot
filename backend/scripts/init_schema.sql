@@ -661,3 +661,23 @@ CREATE TABLE IF NOT EXISTS rag_retrieval_hit (
   KEY idx_tenant_doc (tenant_id, doc_id),
   KEY idx_source_type (source_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='RAG 命中明细表';
+
+CREATE TABLE IF NOT EXISTS agent_definition_publish_audit (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'auto increment primary key',
+  tenant_id VARCHAR(64) NOT NULL COMMENT 'tenant id',
+  audit_id VARCHAR(64) NOT NULL COMMENT 'publish audit business id',
+  definition_id VARCHAR(64) NOT NULL COMMENT 'agent definition business id',
+  agent_code VARCHAR(80) NOT NULL COMMENT 'agent code',
+  version INT NOT NULL COMMENT 'agent definition version',
+  publish_status VARCHAR(30) NOT NULL COMMENT 'published or blocked',
+  validation_json JSON NULL COMMENT 'publish gate validation result json',
+  error_count INT NOT NULL DEFAULT 0 COMMENT 'error count',
+  warning_count INT NOT NULL DEFAULT 0 COMMENT 'warning count',
+  message VARCHAR(500) NULL COMMENT 'publish result message',
+  published_by_user_id VARCHAR(64) NOT NULL COMMENT 'publish operator user id',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'audit created time',
+  UNIQUE KEY uk_agent_publish_audit_id (audit_id),
+  KEY idx_tenant_definition_created (tenant_id, definition_id, created_at),
+  KEY idx_tenant_agent_created (tenant_id, agent_code, created_at),
+  KEY idx_tenant_status_created (tenant_id, publish_status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent Definition publish audit table';

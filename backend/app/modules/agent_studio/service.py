@@ -35,6 +35,15 @@ def _row_to_agent_definition(row: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _row_to_publish_audit(row: dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    item["validation_json"] = _loads(item.get("validation_json"))
+    for key in ["created_at"]:
+        value = item.get(key)
+        item[key] = value.isoformat() if hasattr(value, "isoformat") else value
+    return item
+
+
 def create_agent_definition(
     db: Session,
     current_user: dict[str, Any],
@@ -572,20 +581,132 @@ def publish_agent_definition(
 ) -> dict[str, Any]:
     validation = validate_agent_publish_readiness(db, current_user, definition_id=definition_id)
     if not validation["valid"]:
+        audit = create_agent_publish_audit(
+            db,
+            current_user,
+            definition=validation["definition"],
+            published=False,
+            validation=validation,
+            message="Agent Definition 未通过发布门禁",
+        )
         return {
             "published": False,
             "definition": validation["definition"],
             "validation": validation,
+            "publish_audit": audit,
             "message": "Agent Definition 未通过发布门禁",
         }
 
     published = update_agent_definition_status(db, current_user, definition_id=definition_id, status="active")
+    audit = create_agent_publish_audit(
+        db,
+        current_user,
+        definition=published,
+        published=True,
+        validation=validation,
+        message="Agent Definition 已发布",
+    )
     return {
         "published": True,
         "definition": published,
         "validation": validation,
+        "publish_audit": audit,
         "message": "Agent Definition 已发布",
     }
+
+
+def create_agent_publish_audit(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition: dict[str, Any],
+    published: bool,
+    validation: dict[str, Any],
+    message: str,
+) -> dict[str, Any]:
+    audit_id = new_id("agentaudit")
+    summary = validation.get("summary") or {}
+    db.execute(
+        text(
+            """
+            INSERT INTO agent_definition_publish_audit (
+              tenant_id, audit_id, definition_id, agent_code, version, publish_status,
+              validation_json, error_count, warning_count, message, published_by_user_id
+            )
+            VALUES (
+              :tenant_id, :audit_id, :definition_id, :agent_code, :version, :publish_status,
+              :validation_json, :error_count, :warning_count, :message, :published_by_user_id
+            )
+            """
+        ),
+        {
+            "tenant_id": current_user["tenant_id"],
+            "audit_id": audit_id,
+            "definition_id": definition["definition_id"],
+            "agent_code": definition["agent_code"],
+            "version": definition["version"],
+            "publish_status": "published" if published else "blocked",
+            "validation_json": _dumps(validation),
+            "error_count": int(summary.get("error_count") or 0),
+            "warning_count": int(summary.get("warning_count") or 0),
+            "message": message,
+            "published_by_user_id": current_user["user_id"],
+        },
+    )
+    db.commit()
+    return get_agent_publish_audit(db, current_user, audit_id=audit_id)
+
+
+def get_agent_publish_audit(db: Session, current_user: dict[str, Any], *, audit_id: str) -> dict[str, Any]:
+    row = db.execute(
+        text(
+            """
+            SELECT audit_id, definition_id, agent_code, version, publish_status,
+                   validation_json, error_count, warning_count, message,
+                   published_by_user_id, created_at
+            FROM agent_definition_publish_audit
+            WHERE tenant_id = :tenant_id AND audit_id = :audit_id
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": current_user["tenant_id"], "audit_id": audit_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError("Agent 发布审计记录不存在")
+    return _row_to_publish_audit(row)
+
+
+def list_agent_publish_audits(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str | None = None,
+    agent_code: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    filters = ["tenant_id = :tenant_id"]
+    params: dict[str, Any] = {"tenant_id": current_user["tenant_id"], "limit": max(1, min(limit, 100))}
+    if definition_id:
+        filters.append("definition_id = :definition_id")
+        params["definition_id"] = definition_id
+    if agent_code:
+        filters.append("agent_code = :agent_code")
+        params["agent_code"] = agent_code
+    rows = db.execute(
+        text(
+            f"""
+            SELECT audit_id, definition_id, agent_code, version, publish_status,
+                   validation_json, error_count, warning_count, message,
+                   published_by_user_id, created_at
+            FROM agent_definition_publish_audit
+            WHERE {' AND '.join(filters)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).mappings().all()
+    return [_row_to_publish_audit(row) for row in rows]
 
 
 def list_agent_definitions(

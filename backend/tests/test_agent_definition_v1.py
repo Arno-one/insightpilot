@@ -35,11 +35,38 @@ def _ensure_agent_definition_table_exists():
                 """
             )
         )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS agent_definition_publish_audit (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  audit_id VARCHAR(64) NOT NULL,
+                  definition_id VARCHAR(64) NOT NULL,
+                  agent_code VARCHAR(80) NOT NULL,
+                  version INT NOT NULL,
+                  publish_status VARCHAR(30) NOT NULL,
+                  validation_json JSON NULL,
+                  error_count INT NOT NULL DEFAULT 0,
+                  warning_count INT NOT NULL DEFAULT 0,
+                  message VARCHAR(500) NULL,
+                  published_by_user_id VARCHAR(64) NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_agent_publish_audit_id (audit_id),
+                  KEY idx_tenant_definition_created (tenant_id, definition_id, created_at),
+                  KEY idx_tenant_agent_created (tenant_id, agent_code, created_at),
+                  KEY idx_tenant_status_created (tenant_id, publish_status, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
         db.commit()
 
 
 def _cleanup_agent_definition_fixture(tenant_id: str):
     with SessionLocal() as db:
+        # 中文注释：发布审计依赖 definition_id，但测试清理时先删审计可以避免残留影响后续断言。
+        db.execute(text("DELETE FROM agent_definition_publish_audit WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id})
         db.execute(text("DELETE FROM agent_definition WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id})
         db.commit()
 
