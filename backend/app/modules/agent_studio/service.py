@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.modules.agent.platform import list_agent_chat_tool_specs
 from app.shared.ids import new_id
 
 
@@ -230,6 +231,91 @@ def get_latest_active_agent_definition(
     if not row:
         raise ValueError("Agent Definition 最新可用版本不存在")
     return _row_to_agent_definition(row)
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _build_tool_manifest(tool_policy: dict[str, Any], current_user: dict[str, Any]) -> dict[str, Any]:
+    tool_specs = list_agent_chat_tool_specs(current_user)
+    specs_by_name = {item["name"]: item for item in tool_specs}
+    allowed_tools = _normalize_string_list(tool_policy.get("allowed_tools"))
+    denied_tools = set(_normalize_string_list(tool_policy.get("denied_tools")))
+    selected_names = allowed_tools or []
+    enabled_tools = [
+        specs_by_name[name]
+        for name in selected_names
+        if name in specs_by_name and specs_by_name[name].get("available") and name not in denied_tools
+    ]
+    blocked_tools = [
+        specs_by_name[name]
+        for name in selected_names
+        if name in specs_by_name and (not specs_by_name[name].get("available") or name in denied_tools)
+    ]
+    missing_tools = [name for name in selected_names if name not in specs_by_name]
+    # 中文注释：Manifest 只暴露定义显式允许的工具，避免 Agent 发布后意外继承新增工具能力。
+    return {
+        "router": tool_policy.get("router") or "agent_chat_tool_router_v1",
+        "allowed_tools": allowed_tools,
+        "denied_tools": sorted(denied_tools),
+        "enabled_tools": enabled_tools,
+        "blocked_tools": blocked_tools,
+        "missing_tools": missing_tools,
+        "registry_tool_count": len(tool_specs),
+    }
+
+
+def build_agent_manifest(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str | None = None,
+    agent_code: str | None = None,
+) -> dict[str, Any]:
+    if definition_id:
+        definition = get_agent_definition(db, current_user, definition_id=definition_id)
+    elif agent_code:
+        definition = get_latest_active_agent_definition(db, current_user, agent_code=agent_code)
+    else:
+        raise ValueError("必须提供 definition_id 或 agent_code")
+
+    config = definition["config_json"]
+    tool_policy = definition["tool_policy_json"]
+    memory_policy = definition["memory_policy_json"]
+    return {
+        "manifest_version": "agent_manifest_v1",
+        "tenant_id": current_user["tenant_id"],
+        "definition": {
+            "definition_id": definition["definition_id"],
+            "agent_code": definition["agent_code"],
+            "agent_name": definition["agent_name"],
+            "description": definition["description"],
+            "agent_type": definition["agent_type"],
+            "runtime_type": definition["runtime_type"],
+            "status": definition["status"],
+            "version": definition["version"],
+        },
+        "runtime": {
+            "runtime_type": definition["runtime_type"],
+            "entrypoint": config.get("entrypoint"),
+            "config": config,
+        },
+        "tool_manifest": _build_tool_manifest(tool_policy, current_user),
+        "memory_manifest": {
+            "enabled": bool(memory_policy),
+            "context_packet": bool(memory_policy.get("context_packet")),
+            "max_chars": int(memory_policy.get("max_chars") or 0),
+            "policy": memory_policy,
+        },
+        "governance": {
+            "requires_active_for_code_lookup": True,
+            "single_active_version": True,
+            "loaded_by_user_id": current_user["user_id"],
+        },
+    }
 
 
 def list_agent_definitions(
