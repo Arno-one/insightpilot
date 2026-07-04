@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 INTENT_RISK_ANALYSIS = "risk_analysis"
 INTENT_BUSINESS_ANALYSIS = "business_analysis"
+INTENT_MANAGER_DECISION = "manager_decision"
 INTENT_CUSTOMER_QUERY = "customer_query"
 INTENT_REPORT_QUERY = "report_query"
 INTENT_DATA_QUERY = "data_query"
@@ -43,6 +44,22 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "负责人转化率",
         "风险最高",
         "topn",
+    ],
+    INTENT_MANAGER_DECISION: [
+        "经营决策",
+        "决策建议",
+        "建议动作",
+        "优先处理",
+        "优先跟进",
+        "重点跟进",
+        "该优先",
+        "该处理",
+        "老板",
+        "销售需要",
+        "哪些销售",
+        "哪些客户",
+        "怎么处理",
+        "下一步动作",
     ],
     INTENT_DATA_QUERY: [
         "多少",
@@ -93,6 +110,7 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
 INTENT_REASON_LABELS = {
     INTENT_RISK_ANALYSIS: "命中风险分析相关表达",
     INTENT_BUSINESS_ANALYSIS: "命中经营分析相关表达",
+    INTENT_MANAGER_DECISION: "命中经营决策相关表达",
     INTENT_CUSTOMER_QUERY: "命中客户经营相关表达",
     INTENT_REPORT_QUERY: "命中经营报告相关表达",
     INTENT_DATA_QUERY: "命中数据查询相关表达",
@@ -119,6 +137,10 @@ def _score_intent(question: str, intent: str, keywords: list[str]) -> tuple[int,
         keyword in matched for keyword in ["为什么", "原因", "下降", "趋势", "异常", "归因", "转化率", "风险最高"]
     ):
         score += 3
+    if intent == INTENT_MANAGER_DECISION and any(
+        keyword in matched for keyword in ["建议动作", "优先处理", "重点跟进", "该优先", "哪些客户", "哪些销售", "下一步动作"]
+    ):
+        score += 4
     if intent == INTENT_RISK_ANALYSIS and any(keyword in matched for keyword in ["风险", "流失", "预警", "竞品"]):
         score += 3
     if intent == INTENT_REPORT_QUERY and any(keyword in matched for keyword in ["报告", "日报", "周报", "月报", "经营简报"]):

@@ -10,6 +10,7 @@ from app.modules.agent import (
     conversation_memory_service,
     data_analyst_tool,
     intent_router,
+    manager_tool,
     memory_service,
     nl2sql_tool,
 )
@@ -167,7 +168,12 @@ def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
         if item.get("role") != "assistant":
             continue
         metadata = item.get("metadata_json") or {}
-        if metadata.get("runtime_handler") not in {"nl2sql_tool", "data.query_sql", "data.analyze_business"}:
+        if metadata.get("runtime_handler") not in {
+            "nl2sql_tool",
+            "data.query_sql",
+            "data.analyze_business",
+            "manager.make_decision",
+        }:
             continue
 
         previous_question = ""
@@ -530,11 +536,12 @@ def append_agent_chat_user_message(
         session_id=session_id,
         limit=20,
     )
-    data_query_context = (
-        _load_latest_data_query_context(existing_messages)
-        if resolved_intent in {intent_router.INTENT_DATA_QUERY, intent_router.INTENT_BUSINESS_ANALYSIS}
-        else None
-    )
+    data_context_intents = {
+        intent_router.INTENT_DATA_QUERY,
+        intent_router.INTENT_BUSINESS_ANALYSIS,
+        intent_router.INTENT_MANAGER_DECISION,
+    }
+    data_query_context = _load_latest_data_query_context(existing_messages) if resolved_intent in data_context_intents else None
     message = chat_session_service.append_chat_message(
         db,
         tenant_id=current_user["tenant_id"],
@@ -630,6 +637,46 @@ def append_agent_chat_user_message(
             "handler": "data.analyze_business",
             "reply": analyst_result["reply"],
             "analysis": analyst_result["analysis_result"],
+        }
+    elif resolved_intent == intent_router.INTENT_MANAGER_DECISION:
+        manager_result = manager_tool.run_manager_decision_tool(
+            db,
+            readonly_db,
+            current_user,
+            question=body.content,
+            session_id=(data_query_context or {}).get("nl2sql_session_id"),
+            context_payload=data_query_context,
+        )
+        manager_payload = manager_result["manager_result"]
+        decision = manager_payload.get("decision") or {}
+        data_analysis = manager_payload.get("data_analysis") or {}
+        query = data_analysis.get("query") or {}
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=manager_result["reply"],
+            intent=resolved_intent,
+            tool_name="manager.make_decision",
+            metadata_json={
+                "runtime_handler": "manager.make_decision",
+                "query_id": manager_result["query_id"],
+                "nl2sql_session_id": manager_result["nl2sql_session_id"],
+                "row_count": manager_result["row_count"],
+                "error": manager_result["error"],
+                "sql": query.get("sql"),
+                "decision": decision,
+                "recommended_action_count": manager_result["recommended_action_count"],
+                "followup_context": data_query_context or {},
+            },
+        )
+        runtime_result = {
+            "handled": True,
+            "handler": "manager.make_decision",
+            "reply": manager_result["reply"],
+            "manager": manager_payload,
         }
     elif resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
         risk_result = _run_risk_agent_chat_reply(
