@@ -4,6 +4,7 @@ import { ChangeEvent, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
+import { ThemedSelect } from "@/components/ui/ThemedSelect";
 import { apiFetch, apiFetchBlob } from "@/lib/api";
 
 type ImportEntity = "customer" | "deal" | "follow_up";
@@ -336,6 +337,7 @@ export default function ImportsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [retrySubmitting, setRetrySubmitting] = useState(false);
+  const [importView, setImportView] = useState<"guide" | "import" | "result">("import");
 
   const currentConfig = useMemo(
     () => importConfigs.find((item) => item.key === selectedEntity) || importConfigs[0],
@@ -470,7 +472,7 @@ export default function ImportsPage() {
         retryHeaders,
         retryRows.map((item) => item.rowData)
       );
-      // 中文注释：这里不额外发明“重试接口”，而是前端生成一个临时 CSV 文件，再复用现有导入链路。
+      // 中文注释：这里不额外发明"重试接口"，而是前端生成一个临时 CSV 文件，再复用现有导入链路。
       const retryFile = new File([`\ufeff${csvContent}`], `${selectedEntity}_retry.csv`, {
         type: "text/csv;charset=utf-8"
       });
@@ -527,14 +529,7 @@ export default function ImportsPage() {
 
   return (
     <AppShell>
-      <section className="page-hero">
-        <div>
-          <p className="eyebrow">CRM Intake</p>
-          <h1>先把轻量数据入口搭好，再让客户详情、风险和报告去消费同一份主数据。</h1>
-          <p className="lead">
-            这一版先聚焦三类最小必需字段集，按模板上传、按行校验、只新增不覆盖，并且沿用现有 CRM 读取权限控制入口。
-          </p>
-        </div>
+      <section className="command-panel">
         <div className="page-actions">
           {importConfigs.map((item) => (
             <button
@@ -555,178 +550,201 @@ export default function ImportsPage() {
       <section className="metric-grid">
         <article className="metric-card">
           <strong className="metric-value">{currentConfig.requiredFields.length}</strong>
-          <span className="metric-label">必填字段数</span>
-          <p className="metric-detail">先用最小字段集把入库门槛压低，后续再逐步扩充高级字段。</p>
+          <span className="metric-label">必填字段</span>
         </article>
         <article className="metric-card">
           <strong className="metric-value">只新增</strong>
           <span className="metric-label">重复主键策略</span>
-          <p className="metric-detail">当前明确采用“只新增不覆盖”，避免导入误操作把线上已校验数据冲掉。</p>
         </article>
         <article className="metric-card">
           <strong className="metric-value">CRM Read</strong>
           <span className="metric-label">复用权限</span>
-          <p className="metric-detail">入口和接口都复用了现有 CRM 读取权限，不额外新增一组导入权限点。</p>
         </article>
         <article className="metric-card">
           <strong className="metric-value">{result?.success_count ?? 0}</strong>
-          <span className="metric-label">最近成功行数</span>
-          <p className="metric-detail">这里显示最近一次导入成功写入的行数，方便快速确认有没有真正落库。</p>
+          <span className="metric-label">最近成功行</span>
         </article>
       </section>
 
-      <section className="workspace-grid">
-        <article className="command-panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">{currentConfig.eyebrow}</p>
-              <h2>{currentConfig.label}</h2>
-              <p className="panel-copy">{currentConfig.lead}</p>
-            </div>
-          </div>
+      <div className="section-eyebrow-row">
+        <p className="eyebrow">Workspace</p>
+        <div className="workspace-tabs">
+          <button
+            className={`workspace-tab ${importView === "import" ? "workspace-tab-active" : ""}`}
+            onClick={() => setImportView("import")}
+            type="button"
+          >
+            <span className="workspace-tab-dot" />
+            数据导入
+          </button>
+          <button
+            className={`workspace-tab ${importView === "guide" ? "workspace-tab-active" : ""}`}
+            onClick={() => setImportView("guide")}
+            type="button"
+          >
+            <span className="workspace-tab-dot" />
+            字段指引
+          </button>
+          <button
+            className={`workspace-tab ${importView === "result" ? "workspace-tab-active" : ""}`}
+            onClick={() => setImportView("result")}
+            type="button"
+          >
+            <span className="workspace-tab-dot" />
+            导入结果
+          </button>
+        </div>
+      </div>
 
-          <div className="import-upload-box">
-            <strong>当前模板字段</strong>
-            <p className="muted-text">{currentConfig.requiredFields.join("、")}</p>
-            <label className="import-file-field">
-              <span>选择 CSV 文件</span>
-              <input
-                accept=".csv,text/csv"
-                onChange={handleFileChange}
-                type="file"
-              />
-            </label>
-            <p className="muted-text">
-              {selectedFile ? `已选择文件：${selectedFile.name}` : "还没有选择文件，建议先下载模板再补数据。"}
-            </p>
-            {filePrecheck ? (
-              <div className="import-precheck-box">
-                <strong>上传前预检</strong>
-                <div className="detail-list">
-                  <div className="detail-item">
-                    <strong>识别到的表头</strong>
-                    <p>{filePrecheck.sourceHeaders.length ? filePrecheck.sourceHeaders.join("、") : "当前没有识别到有效表头。"}</p>
+      {importView === "import" ? (
+        <section className="workspace-grid">
+          <article className="command-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">{currentConfig.eyebrow}</p>
+                <h2>{currentConfig.label}</h2>
+              </div>
+            </div>
+
+            <div className="import-upload-box">
+              <strong>当前模板字段</strong>
+              <p className="muted-text">{currentConfig.requiredFields.join("、")}</p>
+              <label className="import-file-field">
+                <span>选择 CSV 文件</span>
+                <input
+                  accept=".csv,text/csv"
+                  onChange={handleFileChange}
+                  type="file"
+                />
+              </label>
+              <p className="muted-text">
+                {selectedFile ? `已选择文件：${selectedFile.name}` : "还没有选择文件，建议先下载模板再补数据。"}
+              </p>
+              {filePrecheck ? (
+                <div className="import-precheck-box">
+                  <strong>上传前预检</strong>
+                  <div className="detail-list">
+                    <div className="detail-item">
+                      <strong>识别到的表头</strong>
+                      <p>{filePrecheck.sourceHeaders.length ? filePrecheck.sourceHeaders.join("、") : "当前没有识别到有效表头。"}</p>
+                    </div>
+                    <div className="detail-item">
+                      <strong>缺失标准字段</strong>
+                      <p>{filePrecheck.missingRequiredFields.length ? filePrecheck.missingRequiredFields.join("、") : "没有缺失字段映射。"}</p>
+                    </div>
+                    <div className="detail-item">
+                      <strong>未映射原始表头</strong>
+                      <p>{filePrecheck.unmappedSourceHeaders.length ? filePrecheck.unmappedSourceHeaders.join("、") : "所有识别到的表头都已完成映射。"}</p>
+                    </div>
                   </div>
-                  <div className="detail-item">
-                    <strong>缺失标准字段</strong>
-                    <p>{filePrecheck.missingRequiredFields.length ? filePrecheck.missingRequiredFields.join("、") : "没有缺失字段映射，可以直接继续导入。"}</p>
-                  </div>
-                  <div className="detail-item">
-                    <strong>未映射原始表头</strong>
-                    <p>{filePrecheck.unmappedSourceHeaders.length ? filePrecheck.unmappedSourceHeaders.join("、") : "所有识别到的表头都已完成映射。"}</p>
+                  <div className="mapping-grid">
+                    {filePrecheck.sourceHeaders.map((header) => (
+                      <label className="mapping-field" key={`mapping-${header}`}>
+                        <span>{header}</span>
+                        <ThemedSelect
+                          className="themed-select-compact"
+                          onChange={(value) => handleHeaderMappingChange(header, value)}
+                          options={[
+                            { value: "", label: "忽略该列" },
+                            ...mappingOptions,
+                          ]}
+                          value={filePrecheck.mappedHeaders[header] || ""}
+                        />
+                      </label>
+                    ))}
                   </div>
                 </div>
-                <div className="mapping-grid">
-                  {filePrecheck.sourceHeaders.map((header) => (
-                    <label className="mapping-field" key={`mapping-${header}`}>
-                      <span>{header}</span>
-                      <select
-                        className="input-like mapping-select"
-                        onChange={(event) => handleHeaderMappingChange(header, event.target.value)}
-                        value={filePrecheck.mappedHeaders[header] || ""}
-                      >
-                        <option value="">忽略该列</option>
-                        {mappingOptions.map((option) => (
-                          <option key={`${header}-${option.value}`} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="page-actions">
-            <button className="button-secondary" disabled={downloadingTemplate} onClick={handleTemplateDownload} type="button">
-              {downloadingTemplate ? "模板下载中..." : "下载模板"}
-            </button>
-            <button className="button" disabled={!selectedFile || submitting} onClick={handleImportSubmit} type="button">
-              {submitting ? "导入执行中..." : "开始导入"}
-            </button>
-            <button
-              className="ghost-button"
-              onClick={() => {
-                setSelectedFile(null);
-                setFilePrecheck(null);
-                setResult(null);
-                setRetryRows([]);
-                setMessage("");
-                setError("");
-              }}
-              type="button"
-            >
-              清空本次结果
-            </button>
-          </div>
-        </article>
-
-        <article className="command-panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Validation Notes</p>
-              <h2>导入前要先过哪些门槛</h2>
+              ) : null}
             </div>
-          </div>
-          <div className="detail-list">
-            {currentConfig.validationRules.map((rule) => (
-              <div className="detail-item" key={rule}>
-                <strong>校验规则</strong>
-                <p>{rule}</p>
-              </div>
-            ))}
-          </div>
-        </article>
-      </section>
 
-      <section className="workspace-grid">
-        <article className="command-panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Format Examples</p>
-              <h2>字段格式示例</h2>
+            <div className="page-actions">
+              <button className="button-secondary" disabled={downloadingTemplate} onClick={handleTemplateDownload} type="button">
+                {downloadingTemplate ? "模板下载中..." : "下载模板"}
+              </button>
+              <button className="button" disabled={!selectedFile || submitting} onClick={handleImportSubmit} type="button">
+                {submitting ? "导入执行中..." : "开始导入"}
+              </button>
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  setSelectedFile(null);
+                  setFilePrecheck(null);
+                  setResult(null);
+                  setRetryRows([]);
+                  setMessage("");
+                  setError("");
+                }}
+                type="button"
+              >
+                清空本次结果
+              </button>
             </div>
-          </div>
-          <div className="detail-list">
-            {currentConfig.fieldGuides.map((field) => (
-              <div className="detail-item" key={`format-${field.key}`}>
-                <strong>{field.key}</strong>
-                <p>{field.formatExample ? `示例：${field.formatExample}` : "当前字段没有固定格式示例。"}</p>
-                {field.note ? <p>{field.note}</p> : null}
-              </div>
-            ))}
-          </div>
-        </article>
+          </article>
 
-        <article className="command-panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Enum Options</p>
-              <h2>枚举可选值提示</h2>
+          <article className="command-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Validation Notes</p>
+                <h2>校验规则</h2>
+              </div>
             </div>
-          </div>
-          <div className="detail-list">
-            {currentConfig.fieldGuides
-              .filter((field) => field.enumOptions?.length)
-              .map((field) => (
-                <div className="detail-item" key={`enum-${field.key}`}>
-                  <strong>{field.key}</strong>
-                  <p>{field.enumOptions?.join("、")}</p>
+            <div className="detail-list">
+              {currentConfig.validationRules.map((rule) => (
+                <div className="detail-item" key={rule}>
+                  <p>{rule}</p>
                 </div>
               ))}
-            {!currentConfig.fieldGuides.some((field) => field.enumOptions?.length) ? (
-              <div className="detail-item">
-                <strong>当前没有枚举字段</strong>
-                <p>这一类导入目前不需要固定枚举值。</p>
+            </div>
+          </article>
+        </section>
+      ) : importView === "guide" ? (
+        <section className="workspace-grid">
+          <article className="command-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Format Examples</p>
+                <h2>字段格式示例</h2>
               </div>
-            ) : null}
-          </div>
-        </article>
-      </section>
+            </div>
+            <div className="detail-list">
+              {currentConfig.fieldGuides.map((field) => (
+                <div className="detail-item" key={`format-${field.key}`}>
+                  <strong>{field.key}</strong>
+                  <p>{field.formatExample ? `示例：${field.formatExample}` : "当前字段没有固定格式示例。"}</p>
+                  {field.note ? <p>{field.note}</p> : null}
+                </div>
+              ))}
+            </div>
+          </article>
 
-      {result ? (
+          <article className="command-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Enum Options</p>
+                <h2>枚举可选值</h2>
+              </div>
+            </div>
+            <div className="detail-list">
+              {currentConfig.fieldGuides
+                .filter((field) => field.enumOptions?.length)
+                .map((field) => (
+                  <div className="detail-item" key={`enum-${field.key}`}>
+                    <strong>{field.key}</strong>
+                    <p>{field.enumOptions?.join("、")}</p>
+                  </div>
+                ))}
+              {!currentConfig.fieldGuides.some((field) => field.enumOptions?.length) ? (
+                <div className="detail-item">
+                  <strong>当前没有枚举字段</strong>
+                  <p>这一类导入目前不需要固定枚举值。</p>
+                </div>
+              ) : null}
+            </div>
+          </article>
+        </section>
+      ) : null}
+
+      {(importView === "import" || importView === "result") && result ? (
         <>
           <section className="metric-grid">
             <article className="metric-card">

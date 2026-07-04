@@ -41,6 +41,7 @@ function RisksPageContent() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [riskView, setRiskView] = useState<"overview" | "list">("overview");
 
   async function loadRisks() {
     setLoading(true);
@@ -88,15 +89,10 @@ function RisksPageContent() {
 
   return (
     <AppShell>
-      <section className="page-hero">
+      <section className="command-panel">
         <div>
           <p className="eyebrow">Risk Signals</p>
-          <h1>先看客户为什么会失速，再决定团队今天该先做什么。</h1>
-          <p className="lead">
-            这里集中展示规则引擎识别出的风险级别、AI 解释、建议动作与待审批状态，现在也可以直接下钻到客户级工作台。
-            {customerFilter ? ` 当前已聚焦客户 ${customerFilter}。` : ""}
-            {ownerUserFilter ? ` 当前已按负责人 ${ownerUserName || ownerUserFilter} 过滤。` : ""}
-          </p>
+          <h1>客户风险中心</h1>
         </div>
         <div className="page-actions">
           <button className="button" onClick={triggerScan} type="button">
@@ -147,113 +143,133 @@ function RisksPageContent() {
             <article className="metric-card">
               <strong className="metric-value">{highRiskCount}</strong>
               <span className="metric-label">高风险客户</span>
-              <p className="metric-detail">建议优先进入人工确认与动作派发。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{mediumRiskCount}</strong>
               <span className="metric-label">中风险客户</span>
-              <p className="metric-detail">值得持续盯防，防止进一步恶化。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{pendingCount}</strong>
-              <span className="metric-label">待审批动作</span>
-              <p className="metric-detail">AI 已提出建议，但还没有变成正式任务。</p>
+              <span className="metric-label">待审批</span>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{topRisk?.risk_score ?? 0}</strong>
               <span className="metric-label">最高风险分</span>
-              <p className="metric-detail">{topRisk ? `当前来自 ${customerLabel(topRisk)}` : "暂无风险数据"}</p>
             </article>
           </section>
 
-          <section className="workspace-grid">
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Highest Alert</p>
-                  <h2>{ownerUserFilter ? "这位负责人当前最值得先处理的风险" : "当前最需要优先处理的风险"}</h2>
+          <div className="section-eyebrow-row">
+            <p className="eyebrow">Workspace</p>
+            <div className="workspace-tabs">
+              <button
+                className={`workspace-tab ${riskView === "overview" ? "workspace-tab-active" : ""}`}
+                onClick={() => setRiskView("overview")}
+                type="button"
+              >
+                <span className="workspace-tab-dot" />
+                风险看板
+              </button>
+              <button
+                className={`workspace-tab ${riskView === "list" ? "workspace-tab-active" : ""}`}
+                onClick={() => setRiskView("list")}
+                type="button"
+              >
+                <span className="workspace-tab-dot" />
+                风险列表
+              </button>
+            </div>
+          </div>
+
+          {riskView === "overview" ? (
+            <section className="workspace-grid">
+              <article className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Highest Alert</p>
+                    <h2>{ownerUserFilter ? "最值得优先处理的风险" : "最高风险客户"}</h2>
+                  </div>
+                  {topRisk ? (
+                    <Link className="button-secondary" href={customerDetailHref(topRisk)}>
+                      打开客户工作台
+                    </Link>
+                  ) : null}
                 </div>
                 {topRisk ? (
-                  <Link className="button-secondary" href={customerDetailHref(topRisk)}>
-                    打开客户工作台
-                  </Link>
+                  <div className="summary-item">
+                    <strong>{customerLabel(topRisk)}</strong>
+                    <p>{topRisk.llm_reason}</p>
+                    <div className="meta-row">
+                      <span className={`pill ${getRiskMeta(topRisk.risk_level).toneClass}`}>{getRiskMeta(topRisk.risk_level).label}</span>
+                      <span className={`pill ${getStatusMeta(topRisk.status).toneClass}`}>{getStatusMeta(topRisk.status).label}</span>
+                      <span className="meta-chip">负责人 {topRisk.owner_user_name || topRisk.owner_user_id}</span>
+                      <span className="meta-chip">{formatDateTime(topRisk.created_at)}</span>
+                    </div>
+                    <p>{topRisk.llm_suggestion}</p>
+                  </div>
                 ) : null}
-              </div>
-              {topRisk ? (
-                <div className="summary-item">
-                  <strong>{customerLabel(topRisk)}</strong>
-                  <p>{topRisk.llm_reason}</p>
-                  <div className="meta-row">
-                    <span className={`pill ${getRiskMeta(topRisk.risk_level).toneClass}`}>{getRiskMeta(topRisk.risk_level).label}</span>
-                    <span className={`pill ${getStatusMeta(topRisk.status).toneClass}`}>{getStatusMeta(topRisk.status).label}</span>
-                    <span className="meta-chip">负责人 {topRisk.owner_user_name || topRisk.owner_user_id}</span>
-                    <span className="meta-chip">快照时间 {formatDateTime(topRisk.created_at)}</span>
-                  </div>
-                  <p>{topRisk.llm_suggestion}</p>
-                </div>
-              ) : null}
-            </article>
+              </article>
 
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Reading Guide</p>
-                  <h2>{ownerUserFilter ? "负责人风险下钻要回答什么问题" : "风险看板要回答什么问题"}</h2>
-                </div>
-              </div>
-              <div className="detail-list">
-                <div className="detail-item">
-                  <strong>先看最危险的客户是谁</strong>
-                  <p>风险页默认按风险分倒序，保证管理层打开页面就先看到最需要马上介入的客户。</p>
-                </div>
-                <div className="detail-item">
-                  <strong>再看问题集中在哪位负责人</strong>
-                  <p>如果同一个负责人连续命中多条高风险客户，就要回到任务、审批和跟进节奏继续下钻。</p>
-                </div>
-                <div className="detail-item">
-                  <strong>最后回到客户细节和动作闭环</strong>
-                  <p>风险只是入口，真正的处理动作还是要回到客户详情页，把审批、任务和跟进链路串起来。</p>
-                </div>
-              </div>
-            </article>
-          </section>
-
-          <section className="risk-board">
-            {sortedItems.map((item) => (
-              <article className="risk-card" key={item.risk_snapshot_id}>
-                <div className="risk-card-header">
+              <article className="command-panel">
+                <div className="panel-header">
                   <div>
-                    <p className="eyebrow">{customerLabel(item)}</p>
-                    <h2 className="report-title">{item.llm_reason || "当前没有风险解释。"}</h2>
-                  </div>
-                  <div className="risk-meta">
-                    <span className={`pill ${getRiskMeta(item.risk_level).toneClass}`}>{getRiskMeta(item.risk_level).label}</span>
-                    <span className={`pill ${getStatusMeta(item.status).toneClass}`}>{getStatusMeta(item.status).label}</span>
-                    <span className="meta-chip">风险分 {item.risk_score}</span>
-                    <span className="meta-chip">负责人 {item.owner_user_name || item.owner_user_id}</span>
-                    <span className="meta-chip">快照时间 {formatDateTime(item.created_at)}</span>
+                    <p className="eyebrow">Reading Guide</p>
+                    <h2>风险看板怎么看</h2>
                   </div>
                 </div>
-
-                <div className="summary-list">
-                  <div className="summary-item">
-                    <strong>风险解释</strong>
-                    <p>{item.llm_reason || "当前没有风险解释。"}</p>
+                <div className="detail-list">
+                  <div className="detail-item">
+                    <strong>先看最危险的客户是谁</strong>
+                    <p>风险页默认按风险分倒序，管理层打开就能看到最需要介入的客户。</p>
                   </div>
-                  <div className="summary-item">
-                    <strong>动作建议</strong>
-                    <p>{item.llm_suggestion || "当前没有动作建议。"}</p>
+                  <div className="detail-item">
+                    <strong>再看问题集中在哪位负责人</strong>
+                    <p>如果同一负责人连续命中多条高风险，就要回到任务和审批继续下钻。</p>
                   </div>
-                </div>
-
-                <div className="page-actions">
-                  <Link className="button-secondary" href={customerDetailHref(item)}>
-                    查看客户详情
-                  </Link>
+                  <div className="detail-item">
+                    <strong>最后回到客户细节和动作闭环</strong>
+                    <p>风险只是入口，真正的处理动作要回到客户详情页串起审批和任务链路。</p>
+                  </div>
                 </div>
               </article>
-            ))}
-          </section>
+            </section>
+          ) : (
+            <section className="card-stack card-stack-lg">
+              {sortedItems.map((item) => (
+                <article className="risk-card" key={item.risk_snapshot_id}>
+                  <div className="risk-card-header">
+                    <div>
+                      <p className="eyebrow">{customerLabel(item)}</p>
+                      <h2 className="report-title">{item.llm_reason || "当前没有风险解释。"}</h2>
+                    </div>
+                    <div className="risk-meta">
+                      <span className={`pill ${getRiskMeta(item.risk_level).toneClass}`}>{getRiskMeta(item.risk_level).label}</span>
+                      <span className={`pill ${getStatusMeta(item.status).toneClass}`}>{getStatusMeta(item.status).label}</span>
+                      <span className="meta-chip">风险分 {item.risk_score}</span>
+                      <span className="meta-chip">负责人 {item.owner_user_name || item.owner_user_id}</span>
+                      <span className="meta-chip">{formatDateTime(item.created_at)}</span>
+                    </div>
+                  </div>
+
+                  <div className="summary-list">
+                    <div className="summary-item">
+                      <strong>风险解释</strong>
+                      <p>{item.llm_reason || "当前没有风险解释。"}</p>
+                    </div>
+                    <div className="summary-item">
+                      <strong>动作建议</strong>
+                      <p>{item.llm_suggestion || "当前没有动作建议。"}</p>
+                    </div>
+                  </div>
+
+                  <div className="page-actions">
+                    <Link className="button-secondary" href={customerDetailHref(item)}>
+                      查看客户详情
+                    </Link>
+                  </div>
+                </article>
+              ))}
+            </section>
+          )}
         </>
       ) : null}
     </AppShell>

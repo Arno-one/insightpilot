@@ -22,6 +22,7 @@ type DashboardState = {
 export default function DashboardPage() {
   const [state, setState] = useState<DashboardState | null>(null);
   const [error, setError] = useState("");
+  const [dashView, setDashView] = useState<"signals" | "brief">("signals");
 
   useEffect(() => {
     async function loadDashboard() {
@@ -100,13 +101,10 @@ export default function DashboardPage() {
 
   return (
     <AppShell>
-      <section className="page-hero">
+      <section className="command-panel">
         <div>
           <p className="eyebrow">Today&apos;s Command Picture</p>
-          <h1>把 CRM 里的沉默信号，变成今天就能推进的经营动作。</h1>
-          <p className="lead">
-            这一页不是传统“看数后台”，而是给老板和主管快速判断风险、审批与执行节奏的经营指挥台。
-          </p>
+          <h1>经营驾驶舱</h1>
         </div>
         <div className="page-actions">
           <Link className="button" href="/risks">
@@ -127,118 +125,138 @@ export default function DashboardPage() {
             <article className="metric-card">
               <strong className="metric-value">{overview.highRiskCount}</strong>
               <span className="metric-label">高风险客户</span>
-              <p className="metric-detail">需要今天优先排险的客户池规模。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overview.mediumRiskCount}</strong>
               <span className="metric-label">中风险客户</span>
-              <p className="metric-detail">值得持续观察、避免滑向高风险的客户数量。</p>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overview.pendingApprovalCount}</strong>
-              <span className="metric-label">待审批动作</span>
-              <p className="metric-detail">AI 已给出建议，但还没进入正式执行的任务数量。</p>
+              <span className="metric-label">待审批</span>
             </article>
             <article className="metric-card">
               <strong className="metric-value">{overview.activeTaskCount}</strong>
-              <span className="metric-label">执行中任务</span>
-              <p className="metric-detail">当前需要销售团队持续跟进的动作总数。</p>
+              <span className="metric-label">执行中</span>
             </article>
           </section>
 
-          <section className="workspace-grid">
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Command Signals</p>
-                  <h2>今天最值得盯住的三条信号</h2>
-                </div>
-              </div>
-              <div className="highlight-strip">
-                <div className="highlight-card">
-                  <strong>风险</strong>
-                  <span>{overview.highRiskCount > 0 ? "高风险客户已抬头" : "风险面暂时可控"}</span>
-                </div>
-                <div className="highlight-card">
-                  <strong>审批</strong>
-                  <span>{overview.pendingApprovalCount > 0 ? "需要主管尽快确认" : "审批队列流速正常"}</span>
-                </div>
-                <div className="highlight-card">
-                  <strong>执行</strong>
-                  <span>{overview.activeTaskCount > 0 ? "任务正在消化中" : "执行队列偏空，适合补动作"}</span>
-                </div>
-              </div>
-              <div className="summary-list">
-                {commandSignals.map((item) => (
-                  <div className="summary-item" key={item.title}>
-                    <strong>{item.title}</strong>
-                    <p>{item.text}</p>
+          <div className="section-eyebrow-row">
+            <p className="eyebrow">Workspace</p>
+            <div className="workspace-tabs">
+              <button
+                className={`workspace-tab ${dashView === "signals" ? "workspace-tab-active" : ""}`}
+                onClick={() => setDashView("signals")}
+                type="button"
+              >
+                <span className="workspace-tab-dot" />
+                经营信号
+              </button>
+              <button
+                className={`workspace-tab ${dashView === "brief" ? "workspace-tab-active" : ""}`}
+                onClick={() => setDashView("brief")}
+                type="button"
+              >
+                <span className="workspace-tab-dot" />
+                执行概览
+              </button>
+            </div>
+          </div>
+
+          {dashView === "signals" ? (
+            <section className="workspace-grid">
+              <article className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Command Signals</p>
+                    <h2>经营信号</h2>
                   </div>
-                ))}
-              </div>
-            </article>
-
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Next Move</p>
-                  <h2>建议的推进顺序</h2>
                 </div>
-              </div>
-              <div className="signal-list">
-                {nextMoves.map((item, index) => (
-                  <div className="signal-item" key={item}>
-                    <strong>步骤 {index + 1}</strong>
-                    <p>{item}</p>
+                <div className="highlight-strip">
+                  <div className="highlight-card">
+                    <strong>风险</strong>
+                    <span>{overview.highRiskCount > 0 ? "高风险客户已抬头" : "风险面暂时可控"}</span>
                   </div>
-                ))}
-              </div>
-            </article>
-          </section>
+                  <div className="highlight-card">
+                    <strong>审批</strong>
+                    <span>{overview.pendingApprovalCount > 0 ? "需要主管尽快确认" : "审批队列流速正常"}</span>
+                  </div>
+                  <div className="highlight-card">
+                    <strong>执行</strong>
+                    <span>{overview.activeTaskCount > 0 ? "任务正在消化中" : "执行队列偏空"}</span>
+                  </div>
+                </div>
+                <div className="summary-list">
+                  {commandSignals.map((item) => (
+                    <div className="summary-item" key={item.title}>
+                      <strong>{item.title}</strong>
+                      <p>{item.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
 
-          <section className="workspace-grid">
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Daily Brief</p>
-                  <h2>最新经营摘要</h2>
+              <article className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Next Move</p>
+                    <h2>推进顺序</h2>
+                  </div>
                 </div>
-                <Link className="button-secondary" href="/reports">
-                  打开日报
-                </Link>
-              </div>
-              <div className="summary-item">
-                <strong>{overview.latestReport?.summary || "还没有生成日报"}</strong>
-                <p>
-                  {overview.latestReport?.suggestions ||
-                    "建议先触发风险扫描，再生成日报，让老板和主管看到当天完整的风险、审批与执行闭环。"}
-                </p>
-              </div>
-            </article>
+                <div className="signal-list">
+                  {nextMoves.map((item, index) => (
+                    <div className="signal-item" key={item}>
+                      <strong>步骤 {index + 1}</strong>
+                      <p>{item}</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </section>
+          ) : (
+            <section className="workspace-grid">
+              <article className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Daily Brief</p>
+                    <h2>最新经营摘要</h2>
+                  </div>
+                  <Link className="button-secondary" href="/reports">
+                    打开日报
+                  </Link>
+                </div>
+                <div className="summary-item">
+                  <strong>{overview.latestReport?.summary || "还没有生成日报"}</strong>
+                  <p>
+                    {overview.latestReport?.suggestions ||
+                      "建议先触发风险扫描，再生成日报。"}
+                  </p>
+                </div>
+              </article>
 
-            <article className="command-panel">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Closed Loop</p>
-                  <h2>系统闭环说明</h2>
+              <article className="command-panel">
+                <div className="panel-header">
+                  <div>
+                    <p className="eyebrow">Closed Loop</p>
+                    <h2>系统闭环</h2>
+                  </div>
                 </div>
-              </div>
-              <div className="detail-list">
-                <div className="detail-item">
-                  <strong>1. 风险识别</strong>
-                  <p>规则引擎先判断客户是否异常，避免 LLM 直接参与风险定级。</p>
+                <div className="detail-list">
+                  <div className="detail-item">
+                    <strong>风险识别</strong>
+                    <p>规则引擎先判断客户是否异常，避免 LLM 直接参与风险定级。</p>
+                  </div>
+                  <div className="detail-item">
+                    <strong>AI 解释与建议</strong>
+                    <p>Agent 结合知识库与上下文给出理由、建议和推荐话术。</p>
+                  </div>
+                  <div className="detail-item">
+                    <strong>人工审批与执行</strong>
+                    <p>主管确认后建议变成正式任务，执行结果回流经营视图。</p>
+                  </div>
                 </div>
-                <div className="detail-item">
-                  <strong>2. AI 解释与建议</strong>
-                  <p>Agent 结合知识库与上下文给出理由、建议和推荐话术。</p>
-                </div>
-                <div className="detail-item">
-                  <strong>3. 人工审批与任务执行</strong>
-                  <p>主管确认后，建议才会变成正式销售任务，执行结果继续回流经营视图。</p>
-                </div>
-              </div>
-            </article>
-          </section>
+              </article>
+            </section>
+          )}
         </>
       ) : null}
     </AppShell>

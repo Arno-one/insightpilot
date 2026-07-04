@@ -6,11 +6,13 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
+import { ThemedSelect } from "@/components/ui/ThemedSelect";
 import { CurrentUser, apiFetch, getStoredUser } from "@/lib/api";
 import { formatDate, formatDateTime, getReportTypeLabel, getRiskMeta } from "@/lib/presentation";
 
 type ReportType = "daily" | "weekly" | "monthly";
 type OwnerViewMode = "team" | "mine" | "owner";
+type ReportWorkspaceView = "brief" | "trend" | "risk" | "owner" | "history";
 
 type TrendMetric = {
   current: number;
@@ -113,6 +115,13 @@ type OwnerDeltaCard = {
   isCurrency?: boolean;
 };
 
+type ReportOverviewCard = {
+  key: string;
+  label: string;
+  value: string;
+  toneClass?: string;
+};
+
 const EMPTY_FILTERS: ReportFilters = {
   reportType: "",
   dateFrom: "",
@@ -120,6 +129,13 @@ const EMPTY_FILTERS: ReportFilters = {
 };
 
 const GENERATE_TYPES: ReportType[] = ["daily", "weekly", "monthly"];
+const WORKSPACE_OPTIONS: Array<{ value: ReportWorkspaceView; label: string }> = [
+  { value: "brief", label: "摘要看板" },
+  { value: "trend", label: "周期变化" },
+  { value: "risk", label: "风险上下文" },
+  { value: "owner", label: "负责人视图" },
+  { value: "history", label: "历史报告" },
+];
 
 function getOwnerDisplayName(ownerUserName: string | null | undefined, ownerUserId: string) {
   const normalizedName = ownerUserName?.trim();
@@ -308,6 +324,14 @@ function formatCardValue(card: OwnerDeltaCard) {
   return card.isCurrency ? formatCurrency(card.current) : `${card.current}`;
 }
 
+function truncateText(text: string | null | undefined, maxLength = 92) {
+  const safeText = text?.trim();
+  if (!safeText) {
+    return "暂无补充内容。";
+  }
+  return safeText.length > maxLength ? `${safeText.slice(0, maxLength)}...` : safeText;
+}
+
 function currentOwnerName(
   ownerCandidates: OwnerCandidate[],
   drilledOwnerUserId: string,
@@ -367,6 +391,8 @@ function ReportsPageContent() {
   const [filters, setFilters] = useState<ReportFilters>(EMPTY_FILTERS);
   const [ownerViewMode, setOwnerViewMode] = useState<OwnerViewMode>("team");
   const [selectedOwnerUserId, setSelectedOwnerUserId] = useState("");
+  const [workspaceView, setWorkspaceView] = useState<ReportWorkspaceView>("brief");
+  const [selectedRiskSnapshotId, setSelectedRiskSnapshotId] = useState("");
 
   const currentUser = useMemo(() => getStoredUser(), []);
 
@@ -497,6 +523,665 @@ function ReportsPageContent() {
       ? "当前客户还没有进入已生成经营报告的引用范围。"
       : "建议先生成一轮周报或月报，再回来查看趋势与归属人摘要。";
 
+  useEffect(() => {
+    if (!displayedRiskTop.length) {
+      setSelectedRiskSnapshotId("");
+      return;
+    }
+    if (!displayedRiskTop.some((item) => item.risk_snapshot_id === selectedRiskSnapshotId)) {
+      setSelectedRiskSnapshotId(displayedRiskTop[0].risk_snapshot_id);
+    }
+  }, [displayedRiskTop, selectedRiskSnapshotId]);
+
+  const focusedRiskItem =
+    displayedRiskTop.find((item) => item.risk_snapshot_id === selectedRiskSnapshotId) || displayedRiskTop[0] || null;
+
+  const overviewCards = useMemo<ReportOverviewCard[]>(() => {
+    if (isOwnerDrilldown && latestOwnerSnapshot) {
+      return [
+        { key: "reports", label: reportCountLabel(customerFilter, drilledOwnerUserId), value: `${visibleItems.length}` },
+        { key: "active_customers", label: "活跃客户", value: `${latestOwnerSnapshot.active_customers}` },
+        {
+          key: "high_risk",
+          label: "高风险客户",
+          value: `${latestOwnerSnapshot.high_risk_customers}`,
+          toneClass: latestOwnerSnapshot.high_risk_customers ? "tone-danger" : "",
+        },
+        {
+          key: "active_tasks",
+          label: "执行中任务",
+          value: `${latestOwnerSnapshot.active_tasks}`,
+          toneClass: latestOwnerSnapshot.overdue_tasks ? "tone-warning" : "",
+        },
+        { key: "deal_amount", label: "开放商机金额", value: formatCurrency(latestOwnerSnapshot.open_deal_amount) },
+        { key: "won", label: "本周期赢单数", value: `${latestOwnerSnapshot.won_current}` },
+      ];
+    }
+    return [
+      { key: "reports", label: reportCountLabel(customerFilter, drilledOwnerUserId), value: `${visibleItems.length}` },
+      { key: "report_type", label: "最新报告类型", value: getReportTypeLabel(latestReport?.report_type || "daily") },
+      { key: "period", label: "当前观察周期", value: periodText(latestMetrics, latestReport?.report_date || "") },
+      { key: "deal_amount", label: "开放商机金额", value: formatCurrency(latestTotals?.open_deal_amount) },
+      {
+        key: "risk",
+        label: "高风险客户",
+        value: `${latestTotals?.high_risk_customers || 0}`,
+        toneClass: (latestTotals?.high_risk_customers || 0) > 0 ? "tone-danger" : "",
+      },
+      {
+        key: "approvals",
+        label: "待审批事项",
+        value: `${latestTotals?.pending_approvals || 0}`,
+        toneClass: (latestTotals?.pending_approvals || 0) > 0 ? "tone-warning" : "",
+      },
+    ];
+  }, [
+    customerFilter,
+    drilledOwnerUserId,
+    isOwnerDrilldown,
+    latestMetrics,
+    latestOwnerSnapshot,
+    latestReport?.report_date,
+    latestReport?.report_type,
+    latestTotals?.high_risk_customers,
+    latestTotals?.open_deal_amount,
+    latestTotals?.pending_approvals,
+    visibleItems.length,
+  ]);
+
+  const trendPreviewCards = useMemo(() => {
+    if (isOwnerDrilldown) {
+      return ownerDeltaCards.map((card) => ({
+        key: card.key,
+        label: card.label,
+        current: formatCardValue(card),
+        delta: `变化 ${formatDeltaValue(card)}`,
+        previous: `上一份 ${card.isCurrency ? formatCurrency(card.previous) : card.previous}`,
+        toneClass: deltaTone(card.delta),
+      }));
+    }
+    return (["followups", "won_deals", "approved_approvals", "completed_tasks"] as Array<
+      keyof NonNullable<ReportMetrics["trend_metrics"]>
+    >).map((key) => {
+      const metric = latestMetrics?.trend_metrics?.[key];
+      return {
+        key,
+        label: trendLabel(key),
+        current: `${metric?.current || 0}`,
+        delta: `${trendDirectionText(metric)}，变化 ${formatSignedNumber(metric?.delta || 0)}`,
+        previous: `上一周期 ${metric?.previous || 0}`,
+        toneClass: trendTone(metric),
+      };
+    });
+  }, [isOwnerDrilldown, latestMetrics, ownerDeltaCards]);
+
+  const focusedRiskMeta = focusedRiskItem ? getRiskMeta(focusedRiskItem.risk_level) : null;
+  const workspaceLabel = WORKSPACE_OPTIONS.find((item) => item.value === workspaceView)?.label || "摘要看板";
+  const ownerPanelItems = isOwnerDrilldown ? displayedOwners : displayedOwners.slice(0, 6);
+  const riskQueueItems = displayedRiskTop.slice(0, 6);
+  const historyItems = visibleItems.slice(0, 6);
+
+  // 中文注释：新版先走单工作台结构，把摘要、趋势、风险和历史收拢到一个主窗口里。
+  return (
+    <AppShell>
+      <section className="command-panel report-command-bar">
+        <div className="report-command-copy">
+          <div>
+            <p className="eyebrow">Reports</p>
+            <h1 className="report-command-title">经营报告</h1>
+          </div>
+          <div className="report-meta">
+            <span className="meta-chip">{customerFilter ? `客户 ${customerFilter}` : "全局经营视角"}</span>
+            <span className="meta-chip">{isOwnerDrilldown ? `负责人 ${activeOwnerName || drilledOwnerUserId}` : "团队聚合视角"}</span>
+            {latestReport ? <span className="meta-chip">最新报告 {formatDateTime(latestReport.created_at)}</span> : null}
+          </div>
+        </div>
+        <div className="page-actions report-command-actions">
+          {customerFilter ? (
+            <>
+              <Link className="button-secondary" href={`/customers/${customerFilter}`}>
+                返回客户详情
+              </Link>
+              <Link className="ghost-button inline" href="/reports">
+                查看全部报告
+              </Link>
+            </>
+          ) : null}
+          {GENERATE_TYPES.map((reportType) => (
+            <button
+              className={submittingType === reportType ? "button-secondary" : "button"}
+              disabled={Boolean(submittingType)}
+              key={reportType}
+              onClick={() => generateReport(reportType)}
+              type="button"
+            >
+              {submittingType === reportType ? `提交${getReportTypeLabel(reportType)}中...` : `生成${getReportTypeLabel(reportType)}`}
+            </button>
+          ))}
+          <button className="button-secondary" onClick={() => setFilters({ ...filters })} type="button">
+            刷新当前结果
+          </button>
+        </div>
+      </section>
+
+      {message ? <p className="success-text">{message}</p> : null}
+      {error ? <ErrorCard detail="如果生成失败，请优先检查 Worker、Redis 与经营报告任务链路。" message={error} /> : null}
+      {loading ? <LoadingCard detail="正在拉取周报、月报、趋势指标与归属人摘要。" /> : null}
+
+      <section className="command-panel report-context-bar">
+        <div className="report-context-grid">
+          <label className="report-inline-field">
+            <span>报告类型</span>
+            <ThemedSelect
+              onChange={(value) =>
+                setDraftFilters((current) => ({ ...current, reportType: value as ReportFilters["reportType"] }))
+              }
+              options={[
+                { value: "", label: "全部类型" },
+                { value: "daily", label: "日报" },
+                { value: "weekly", label: "周报" },
+                { value: "monthly", label: "月报" },
+              ]}
+              value={draftFilters.reportType}
+            />
+          </label>
+          <label className="report-inline-field">
+            <span>开始日期</span>
+            <input
+              className="input-like compact-input"
+              onChange={(event) => setDraftFilters((current) => ({ ...current, dateFrom: event.target.value }))}
+              type="date"
+              value={draftFilters.dateFrom}
+            />
+          </label>
+          <label className="report-inline-field">
+            <span>结束日期</span>
+            <input
+              className="input-like compact-input"
+              onChange={(event) => setDraftFilters((current) => ({ ...current, dateTo: event.target.value }))}
+              type="date"
+              value={draftFilters.dateTo}
+            />
+          </label>
+          <div className="report-inline-field">
+            <span>当前聚焦</span>
+            <div className="input-like compact-input readonly-field">{customerFilter ? `客户 ${customerFilter}` : "全局经营视角"}</div>
+          </div>
+          <div className="report-inline-field report-owner-controls">
+            <span>负责人视角</span>
+            <div className="report-segmented">
+              <button
+                className={ownerViewMode === "team" ? "button" : "button-secondary"}
+                onClick={() => {
+                  setOwnerViewMode("team");
+                  setSelectedOwnerUserId("");
+                }}
+                type="button"
+              >
+                团队
+              </button>
+              <button
+                className={ownerViewMode === "mine" ? "button" : "button-secondary"}
+                disabled={!currentUser}
+                onClick={() => {
+                  if (!currentUser) {
+                    return;
+                  }
+                  setOwnerViewMode("mine");
+                  setSelectedOwnerUserId(currentUser.user_id);
+                }}
+                type="button"
+              >
+                我的
+              </button>
+            </div>
+          </div>
+          <label className="report-inline-field">
+            <span>指定负责人</span>
+            <ThemedSelect
+              onChange={(value) => {
+                setSelectedOwnerUserId(value);
+                setOwnerViewMode(value ? "owner" : "team");
+              }}
+              options={[
+                { value: "", label: "未指定" },
+                ...ownerCandidates.map((owner) => ({
+                  value: owner.owner_user_id,
+                  label: owner.owner_user_name,
+                })),
+              ]}
+              value={ownerViewMode === "owner" ? selectedOwnerUserId : ""}
+            />
+          </label>
+        </div>
+        <div className="page-actions">
+          <button className="button" onClick={() => setFilters({ ...draftFilters })} type="button">
+            应用筛选
+          </button>
+          <button
+            className="button-secondary"
+            onClick={() => {
+              setDraftFilters(EMPTY_FILTERS);
+              setFilters(EMPTY_FILTERS);
+            }}
+            type="button"
+          >
+            重置筛选
+          </button>
+        </div>
+        <div className="report-meta">
+          <span className={`meta-chip ${ownerViewMode === "team" ? "tone-info" : ""}`}>团队聚合</span>
+          <span className={`meta-chip ${ownerViewMode === "mine" ? "tone-info" : ""}`}>我的视角</span>
+          <span className={`meta-chip ${ownerViewMode === "owner" ? "tone-info" : ""}`}>
+            {ownerViewMode === "owner" ? `负责人 ${activeOwnerName || selectedOwnerUserId}` : "未指定负责人"}
+          </span>
+          {latestReport ? <span className="meta-chip">最新周期 {periodText(latestMetrics, latestReport.report_date)}</span> : null}
+        </div>
+        {isOwnerDrilldown ? (
+          <div className="report-quick-links">
+            <Link className="button" href={taskDrilldownHref}>
+              任务明细
+            </Link>
+            <Link className="button-secondary" href={riskDrilldownHref}>
+              风险明细
+            </Link>
+            <Link className="button-secondary" href={approvalDrilldownHref}>
+              审批明细
+            </Link>
+          </div>
+        ) : null}
+      </section>
+
+      {!loading && !visibleItems.length && !error ? (
+        <EmptyCard detail={emptyDetail} text={isOwnerDrilldown ? "当前负责人视角还没有匹配到经营报告。" : "当前还没有经营报告。"} />
+      ) : null}
+
+      {visibleItems.length ? (
+        <>
+          <section className="report-overview-grid">
+            {overviewCards.map((card) => (
+              <article className={`report-compact-metric ${card.toneClass || ""}`} key={card.key}>
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+              </article>
+            ))}
+          </section>
+
+          <section className="command-panel report-workspace-panel">
+            <div className="report-workspace-header">
+              <div>
+                <p className="eyebrow">Workspace</p>
+                <h2>{workspaceLabel}</h2>
+              </div>
+              <div className="report-workspace-controls">
+                <label className="report-inline-field report-inline-field-compact">
+                  <span>模块切换</span>
+                  <ThemedSelect
+                    onChange={(value) => setWorkspaceView(value as ReportWorkspaceView)}
+                    options={WORKSPACE_OPTIONS}
+                    value={workspaceView}
+                  />
+                </label>
+                {workspaceView === "risk" && riskQueueItems.length ? (
+                  <label className="report-inline-field report-inline-field-compact">
+                    <span>重点客户</span>
+                    <ThemedSelect
+                      onChange={(value) => setSelectedRiskSnapshotId(value)}
+                      options={riskQueueItems.map((item) => ({
+                        value: item.risk_snapshot_id,
+                        label: item.customer_name || item.customer_id,
+                      }))}
+                      value={selectedRiskSnapshotId}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            </div>
+            <div className="report-meta">
+              <span className="meta-chip">{getReportTypeLabel(latestReport.report_type)}</span>
+              <span className="meta-chip">周期 {periodText(latestMetrics, latestReport.report_date)}</span>
+              <span className="meta-chip">生成于 {formatDateTime(latestReport.created_at)}</span>
+            </div>
+
+            {workspaceView === "brief" ? (
+              <div className="report-workspace-grid">
+                <article className="report-surface">
+                  <div className="summary-list report-summary-grid">
+                    {isOwnerDrilldown ? (
+                      <>
+                        <div className="summary-item">
+                          <strong>负责人快照</strong>
+                          <p>{buildOwnerSnapshotText(latestOwnerSnapshot, activeOwnerName || drilledOwnerUserId)}</p>
+                        </div>
+                        <div className="summary-item">
+                          <strong>团队摘要参考</strong>
+                          <p>{latestReport.summary}</p>
+                        </div>
+                        <div className="summary-item">
+                          <strong>动作建议参考</strong>
+                          <p>{latestReport.suggestions}</p>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="summary-item">
+                          <strong>经营摘要</strong>
+                          <p>{latestReport.summary}</p>
+                        </div>
+                        <div className="summary-item">
+                          <strong>行动建议</strong>
+                          <p>{latestReport.suggestions}</p>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <div className="highlight-strip report-highlight-strip">
+                    {isOwnerDrilldown && latestOwnerSnapshot ? (
+                      <>
+                        <div className="highlight-card">
+                          <strong>{latestOwnerSnapshot.active_customers}</strong>
+                          <span>活跃客户</span>
+                        </div>
+                        <div className="highlight-card">
+                          <strong>{latestOwnerSnapshot.active_tasks}</strong>
+                          <span>执行中任务</span>
+                        </div>
+                        <div className="highlight-card">
+                          <strong>{latestOwnerSnapshot.won_current}</strong>
+                          <span>本周期赢单</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="highlight-card">
+                          <strong>{latestHeadline?.followups_current || 0}</strong>
+                          <span>本周期跟进</span>
+                        </div>
+                        <div className="highlight-card">
+                          <strong>{latestHeadline?.won_current || 0}</strong>
+                          <span>本周期赢单</span>
+                        </div>
+                        <div className="highlight-card">
+                          <strong>{latestHeadline?.completed_current || 0}</strong>
+                          <span>本周期完成任务</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </article>
+                <aside className="report-side-panel">
+                  <article className="report-side-card">
+                    <div className="report-side-card-header">
+                      <strong>{isOwnerDrilldown ? "负责人变化速览" : "当前周期变化"}</strong>
+                      <span>{trendPreviewCards.length} 项</span>
+                    </div>
+                    <div className="report-trend-grid report-trend-grid-compact">
+                      {trendPreviewCards.map((card) => (
+                        <div className={`report-trend-card ${card.toneClass || ""}`} key={card.key}>
+                          <strong>{card.current}</strong>
+                          <span>{card.label}</span>
+                          <small>{card.delta}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                  <article className="report-side-card">
+                    <div className="report-side-card-header">
+                      <strong>{focusedRiskItem ? "风险焦点" : "风险状态"}</strong>
+                      {focusedRiskMeta ? <span className={`meta-chip ${focusedRiskMeta.toneClass}`}>{focusedRiskMeta.label}</span> : null}
+                    </div>
+                    {focusedRiskItem ? (
+                      <>
+                        <div className="report-meta">
+                          <span className="meta-chip">{focusedRiskItem.customer_name || focusedRiskItem.customer_id}</span>
+                          <span className="meta-chip">负责人 {focusedRiskItem.owner_user_name || focusedRiskItem.owner_user_id}</span>
+                        </div>
+                        <p>{truncateText(focusedRiskItem.llm_reason, 72)}</p>
+                        <p>{truncateText(focusedRiskItem.llm_suggestion, 72)}</p>
+                        <div className="page-actions">
+                          <Link className="button-secondary" href={`/customers/${focusedRiskItem.customer_id}`}>
+                            查看客户详情
+                          </Link>
+                        </div>
+                      </>
+                    ) : (
+                      <p>当前没有需要优先处理的重点风险客户。</p>
+                    )}
+                  </article>
+                </aside>
+              </div>
+            ) : null}
+
+            {workspaceView === "trend" ? (
+              <div className="report-main-stack">
+                <div className="report-meta">
+                  <span className="meta-chip">
+                    当前周期 {latestMetrics?.period_start ? formatDate(latestMetrics.period_start) : "未记录"} 到{" "}
+                    {latestMetrics?.period_end ? formatDate(latestMetrics.period_end) : "未记录"}
+                  </span>
+                  <span className="meta-chip">
+                    {isOwnerDrilldown
+                      ? visibleItems[1]
+                        ? `上一份报告 ${getReportTypeLabel(visibleItems[1].report_type)} / ${formatDate(visibleItems[1].report_date)}`
+                        : "当前没有更早的负责人报告可对比"
+                      : `上一周期 ${latestMetrics?.previous_period_start ? formatDate(latestMetrics.previous_period_start) : "未记录"} 到 ${
+                          latestMetrics?.previous_period_end ? formatDate(latestMetrics.previous_period_end) : "未记录"
+                        }`}
+                  </span>
+                </div>
+                <div className="report-trend-grid">
+                  {trendPreviewCards.map((card) => (
+                    <article className={`report-trend-card report-trend-card-detail ${card.toneClass || ""}`} key={card.key}>
+                      <strong>{card.current}</strong>
+                      <span>{card.label}</span>
+                      <small>{card.delta}</small>
+                      <p>{card.previous}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {workspaceView === "risk" ? (
+              <div className="report-risk-layout">
+                <article className="report-risk-focus">
+                  {focusedRiskItem ? (
+                    <>
+                      <div className="report-risk-header">
+                        <div>
+                          <p className="eyebrow">Risk Focus</p>
+                          <h3>{focusedRiskItem.customer_name || focusedRiskItem.customer_id}</h3>
+                        </div>
+                        <div className="report-meta">
+                          {focusedRiskMeta ? <span className={`meta-chip ${focusedRiskMeta.toneClass}`}>{focusedRiskMeta.label}</span> : null}
+                          <span className="meta-chip">风险分 {focusedRiskItem.risk_score}</span>
+                          <span className="meta-chip">负责人 {focusedRiskItem.owner_user_name || focusedRiskItem.owner_user_id}</span>
+                        </div>
+                      </div>
+                      <div className="report-risk-summary">
+                        <div className="summary-item">
+                          <strong>风险原因</strong>
+                          <p>{focusedRiskItem.llm_reason || "当前没有补充风险原因。"}</p>
+                        </div>
+                        <div className="summary-item">
+                          <strong>建议动作</strong>
+                          <p>{focusedRiskItem.llm_suggestion || "当前没有补充动作建议。"}</p>
+                        </div>
+                      </div>
+                      <div className="page-actions">
+                        <Link className="button" href={`/customers/${focusedRiskItem.customer_id}`}>
+                          查看客户详情
+                        </Link>
+                        <Link className="button-secondary" href={riskDrilldownHref || "/risks"}>
+                          查看风险明细
+                        </Link>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="summary-item">
+                      <strong>{isOwnerDrilldown ? "当前负责人暂无重点风险客户" : "当前没有重点风险客户"}</strong>
+                      <p>{isOwnerDrilldown ? "这位负责人当前更需要盯执行节奏和任务积压。" : "当前可以先把注意力放在趋势变化与负责人分布上。"}</p>
+                    </div>
+                  )}
+                </article>
+                <aside className="report-side-panel">
+                  <article className="report-side-card">
+                    <div className="report-side-card-header">
+                      <strong>风险队列</strong>
+                      <span>{riskQueueItems.length} 个重点客户</span>
+                    </div>
+                    <div className="report-risk-list">
+                      {riskQueueItems.length ? (
+                        riskQueueItems.map((item) => {
+                          const riskMeta = getRiskMeta(item.risk_level);
+                          const isActive = item.risk_snapshot_id === focusedRiskItem?.risk_snapshot_id;
+                          return (
+                            <button
+                              className={`report-risk-queue-item ${isActive ? "is-active" : ""}`}
+                              key={item.risk_snapshot_id}
+                              onClick={() => setSelectedRiskSnapshotId(item.risk_snapshot_id)}
+                              type="button"
+                            >
+                              <strong>{item.customer_name || item.customer_id}</strong>
+                              <span>{riskMeta.label}</span>
+                              <small>负责人 {item.owner_user_name || item.owner_user_id}</small>
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <p className="muted-text">当前没有可切换的风险客户。</p>
+                      )}
+                    </div>
+                  </article>
+                </aside>
+              </div>
+            ) : null}
+
+            {workspaceView === "owner" ? (
+              <div className="report-owner-list">
+                {ownerPanelItems.length ? (
+                  ownerPanelItems.map((owner) => {
+                    const selected = owner.owner_user_id === drilledOwnerUserId;
+                    return (
+                      <article className="report-owner-card" key={owner.owner_user_id}>
+                        <div className="report-owner-card-header">
+                          <div>
+                            <strong>{owner.owner_user_name}</strong>
+                            <div className="report-meta">
+                              <span className="meta-chip">客户总数 {owner.total_customers}</span>
+                              <span className={`meta-chip ${owner.high_risk_customers ? "tone-danger" : ""}`}>高风险 {owner.high_risk_customers}</span>
+                              <span className={`meta-chip ${owner.overdue_tasks ? "tone-warning" : ""}`}>逾期任务 {owner.overdue_tasks}</span>
+                              {selected ? <span className="meta-chip tone-info">当前下钻对象</span> : null}
+                            </div>
+                          </div>
+                          {!isOwnerDrilldown ? (
+                            <button
+                              className="button-secondary"
+                              onClick={() => {
+                                setOwnerViewMode("owner");
+                                setSelectedOwnerUserId(owner.owner_user_id);
+                              }}
+                              type="button"
+                            >
+                              继续下钻
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="report-owner-stats">
+                          <div className="report-owner-stat">
+                            <span>活跃客户</span>
+                            <strong>{owner.active_customers}</strong>
+                          </div>
+                          <div className="report-owner-stat">
+                            <span>执行中任务</span>
+                            <strong>{owner.active_tasks}</strong>
+                          </div>
+                          <div className="report-owner-stat">
+                            <span>开放商机金额</span>
+                            <strong>{formatCurrency(owner.open_deal_amount)}</strong>
+                          </div>
+                          <div className="report-owner-stat">
+                            <span>本周期赢单</span>
+                            <strong>{owner.won_current}</strong>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })
+                ) : (
+                  <div className="summary-item">
+                    <strong>{isOwnerDrilldown ? "当前负责人没有聚合快照" : "当前没有归属人聚合结果"}</strong>
+                    <p>{isOwnerDrilldown ? "说明这位负责人当前还没有足够的负责人级聚合数据。" : "建议先补充客户、任务或商机样本后再看归属人视图。"}</p>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {workspaceView === "history" ? (
+              <div className="report-history-list">
+                {historyItems.map((item) => {
+                  const metrics = item.metrics_json || {};
+                  const totals = metrics.totals || {};
+                  const headline = metrics.headline_numbers || {};
+                  const ownerSnapshot = isOwnerDrilldown ? findOwnerSnapshot(item, drilledOwnerUserId) : null;
+                  return (
+                    <article className="report-history-card" key={item.report_id}>
+                      <div className="report-history-card-header">
+                        <div>
+                          <p className="eyebrow">{getReportTypeLabel(item.report_type)}</p>
+                          <h3>{periodText(metrics, item.report_date)}</h3>
+                        </div>
+                        <div className="report-meta">
+                          <span className="meta-chip">报告编号 {item.report_id}</span>
+                          <span className="meta-chip">生成于 {formatDateTime(item.created_at)}</span>
+                        </div>
+                      </div>
+                      <div className="summary-list report-summary-grid">
+                        {ownerSnapshot ? (
+                          <div className="summary-item">
+                            <strong>负责人快照</strong>
+                            <p>{buildOwnerSnapshotText(ownerSnapshot, ownerSnapshot.owner_user_name)}</p>
+                          </div>
+                        ) : null}
+                        <div className="summary-item">
+                          <strong>经营摘要</strong>
+                          <p>{truncateText(item.summary, 120)}</p>
+                        </div>
+                        <div className="summary-item">
+                          <strong>行动建议</strong>
+                          <p>{truncateText(item.suggestions, 120)}</p>
+                        </div>
+                      </div>
+                      <div className="highlight-strip">
+                        <div className="highlight-card">
+                          <strong>{ownerSnapshot ? ownerSnapshot.high_risk_customers : totals.high_risk_customers || 0}</strong>
+                          <span>高风险客户</span>
+                        </div>
+                        <div className="highlight-card">
+                          <strong>{ownerSnapshot ? ownerSnapshot.active_tasks : totals.active_tasks || 0}</strong>
+                          <span>执行中任务</span>
+                        </div>
+                        <div className="highlight-card">
+                          <strong>{ownerSnapshot ? formatCurrency(ownerSnapshot.open_deal_amount) : formatCurrency(totals.open_deal_amount)}</strong>
+                          <span>开放商机金额</span>
+                        </div>
+                        <div className="highlight-card">
+                          <strong>{ownerSnapshot ? ownerSnapshot.won_current : headline.won_current || 0}</strong>
+                          <span>本周期赢单</span>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
+        </>
+      ) : null}
+    </AppShell>
+  );
+
+  /*
   return (
     <AppShell>
       <section className="page-hero report-hero">
@@ -504,7 +1189,7 @@ function ReportsPageContent() {
           <p className="eyebrow">Executive Brief Upgrade</p>
           <h1>把周报、月报、趋势指标和归属人视角压缩成一块能直接读懂经营节奏的摘要看板。</h1>
           <p className="lead">
-            当前版本先聚焦“轻操作、强聚合”的 V1：上层看摘要和趋势，下层再看风险上下文与历史报告流。
+            当前版本先聚焦"轻操作、强聚合"的 V1：上层看摘要和趋势，下层再看风险上下文与历史报告流。
             {customerFilter ? ` 当前已按客户 ${customerFilter} 做钻取。` : ""}
             {isOwnerDrilldown ? ` 现在正在按负责人 ${activeOwnerName || drilledOwnerUserId} 继续下钻。` : ""}
           </p>
@@ -611,7 +1296,7 @@ function ReportsPageContent() {
             <p className="eyebrow">Owner Drilldown</p>
             <h2>按归属人继续下钻</h2>
             <p className="panel-copy">
-              当前“团队视角”先按报告里的负责人聚合结果承接，不代表真实组织架构团队；真实团队模型已记入下个版本需求。
+              当前"团队视角"先按报告里的负责人聚合结果承接，不代表真实组织架构团队；真实团队模型已记入下个版本需求。
             </p>
           </div>
         </div>
@@ -1099,7 +1784,7 @@ function ReportsPageContent() {
                   <strong>看板解释</strong>
                   <p>
                     {isOwnerDrilldown
-                      ? "当前负责人下钻先用“最新一份命中报告 vs 上一份命中报告”来比较负责人快照，等真实组织和负责人级趋势模型补齐后再升级成更精确口径。"
+                      ? "当前负责人下钻先用"最新一份命中报告 vs 上一份命中报告"来比较负责人快照，等真实组织和负责人级趋势模型补齐后再升级成更精确口径。"
                       : "日报按天对比昨天，周报按自然周对比上周，月报按自然月对比上月，先把比较口径讲清楚，趋势判断才不会跑偏。"}
                   </p>
                 </div>
@@ -1194,6 +1879,7 @@ function ReportsPageContent() {
       ) : null}
     </AppShell>
   );
+  */
 }
 
 export default function ReportsPage() {

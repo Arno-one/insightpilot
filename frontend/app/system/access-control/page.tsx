@@ -167,13 +167,10 @@ export default function AccessControlPage() {
 
   return (
     <AppShell>
-      <section className="page-hero">
+      <section className="command-panel">
         <div>
           <p className="eyebrow">Access Control</p>
-          <h1>把权限边界交给系统管理，而不是继续手改数据库。</h1>
-          <p className="lead">
-            admin 角色可以在这里统一维护“哪个角色能看什么、做什么”，也能直接调整每个账号挂在哪个角色下面。
-          </p>
+          <h1>权限控制</h1>
         </div>
       </section>
 

@@ -64,16 +64,15 @@ export default function RagEvaluationPage() {
     }
   }
 
-  // 中文注释：命中率是给非算法角色看的“直觉指标”，方便演示时快速解释当前检索质量。
+  // 中文注释：命中率是给非算法角色看的"直觉指标"，方便演示时快速解释当前检索质量。
   const hitRate = useMemo(() => (result ? result.hit_count / result.case_count : 0), [result]);
 
   return (
     <AppShell>
-      <section className="page-hero">
+      <section className="command-panel">
         <div>
           <p className="eyebrow">Retrieval Quality</p>
-          <h1>RAG 不是“感觉命中了”就算好，要用指标把检索质量讲明白。</h1>
-          <p className="lead">这一页用 QA 样本集跑 Recall@K、MRR 和 NDCG，避免知识库只在主观体验上看起来可用。</p>
+          <h1>RAG 检索质量评估</h1>
         </div>
       </section>
 
