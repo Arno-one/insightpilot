@@ -1,3 +1,4 @@
+from app.modules.agent.platform.data_mcp_tools import build_data_mcp_tools
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
 from app.modules.agent.platform.mail_mcp_tools import build_mail_mcp_tools
 from app.modules.agent.platform.mcp_gateway import (
@@ -20,6 +21,7 @@ __all__ = [
     "InternalToolRegistry",
     "ToolDefinition",
     "ToolExecutionContext",
+    "build_data_mcp_tools",
     "build_shared_internal_tools",
     "build_mail_mcp_tools",
     "MCPGateway",

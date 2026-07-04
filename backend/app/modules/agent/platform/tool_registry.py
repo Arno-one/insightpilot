@@ -14,6 +14,7 @@ class ToolExecutionContext:
     user_id: str
     run_id: str
     db: Session
+    readonly_db: Session | None = None
 
 
 @dataclass(slots=True)

@@ -520,9 +520,9 @@ def append_agent_chat_user_message(
             role="assistant",
             content=nl2sql_result["reply"],
             intent=resolved_intent,
-            tool_name="nl2sql_tool",
+            tool_name="data.query_sql",
             metadata_json={
-                "runtime_handler": "nl2sql_tool",
+                "runtime_handler": "data.query_sql",
                 "query_id": nl2sql_result["query_id"],
                 "nl2sql_session_id": nl2sql_result["nl2sql_session_id"],
                 "is_cached": nl2sql_result["is_cached"],
@@ -533,7 +533,7 @@ def append_agent_chat_user_message(
         )
         runtime_result = {
             "handled": True,
-            "handler": "nl2sql_tool",
+            "handler": "data.query_sql",
             "reply": nl2sql_result["reply"],
             "nl2sql": nl2sql_result["nl2sql"],
         }

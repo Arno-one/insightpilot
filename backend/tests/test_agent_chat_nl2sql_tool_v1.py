@@ -47,8 +47,8 @@ def test_unified_agent_chat_runs_nl2sql_tool_for_data_query(monkeypatch):
         data = message_response.json()["data"]
 
         assert data["runtime"]["handled"] is True
-        assert data["runtime"]["handler"] == "nl2sql_tool"
-        assert data["assistant_message"]["tool_name"] == "nl2sql_tool"
+        assert data["runtime"]["handler"] == "data.query_sql"
+        assert data["assistant_message"]["tool_name"] == "data.query_sql"
         assert "查询完成，返回 1 行数据" in data["assistant_message"]["content"]
         assert data["assistant_message"]["metadata_json"]["row_count"] == 1
         assert "nl2sql_probe.is_deleted = 0" in data["assistant_message"]["metadata_json"]["sql"]

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
+from app.modules.agent.platform.data_mcp_tools import build_data_mcp_tools
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
 from app.modules.agent.platform.mail_mcp_tools import build_mail_mcp_tools
 from app.modules.agent.platform.tool_calling_tools import build_tool_calling_internal_tools
@@ -101,6 +102,7 @@ class MCPGateway:
             raise ValueError(f"未注册的 MCP 工具: {qualified_name}")
         request_payload = _to_json_safe(copy.deepcopy(payload))
         output = tool.handler(context, payload)
+        trace_summary = output.get("trace") if isinstance(output, dict) else None
         return {
             "protocol": tool.protocol,
             "server_name": tool.server_name,
@@ -114,6 +116,7 @@ class MCPGateway:
                 "tool_name": tool.tool_name,
                 "qualified_name": tool.qualified_name,
                 "request_payload": request_payload,
+                "trace_summary": _to_json_safe(trace_summary) if trace_summary else None,
                 "tenant_id": context.tenant_id,
                 "user_id": context.user_id,
                 "run_id": context.run_id,
@@ -164,6 +167,7 @@ def build_shared_mcp_gateway() -> MCPGateway:
 
     shared_tools = [
         *build_shared_internal_tools(),
+        *build_data_mcp_tools(),
         *build_tool_calling_internal_tools(),
         *build_mail_mcp_tools(),
     ]
@@ -172,6 +176,7 @@ def build_shared_mcp_gateway() -> MCPGateway:
             build_internal_mcp_server("crm", "CRM MCP", shared_tools),
             build_internal_mcp_server("report", "Report MCP", shared_tools),
             build_internal_mcp_server("approval", "Approval MCP", shared_tools),
+            build_internal_mcp_server("data", "Data MCP", shared_tools),
             build_internal_mcp_server("task", "Task MCP", shared_tools),
             build_internal_mcp_server("notify", "Notify MCP", shared_tools),
             build_internal_mcp_server("mail", "Mail MCP", shared_tools),

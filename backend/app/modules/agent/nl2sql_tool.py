@@ -2,7 +2,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.modules.nl2sql import service as nl2sql_service
+from app.modules.agent.platform import InternalToolRegistry, ToolExecutionContext, build_data_mcp_tools
 
 
 def _format_cell(value: Any) -> str:
@@ -40,13 +40,22 @@ def run_nl2sql_tool(
     *,
     question: str,
 ) -> dict[str, Any]:
-    """统一 Agent 的 NL2SQL 工具封装；核心生成和执行仍由 NL2SQL service 独立完成。"""
-    result = nl2sql_service.query(db_rw, db_readonly, current_user, question=question)
+    """统一 Agent 的 NL2SQL 工具封装；实际执行走标准 data.query_sql Tool。"""
+    registry = InternalToolRegistry(build_data_mcp_tools())
+    context = ToolExecutionContext(
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        run_id="agent_chat_data_query",
+        db=db_rw,
+        readonly_db=db_readonly,
+    )
+    tool_result = registry.execute("data.query_sql", context, {"question": question})
+    result = tool_result["output"]
     reply = _build_reply(result)
     return {
         "reply": reply,
         "nl2sql": result,
-        "tool_name": "nl2sql_tool",
+        "tool_name": "data.query_sql",
         "query_id": result.get("query_id"),
         "nl2sql_session_id": result.get("session_id"),
         "is_cached": bool(result.get("is_cached")),

@@ -128,7 +128,7 @@ function getBooleanMeta(metadata: Record<string, unknown>, key: string) {
 
 function getNL2SQLMeta(item: AgentChatMessage): NL2SQLMessageMeta | null {
   const metadata = item.metadata_json || {};
-  if (metadata.runtime_handler !== "nl2sql_tool") {
+  if (!["nl2sql_tool", "data.query_sql"].includes(String(metadata.runtime_handler || ""))) {
     return null;
   }
   return {

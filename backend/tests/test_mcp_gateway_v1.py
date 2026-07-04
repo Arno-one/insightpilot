@@ -109,6 +109,7 @@ def test_mcp_gateway_execute_returns_audit_record():
         "tool_name": "search_customer",
         "qualified_name": "crm.search_customer",
         "request_payload": {"customer_id": "cust_001"},
+        "trace_summary": None,
         "tenant_id": "demo_tenant",
         "user_id": "u_demo",
         "run_id": "run_demo",
