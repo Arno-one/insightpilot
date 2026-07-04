@@ -8,6 +8,7 @@ from app.modules.evaluation.schemas import (
     EvaluationCaseCreateRequest,
     EvaluationDatasetCreateRequest,
     NL2SQLEvaluationResultCreateRequest,
+    RAGEvaluationResultCreateRequest,
 )
 from app.shared.response import success
 
@@ -120,4 +121,45 @@ def get_nl2sql_evaluation_summary(
     db: Session = Depends(get_db),
 ):
     summary = service.summarize_nl2sql_evaluation(db, tenant_id=current_user["tenant_id"], dataset_id=dataset_id)
+    return success(summary, "查询成功", total=summary["total_count"])
+
+
+@router.post("/rag/results")
+def create_rag_evaluation_result(
+    data: RAGEvaluationResultCreateRequest,
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.create_rag_evaluation_result(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            case_id=data.case_id,
+            trace_id=data.trace_id,
+            top_k=data.top_k,
+            hit_count=data.hit_count,
+            expected_doc_id=data.expected_doc_id,
+            expected_section_id=data.expected_section_id,
+            matched_rank=data.matched_rank,
+            recall_hit=data.recall_hit,
+            mrr_score=data.mrr_score,
+            ndcg_score=data.ndcg_score,
+            rerank_enabled=data.rerank_enabled,
+            rerank_ms=data.rerank_ms,
+            elapsed_ms=data.elapsed_ms,
+            metadata_json=data.metadata_json,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "创建成功")
+
+
+@router.get("/rag/summary")
+def get_rag_evaluation_summary(
+    dataset_id: str | None = None,
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    summary = service.summarize_rag_evaluation(db, tenant_id=current_user["tenant_id"], dataset_id=dataset_id)
     return success(summary, "查询成功", total=summary["total_count"])

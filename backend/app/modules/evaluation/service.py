@@ -223,6 +223,16 @@ def _row_to_nl2sql_result(row) -> dict:
     return item
 
 
+def _row_to_rag_result(row) -> dict:
+    item = dict(row)
+    item["recall_hit"] = bool(item.get("recall_hit"))
+    item["rerank_enabled"] = bool(item.get("rerank_enabled"))
+    item["mrr_score"] = float(item.get("mrr_score") or 0)
+    item["ndcg_score"] = float(item.get("ndcg_score") or 0)
+    item["metadata_json"] = _loads(item.get("metadata_json")) or {}
+    return item
+
+
 def create_nl2sql_evaluation_result(
     db: Session,
     *,
@@ -336,4 +346,144 @@ def summarize_nl2sql_evaluation(db: Session, *, tenant_id: str, dataset_id: str 
         "total_row_count": int(row["total_row_count"] or 0),
         "avg_elapsed_ms": round(float(row["avg_elapsed_ms"] or 0), 2),
         "latest_errors": [dict(item) for item in latest_errors],
+    }
+
+
+def create_rag_evaluation_result(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    case_id: str,
+    trace_id: str | None = None,
+    top_k: int = 5,
+    hit_count: int = 0,
+    expected_doc_id: str | None = None,
+    expected_section_id: str | None = None,
+    matched_rank: int | None = None,
+    recall_hit: bool = False,
+    mrr_score: float = 0,
+    ndcg_score: float = 0,
+    rerank_enabled: bool = True,
+    rerank_ms: int = 0,
+    elapsed_ms: int = 0,
+    metadata_json: dict | None = None,
+) -> dict:
+    case = get_case(db, tenant_id=tenant_id, case_id=case_id)
+    if case["target_type"] != "rag":
+        raise ValueError("评测样本不是 RAG 类型")
+    result_id = new_id("rageval")
+    db.execute(
+        text(
+            """
+            INSERT INTO rag_evaluation_result (
+              tenant_id, result_id, dataset_id, case_id, trace_id, top_k, hit_count,
+              expected_doc_id, expected_section_id, matched_rank, recall_hit,
+              mrr_score, ndcg_score, rerank_enabled, rerank_ms, elapsed_ms,
+              metadata_json, created_by_user_id
+            )
+            VALUES (
+              :tenant_id, :result_id, :dataset_id, :case_id, :trace_id, :top_k, :hit_count,
+              :expected_doc_id, :expected_section_id, :matched_rank, :recall_hit,
+              :mrr_score, :ndcg_score, :rerank_enabled, :rerank_ms, :elapsed_ms,
+              :metadata_json, :created_by_user_id
+            )
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "result_id": result_id,
+            "dataset_id": case["dataset_id"],
+            "case_id": case_id,
+            "trace_id": trace_id,
+            "top_k": top_k,
+            "hit_count": hit_count,
+            "expected_doc_id": expected_doc_id,
+            "expected_section_id": expected_section_id,
+            "matched_rank": matched_rank,
+            "recall_hit": 1 if recall_hit else 0,
+            "mrr_score": mrr_score,
+            "ndcg_score": ndcg_score,
+            "rerank_enabled": 1 if rerank_enabled else 0,
+            "rerank_ms": rerank_ms,
+            "elapsed_ms": elapsed_ms,
+            "metadata_json": _dumps(metadata_json),
+            "created_by_user_id": user_id,
+        },
+    )
+    db.commit()
+    return get_rag_evaluation_result(db, tenant_id=tenant_id, result_id=result_id)
+
+
+def get_rag_evaluation_result(db: Session, *, tenant_id: str, result_id: str) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT result_id, tenant_id, dataset_id, case_id, trace_id, top_k, hit_count,
+                   expected_doc_id, expected_section_id, matched_rank, recall_hit,
+                   mrr_score, ndcg_score, rerank_enabled, rerank_ms, elapsed_ms,
+                   metadata_json, created_by_user_id, created_at
+            FROM rag_evaluation_result
+            WHERE tenant_id = :tenant_id AND result_id = :result_id
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "result_id": result_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError("RAG 评测结果不存在")
+    return _row_to_rag_result(row)
+
+
+def summarize_rag_evaluation(db: Session, *, tenant_id: str, dataset_id: str | None = None) -> dict:
+    filters = ["tenant_id = :tenant_id"]
+    params = {"tenant_id": tenant_id, "dataset_id": dataset_id}
+    if dataset_id:
+        filters.append("dataset_id = :dataset_id")
+    row = db.execute(
+        text(
+            f"""
+            SELECT COUNT(*) AS total_count,
+                   COALESCE(SUM(CASE WHEN recall_hit = 1 THEN 1 ELSE 0 END), 0) AS hit_result_count,
+                   COALESCE(SUM(hit_count), 0) AS total_hit_count,
+                   COALESCE(AVG(mrr_score), 0) AS avg_mrr,
+                   COALESCE(AVG(ndcg_score), 0) AS avg_ndcg,
+                   COALESCE(AVG(elapsed_ms), 0) AS avg_elapsed_ms,
+                   COALESCE(AVG(rerank_ms), 0) AS avg_rerank_ms
+            FROM rag_evaluation_result
+            WHERE {' AND '.join(filters)}
+            """
+        ),
+        params,
+    ).mappings().first()
+    latest_misses = db.execute(
+        text(
+            f"""
+            SELECT result_id, case_id, trace_id, top_k, expected_doc_id,
+                   expected_section_id, created_at, metadata_json
+            FROM rag_evaluation_result
+            WHERE {' AND '.join(filters)}
+              AND recall_hit = 0
+            ORDER BY created_at DESC, id DESC
+            LIMIT 5
+            """
+        ),
+        params,
+    ).mappings().all()
+    total_count = int(row["total_count"] or 0)
+    hit_result_count = int(row["hit_result_count"] or 0)
+    return {
+        "dataset_id": dataset_id,
+        "total_count": total_count,
+        "hit_count": hit_result_count,
+        "recall_at_k": round(hit_result_count / total_count, 4) if total_count else 0,
+        "total_hit_count": int(row["total_hit_count"] or 0),
+        "avg_mrr": round(float(row["avg_mrr"] or 0), 4),
+        "avg_ndcg": round(float(row["avg_ndcg"] or 0), 4),
+        "avg_elapsed_ms": round(float(row["avg_elapsed_ms"] or 0), 2),
+        "avg_rerank_ms": round(float(row["avg_rerank_ms"] or 0), 2),
+        "latest_misses": [
+            {**dict(item), "metadata_json": _loads(item.get("metadata_json")) or {}}
+            for item in latest_misses
+        ],
     }

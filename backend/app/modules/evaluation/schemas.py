@@ -33,3 +33,20 @@ class NL2SQLEvaluationResultCreateRequest(BaseModel):
     error_message: str | None = Field(None, max_length=4000)
     elapsed_ms: int = Field(0, ge=0)
     metadata_json: dict | None = None
+
+
+class RAGEvaluationResultCreateRequest(BaseModel):
+    case_id: str = Field(..., min_length=1, max_length=64)
+    trace_id: str | None = Field(None, max_length=64)
+    top_k: int = Field(5, ge=1, le=50)
+    hit_count: int = Field(0, ge=0)
+    expected_doc_id: str | None = Field(None, max_length=128)
+    expected_section_id: str | None = Field(None, max_length=128)
+    matched_rank: int | None = Field(None, ge=1)
+    recall_hit: bool = False
+    mrr_score: float = Field(0, ge=0, le=1)
+    ndcg_score: float = Field(0, ge=0, le=1)
+    rerank_enabled: bool = True
+    rerank_ms: int = Field(0, ge=0)
+    elapsed_ms: int = Field(0, ge=0)
+    metadata_json: dict | None = None
