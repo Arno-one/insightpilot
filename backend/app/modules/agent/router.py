@@ -265,6 +265,58 @@ def _list_recovery_event_records(db: Session, current_user: dict, session_id: st
     return records
 
 
+def _build_recovery_event_stats(db: Session, current_user: dict, limit: int = 1000) -> dict:
+    rows = db.execute(
+        text(
+            """
+            SELECT session_id, content, run_id, metadata_json, created_at
+            FROM agent_chat_message
+            WHERE tenant_id = :tenant_id
+              AND user_id = :user_id
+              AND tool_name = 'agent_chat.recovery_event'
+            ORDER BY created_at ASC, id ASC
+            LIMIT :limit
+            """
+        ),
+        {
+            "tenant_id": current_user["tenant_id"],
+            "user_id": current_user["user_id"],
+            "limit": max(1, min(limit, 2000)),
+        },
+    ).mappings().all()
+    counters = {"opened": 0, "running": 0, "succeeded": 0, "failed": 0}
+    latest_failed_event = None
+    for row in rows:
+        metadata = _loads_json(row.get("metadata_json"))
+        event = metadata.get("recovery_event") if isinstance(metadata, dict) else None
+        if not isinstance(event, dict):
+            continue
+        status = event.get("status")
+        if status in counters:
+            counters[status] += 1
+        if status == "failed":
+            latest_failed_event = {
+                "session_id": row["session_id"],
+                "content": row["content"],
+                "run_id": row["run_id"],
+                "created_at": row["created_at"],
+                "recovery_event": event,
+            }
+
+    total = sum(counters.values())
+    finished = counters["succeeded"] + counters["failed"]
+    success_rate = round(counters["succeeded"] / finished, 4) if finished else 0
+    return {
+        "total_count": total,
+        "opened_count": counters["opened"],
+        "running_count": counters["running"],
+        "succeeded_count": counters["succeeded"],
+        "failed_count": counters["failed"],
+        "success_rate": success_rate,
+        "latest_failed_event": latest_failed_event,
+    }
+
+
 def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
     """从统一会话中提取最近一次数据查询上下文，支持下一轮继续追问。"""
     for index in range(len(messages) - 1, -1, -1):
@@ -736,6 +788,17 @@ def list_agent_chat_sessions(
     )
     data = _attach_recovery_event_summaries(db, current_user, data)
     return success(data, "查询成功", total=len(data))
+
+
+@router.get("/chat/recovery-events/stats")
+def get_agent_chat_recovery_event_stats(
+    limit: int = 1000,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """查询当前用户统一 Agent 对话恢复事件基础统计。"""
+    stats = _build_recovery_event_stats(db, current_user, limit=limit)
+    return success(stats, "查询成功", total=stats["total_count"])
 
 
 @router.get("/chat/sessions/{session_id}")

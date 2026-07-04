@@ -245,5 +245,12 @@ def test_agent_chat_recovery_event_is_persisted_as_system_message():
         assert len(events) == 1
         assert events[0]["message_id"] == event_message["message_id"]
         assert events[0]["recovery_event"]["new_run_id"] == "run_retry_demo"
+
+        stats_response = client.get("/api/agent/chat/recovery-events/stats", headers=headers)
+        assert stats_response.status_code == 200
+        stats = stats_response.json()["data"]
+        assert stats["total_count"] >= 1
+        assert stats["succeeded_count"] >= 1
+        assert stats["success_rate"] >= 0
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)

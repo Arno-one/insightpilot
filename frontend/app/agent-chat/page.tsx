@@ -150,6 +150,16 @@ type RecoveryEventRecord = {
   created_at: string;
 };
 
+type RecoveryEventStats = {
+  total_count: number;
+  opened_count: number;
+  running_count: number;
+  succeeded_count: number;
+  failed_count: number;
+  success_rate: number;
+  latest_failed_event: RecoveryEventRecord | null;
+};
+
 type RecoveryEventSummary = {
   total: number;
   failedCount: number;
@@ -305,6 +315,10 @@ function buildSessionsPath(filter: RecoverySessionFilter) {
     params.set("recovery_status", filter);
   }
   return `/api/agent/chat/sessions?${params.toString()}`;
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
 }
 
 function buildRecoveryEventSummary(messages: AgentChatMessage[]): RecoveryEventSummary | null {
@@ -628,6 +642,7 @@ function AgentChatContent() {
   const [recoveryEventDetail, setRecoveryEventDetail] = useState<RecoveryEventDetail | null>(null);
   const [recoveryEventRecords, setRecoveryEventRecords] = useState<RecoveryEventRecord[]>([]);
   const [recoveryEventsLoading, setRecoveryEventsLoading] = useState(false);
+  const [recoveryEventStats, setRecoveryEventStats] = useState<RecoveryEventStats | null>(null);
   const [serverRecoveryEventSummary, setServerRecoveryEventSummary] = useState<RecoveryEventSummary | null>(null);
 
   const selectedCustomer = useMemo(
@@ -652,6 +667,15 @@ function AgentChatContent() {
     }
   }
 
+  async function loadRecoveryStats() {
+    try {
+      const response = await apiFetch<RecoveryEventStats>("/api/agent/chat/recovery-events/stats");
+      setRecoveryEventStats(response.data);
+    } catch (exc) {
+      setMessage(exc instanceof Error ? `恢复统计加载失败：${exc.message}` : "恢复统计加载失败。");
+    }
+  }
+
   async function loadInitialData() {
     setLoading(true);
     setError("");
@@ -671,6 +695,7 @@ function AgentChatContent() {
       if (candidate) {
         await loadSessionDetail(candidate.session_id);
       }
+      await loadRecoveryStats();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "统一 Agent 对话加载失败。");
     } finally {
@@ -724,6 +749,7 @@ function AgentChatContent() {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      await loadRecoveryStats();
       return response.data;
     } catch (exc) {
       setMessage(exc instanceof Error ? `恢复动作已执行，但事件记录失败：${exc.message}` : "恢复动作已执行，但事件记录失败。");
@@ -1119,6 +1145,21 @@ function AgentChatContent() {
                         详情
                       </button>
                     </div>
+                  </div>
+                </div>
+              ) : null}
+              {recoveryEventStats ? (
+                <div className="summary-item">
+                  <strong>恢复统计</strong>
+                  <p>
+                    共 {recoveryEventStats.total_count} 条，成功率 {formatPercent(recoveryEventStats.success_rate)}，失败{" "}
+                    {recoveryEventStats.failed_count} 条。
+                  </p>
+                  <div className={styles.recoverySummary}>
+                    <span>成功 {recoveryEventStats.succeeded_count} 条，执行中 {recoveryEventStats.running_count} 条。</span>
+                    {recoveryEventStats.latest_failed_event?.recovery_event?.error ? (
+                      <span>最近失败：{recoveryEventStats.latest_failed_event.recovery_event.error}</span>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
