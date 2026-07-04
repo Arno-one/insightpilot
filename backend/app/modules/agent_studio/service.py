@@ -44,6 +44,10 @@ def _row_to_publish_audit(row: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _to_iso(value: Any) -> Any:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
 def create_agent_definition(
     db: Session,
     current_user: dict[str, Any],
@@ -735,6 +739,59 @@ def diff_agent_definitions(
             "tool_policy_json": tool_policy_changes,
             "memory_policy_json": memory_policy_changes,
         },
+    }
+
+
+def summarize_agent_studio(db: Session, current_user: dict[str, Any]) -> dict[str, Any]:
+    definition_row = db.execute(
+        text(
+            """
+            SELECT COUNT(*) AS total_count,
+                   COUNT(DISTINCT agent_code) AS agent_code_count,
+                   SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) AS draft_count,
+                   SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_count,
+                   SUM(CASE WHEN status = 'disabled' THEN 1 ELSE 0 END) AS disabled_count,
+                   MAX(updated_at) AS latest_definition_updated_at
+            FROM agent_definition
+            WHERE tenant_id = :tenant_id
+            """
+        ),
+        {"tenant_id": current_user["tenant_id"]},
+    ).mappings().first() or {}
+    audit_row = db.execute(
+        text(
+            """
+            SELECT COUNT(*) AS total_count,
+                   SUM(CASE WHEN publish_status = 'published' THEN 1 ELSE 0 END) AS published_count,
+                   SUM(CASE WHEN publish_status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count,
+                   MAX(created_at) AS latest_publish_audit_at
+            FROM agent_definition_publish_audit
+            WHERE tenant_id = :tenant_id
+            """
+        ),
+        {"tenant_id": current_user["tenant_id"]},
+    ).mappings().first() or {}
+    active_definitions = list_agent_definitions(db, current_user, status="active", limit=10)
+    recent_audits = list_agent_publish_audits(db, current_user, limit=10)
+    # 中文注释：阶段总览只聚合平台化指标，不读取具体业务客户数据，避免跨模块耦合。
+    return {
+        "overview_version": "agent_studio_overview_v1",
+        "definition_summary": {
+            "total_count": int(definition_row.get("total_count") or 0),
+            "agent_code_count": int(definition_row.get("agent_code_count") or 0),
+            "draft_count": int(definition_row.get("draft_count") or 0),
+            "active_count": int(definition_row.get("active_count") or 0),
+            "disabled_count": int(definition_row.get("disabled_count") or 0),
+            "latest_definition_updated_at": _to_iso(definition_row.get("latest_definition_updated_at")),
+        },
+        "publish_audit_summary": {
+            "total_count": int(audit_row.get("total_count") or 0),
+            "published_count": int(audit_row.get("published_count") or 0),
+            "blocked_count": int(audit_row.get("blocked_count") or 0),
+            "latest_publish_audit_at": _to_iso(audit_row.get("latest_publish_audit_at")),
+        },
+        "active_definitions": active_definitions,
+        "recent_publish_audits": recent_audits,
     }
 
 

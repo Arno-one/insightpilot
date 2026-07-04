@@ -15,6 +15,15 @@ from app.shared.response import success
 router = APIRouter()
 
 
+@router.get("/overview")
+def get_agent_studio_overview(
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    item = service.summarize_agent_studio(db, current_user)
+    return success(item, "查询成功")
+
+
 @router.get("/definitions")
 def list_agent_definitions(
     status: str | None = None,
