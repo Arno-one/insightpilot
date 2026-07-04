@@ -167,6 +167,25 @@ def _load_chat_session_or_404(db: Session, current_user: dict, session_id: str) 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _build_recovery_event_summary(messages: list[dict]) -> dict | None:
+    """从统一对话消息中聚合恢复动作事件，供前端和列表页复用。"""
+    events: list[dict] = []
+    for message in messages:
+        metadata = message.get("metadata_json") or {}
+        event = metadata.get("recovery_event") if isinstance(metadata, dict) else None
+        if isinstance(event, dict):
+            events.append(event)
+    if not events:
+        return None
+    return {
+        "total": len(events),
+        "failed_count": sum(1 for event in events if event.get("status") == "failed"),
+        "succeeded_count": sum(1 for event in events if event.get("status") == "succeeded"),
+        "running_count": sum(1 for event in events if event.get("status") == "running"),
+        "last_event": events[-1],
+    }
+
+
 def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
     """从统一会话中提取最近一次数据查询上下文，支持下一轮继续追问。"""
     for index in range(len(messages) - 1, -1, -1):
@@ -651,7 +670,15 @@ def get_agent_chat_session_detail(
         session_id=session_id,
         limit=limit,
     )
-    return success({"session": session, "messages": messages}, "查询成功", total=len(messages))
+    return success(
+        {
+            "session": session,
+            "messages": messages,
+            "recovery_event_summary": _build_recovery_event_summary(messages),
+        },
+        "查询成功",
+        total=len(messages),
+    )
 
 
 @router.post("/chat/intent")

@@ -50,6 +50,7 @@ type AgentChatMessage = {
 type AgentChatDetail = {
   session: AgentChatSession;
   messages: AgentChatMessage[];
+  recovery_event_summary?: ServerRecoveryEventSummary | null;
 };
 
 type RuntimeResult = {
@@ -139,6 +140,14 @@ type RecoveryEventSummary = {
   succeededCount: number;
   runningCount: number;
   lastEvent: RecoveryEvent;
+};
+
+type ServerRecoveryEventSummary = {
+  total: number;
+  failed_count: number;
+  succeeded_count: number;
+  running_count: number;
+  last_event: RecoveryEvent;
 };
 
 function intentLabel(intent: string | null | undefined) {
@@ -263,6 +272,19 @@ function buildRecoveryEventSummary(messages: AgentChatMessage[]): RecoveryEventS
     succeededCount: events.filter((event) => event.status === "succeeded").length,
     runningCount: events.filter((event) => event.status === "running").length,
     lastEvent: events[events.length - 1],
+  };
+}
+
+function normalizeRecoveryEventSummary(summary: ServerRecoveryEventSummary | null | undefined): RecoveryEventSummary | null {
+  if (!summary) {
+    return null;
+  }
+  return {
+    total: summary.total,
+    failedCount: summary.failed_count,
+    succeededCount: summary.succeeded_count,
+    runningCount: summary.running_count,
+    lastEvent: summary.last_event,
   };
 }
 
@@ -447,6 +469,7 @@ function AgentChatContent() {
   const [error, setError] = useState("");
   const [runtime, setRuntime] = useState<RuntimeResult | null>(null);
   const [recoveryAction, setRecoveryAction] = useState<RecoveryActionStatus | null>(null);
+  const [serverRecoveryEventSummary, setServerRecoveryEventSummary] = useState<RecoveryEventSummary | null>(null);
 
   const selectedCustomer = useMemo(
     () => customers.find((item) => item.customer_id === selectedCustomerId) || null,
@@ -456,12 +479,14 @@ function AgentChatContent() {
     () => sessions.find((item) => item.session_id === activeSessionId) || null,
     [activeSessionId, sessions]
   );
-  const recoveryEventSummary = useMemo(() => buildRecoveryEventSummary(messages), [messages]);
+  const localRecoveryEventSummary = useMemo(() => buildRecoveryEventSummary(messages), [messages]);
+  const recoveryEventSummary = serverRecoveryEventSummary || localRecoveryEventSummary;
 
   async function loadSessionDetail(sessionId: string, options?: { preserveRecoveryAction?: boolean }) {
     const response = await apiFetch<AgentChatDetail>(`/api/agent/chat/sessions/${sessionId}`);
     setActiveSessionId(sessionId);
     setMessages(response.data.messages);
+    setServerRecoveryEventSummary(normalizeRecoveryEventSummary(response.data.recovery_event_summary));
     setRuntime(null);
     if (!options?.preserveRecoveryAction) {
       setRecoveryAction(null);
@@ -519,6 +544,7 @@ function AgentChatContent() {
     });
     await loadSessions(response.data.session_id);
     setMessages([]);
+    setServerRecoveryEventSummary(null);
     setRuntime(null);
     setRecoveryAction(null);
     return response.data;
@@ -646,6 +672,7 @@ function AgentChatContent() {
     try {
       await apiFetch(`/api/agent/chat/sessions/${activeSessionId}/close`, { method: "POST" });
       setMessages([]);
+      setServerRecoveryEventSummary(null);
       setActiveSessionId("");
       await loadSessions();
     } catch (exc) {
