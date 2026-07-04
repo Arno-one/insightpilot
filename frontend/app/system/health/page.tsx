@@ -186,6 +186,58 @@ type PilotDataPack = {
   };
 };
 
+type PilotAcceptanceReport = {
+  report_version: string;
+  tenant_id: string;
+  overall_status: "accepted" | "accepted_with_warnings" | "blocked";
+  acceptance_gate: {
+    can_enter_pilot: boolean;
+    can_accept_pilot: boolean;
+    blocker_count: number;
+    warning_count: number;
+    blockers: Array<{
+      source: string;
+      reason: string;
+      items: string[];
+    }>;
+    warnings: Array<{
+      source: string;
+      reason: string;
+      items: string[];
+    }>;
+  };
+  sections: Record<
+    string,
+    {
+      version: string;
+      overall_status?: string;
+      release_decision?: string;
+      control_count?: number;
+      step_count?: number;
+      check_count?: number;
+      status_counts?: StatusCounts;
+      severity_counts?: StatusCounts;
+      priority_counts?: StatusCounts;
+      missing_checks?: string[];
+      can_release_to_pilot?: boolean;
+      can_release_to_production?: boolean;
+    }
+  >;
+  deliverables: Array<{
+    deliverable_id: string;
+    title: string;
+    source: string;
+    status: string;
+  }>;
+  execution_boundary: {
+    readonly: boolean;
+    external_write_enabled: boolean;
+    auto_accept_enabled: boolean;
+    auto_release_enabled: boolean;
+    description: string;
+  };
+};
+
 type HealthConsoleData = {
   hardening: EnterpriseHardeningReport;
   readiness: DeploymentReadiness;
@@ -193,9 +245,12 @@ type HealthConsoleData = {
   releaseGate: ReleaseGateChecklist;
   smokePlan: SmokeTestPlan;
   pilotPack: PilotDataPack;
+  acceptanceReport: PilotAcceptanceReport;
 };
 
 const statusText: Record<string, string> = {
+  accepted: "已验收",
+  accepted_with_warnings: "带提醒验收",
   ready: "就绪",
   ready_with_warnings: "有待处理建议",
   warn: "提醒",
@@ -209,7 +264,7 @@ function statusTone(status: string) {
   if (status === "blocked" || status === "fail") {
     return "tone-danger";
   }
-  if (status === "warn" || status === "ready_with_warnings" || status === "incomplete") {
+  if (status === "warn" || status === "ready_with_warnings" || status === "accepted_with_warnings" || status === "incomplete") {
     return "tone-warning";
   }
   return "tone-success";
@@ -232,24 +287,27 @@ function stringifyEvidence(value: unknown) {
   return String(value ?? "-");
 }
 
+type HealthTab = "hardening" | "deployment" | "backup" | "release" | "smoke" | "pilot" | "acceptance";
+
 export default function SystemHealthPage() {
   const [data, setData] = useState<HealthConsoleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"hardening" | "deployment" | "backup" | "release" | "smoke" | "pilot">("hardening");
+  const [activeTab, setActiveTab] = useState<HealthTab>("hardening");
   const [smokeDrafts, setSmokeDrafts] = useState<Record<string, string>>({});
 
   async function loadHealthConsole() {
     setLoading(true);
     setError("");
     try {
-      const [hardening, readiness, backup, releaseGate, smokePlan, pilotPack] = await Promise.all([
+      const [hardening, readiness, backup, releaseGate, smokePlan, pilotPack, acceptanceReport] = await Promise.all([
         apiFetch<EnterpriseHardeningReport>("/api/system/enterprise-hardening"),
         apiFetch<DeploymentReadiness>("/api/system/deployment-readiness"),
         apiFetch<BackupRecovery>("/api/system/backup-recovery"),
         apiFetch<ReleaseGateChecklist>("/api/system/release-gate"),
         apiFetch<SmokeTestPlan>("/api/system/smoke-test-plan"),
-        apiFetch<PilotDataPack>("/api/system/pilot-data-pack")
+        apiFetch<PilotDataPack>("/api/system/pilot-data-pack"),
+        apiFetch<PilotAcceptanceReport>("/api/system/pilot-acceptance-report")
       ]);
       setData({
         hardening: hardening.data,
@@ -257,7 +315,8 @@ export default function SystemHealthPage() {
         backup: backup.data,
         releaseGate: releaseGate.data,
         smokePlan: smokePlan.data,
-        pilotPack: pilotPack.data
+        pilotPack: pilotPack.data,
+        acceptanceReport: acceptanceReport.data
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "系统健康数据加载失败。");
@@ -327,6 +386,13 @@ export default function SystemHealthPage() {
               <span className="metric-label">试点数据覆盖</span>
               <p className="metric-detail">{data.pilotPack.missing_checks.length ? `缺失 ${data.pilotPack.missing_checks.length} 项。` : "试点数据包完整。"}</p>
             </article>
+            <article className={`metric-card ${statusTone(data.acceptanceReport.overall_status)}`}>
+              <strong className="metric-value">{data.acceptanceReport.acceptance_gate.can_accept_pilot ? "可验收" : "待处理"}</strong>
+              <span className="metric-label">试点验收报告</span>
+              <p className="metric-detail">
+                {formatStatus(data.acceptanceReport.overall_status)}，{data.acceptanceReport.acceptance_gate.blocker_count} 个阻断，{data.acceptanceReport.acceptance_gate.warning_count} 个提醒。
+              </p>
+            </article>
           </section>
 
           <section className="command-panel">
@@ -368,12 +434,13 @@ export default function SystemHealthPage() {
                   ["backup", "备份恢复"],
                   ["release", "发布门禁"],
                   ["smoke", "冒烟计划"],
-                  ["pilot", "试点数据"]
+                  ["pilot", "试点数据"],
+                  ["acceptance", "验收报告"]
                 ].map(([key, label]) => (
                   <button
                     className={`workspace-tab ${activeTab === key ? "workspace-tab-active" : ""}`}
                     key={key}
-                    onClick={() => setActiveTab(key as "hardening" | "deployment" | "backup" | "release" | "smoke" | "pilot")}
+                    onClick={() => setActiveTab(key as HealthTab)}
                     type="button"
                   >
                     <span className="workspace-tab-dot" />
@@ -437,6 +504,15 @@ export default function SystemHealthPage() {
                 <span>试点数据</span>
                 <strong>{formatStatus(data.pilotPack.overall_status)}</strong>
                 <small>{data.pilotPack.status_counts.pass || 0}/{data.pilotPack.check_count} 项通过</small>
+              </button>
+              <button
+                className={`health-section-card ${activeTab === "acceptance" ? "is-active" : ""} ${statusTone(data.acceptanceReport.overall_status)}`}
+                onClick={() => setActiveTab("acceptance")}
+                type="button"
+              >
+                <span>验收报告</span>
+                <strong>{formatStatus(data.acceptanceReport.overall_status)}</strong>
+                <small>{data.acceptanceReport.acceptance_gate.blocker_count} 阻断 / {data.acceptanceReport.acceptance_gate.warning_count} 提醒</small>
               </button>
             </div>
 
@@ -638,6 +714,73 @@ export default function SystemHealthPage() {
                         <h3>{check.title}</h3>
                         <p>当前 {check.actual_count}，要求至少 {check.required_min_count}。{check.expected_evidence}</p>
                         {check.status === "fail" ? <p className="danger-text">{check.recommendation}</p> : null}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {activeTab === "acceptance" ? (
+              <div className="health-acceptance-layout">
+                <article className="summary-item">
+                  <strong>验收结论</strong>
+                  <p>
+                    {formatStatus(data.acceptanceReport.overall_status)}，{data.acceptanceReport.acceptance_gate.can_accept_pilot ? "当前可进入试点交付验收。" : "仍有阻断项需要处理。"}
+                  </p>
+                </article>
+                <article className="summary-item">
+                  <strong>准入门禁</strong>
+                  <p>
+                    试点准入：{data.acceptanceReport.acceptance_gate.can_enter_pilot ? "通过" : "未通过"}；试点验收：{data.acceptanceReport.acceptance_gate.can_accept_pilot ? "通过" : "未通过"}。
+                  </p>
+                </article>
+                <article className="summary-item">
+                  <strong>执行边界</strong>
+                  <p>{data.acceptanceReport.execution_boundary.description}</p>
+                </article>
+                <div className="card-stack">
+                  {(data.acceptanceReport.acceptance_gate.blockers.length
+                    ? data.acceptanceReport.acceptance_gate.blockers
+                    : [{ source: "acceptance", reason: "no_blockers", items: ["当前没有验收阻断项"] }]
+                  ).map((item) => (
+                    <article className="health-check-row" key={`acceptance-blocker-${item.source}-${item.reason}`}>
+                      <span className={`meta-chip ${item.reason === "no_blockers" ? "tone-success" : "tone-danger"}`}>
+                        {item.reason === "no_blockers" ? "通过" : "阻断"}
+                      </span>
+                      <div>
+                        <p className="eyebrow">{item.source}</p>
+                        <h3>{item.reason}</h3>
+                        <p>{item.items.join(" / ")}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="card-stack">
+                  {(data.acceptanceReport.acceptance_gate.warnings.length
+                    ? data.acceptanceReport.acceptance_gate.warnings
+                    : [{ source: "acceptance", reason: "no_warnings", items: ["当前没有验收提醒项"] }]
+                  ).map((item) => (
+                    <article className="health-check-row" key={`acceptance-warning-${item.source}-${item.reason}`}>
+                      <span className={`meta-chip ${item.reason === "no_warnings" ? "tone-success" : "tone-warning"}`}>
+                        {item.reason === "no_warnings" ? "通过" : "提醒"}
+                      </span>
+                      <div>
+                        <p className="eyebrow">{item.source}</p>
+                        <h3>{item.reason}</h3>
+                        <p>{item.items.join(" / ")}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="card-stack">
+                  {data.acceptanceReport.deliverables.map((deliverable) => (
+                    <article className="health-check-row" key={deliverable.deliverable_id}>
+                      <span className={`meta-chip ${statusTone(deliverable.status)}`}>{formatStatus(deliverable.status)}</span>
+                      <div>
+                        <p className="eyebrow">{deliverable.source}</p>
+                        <h3>{deliverable.title}</h3>
+                        <p>{deliverable.deliverable_id}</p>
                       </div>
                     </article>
                   ))}

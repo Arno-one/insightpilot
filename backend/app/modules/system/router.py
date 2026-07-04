@@ -10,6 +10,7 @@ from app.shared.backup_recovery import summarize_backup_recovery
 from app.shared.deployment_readiness import summarize_deployment_readiness
 from app.shared.enterprise_hardening import summarize_enterprise_hardening
 from app.shared.event_bus import event_bus
+from app.shared.pilot_acceptance_report import summarize_pilot_acceptance_report
 from app.shared.pilot_data_pack import summarize_pilot_data_pack
 from app.shared.release_gate import summarize_release_gate
 from app.shared.response import success
@@ -335,6 +336,16 @@ def get_pilot_data_pack(
     """中文注释：只读校验企业试点数据包，不自动修 seed、不写入数据库。"""
     pack = summarize_pilot_data_pack(db, tenant_id=current_user["tenant_id"])
     return success(pack, "查询成功", total=pack["check_count"])
+
+
+@router.get("/pilot-acceptance-report")
+def get_pilot_acceptance_report(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    """中文注释：输出企业试点验收报告，只读聚合证据，不自动验收或触发真实发布动作。"""
+    report = summarize_pilot_acceptance_report(db, tenant_id=current_user["tenant_id"])
+    return success(report, "查询成功", total=report["acceptance_gate"]["blocker_count"])
 
 
 @router.get("/access-control")
