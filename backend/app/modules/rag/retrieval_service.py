@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.modules.rag.embedding_client import embed_query
 from app.modules.rag.milvus_client import ensure_collections, get_milvus_client, hybrid_search
-from app.modules.rag.schemas import RagHit, RagSearchResponse
+from app.modules.rag.schemas import RagCitation, RagHit, RagSearchResponse
 from app.shared.ids import new_id
 
 logger = logging.getLogger(__name__)
@@ -79,11 +79,37 @@ def _dedupe_hits(hits: list[RagHit]) -> list[RagHit]:
     return result
 
 
+def _citation_ref(hit: RagHit) -> str:
+    return f"{hit.doc_id}#{hit.section_id}" if hit.section_id else hit.doc_id
+
+
+def _build_citations(hits: list[RagHit]) -> list[RagCitation]:
+    citations: list[RagCitation] = []
+    for index, hit in enumerate(hits, 1):
+        citation_id = hit.citation_id or f"K{index}"
+        citations.append(
+            RagCitation(
+                citation_id=citation_id,
+                source_type=hit.source_type,
+                doc_id=hit.doc_id,
+                section_id=hit.section_id,
+                title=hit.title,
+                rank_no=hit.rank_no,
+                score=hit.score,
+                ref=_citation_ref(hit),
+                text_preview=hit.text[:300],
+            )
+        )
+    return citations
+
+
 def _build_context(hits: list[RagHit], max_chars: int = 3000) -> str:
     parts = []
     used = 0
     for index, hit in enumerate(hits, 1):
-        block = f"[来源 {index}] ({hit.source_type}) {hit.doc_id}/{hit.section_id or '-'}\n{hit.text}"
+        # 中文注释：上下文中的 K 编号与 citations 一一对应，便于 Agent 在回答中稳定引用来源。
+        citation_id = hit.citation_id or f"K{index}"
+        block = f"[{citation_id}] ({hit.source_type}) {hit.doc_id}/{hit.section_id or '-'}\n{hit.text}"
         if used + len(block) > max_chars:
             break
         parts.append(block)
@@ -182,11 +208,13 @@ def search_knowledge(tenant_id: str, user_id: str, question: str, top_k: int = 5
     hits = _dedupe_hits(normalized)[:top_k]
     for index, hit in enumerate(hits, 1):
         hit.rank_no = index
+        hit.citation_id = f"K{index}"
 
     timings["rerank_ms"] = 0
     timings["total_ms"] = int((time.time() - total_start) * 1000)
     trace_id = new_id("trace")
     context = _build_context(hits)
+    citations = _build_citations(hits)
 
     db = SessionLocal()
     try:
@@ -203,5 +231,6 @@ def search_knowledge(tenant_id: str, user_id: str, question: str, top_k: int = 5
         question=question,
         rewritten_query=rewritten,
         hits=hits,
+        citations=citations,
         answer_context=context,
     )

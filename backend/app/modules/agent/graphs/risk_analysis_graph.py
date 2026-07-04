@@ -200,8 +200,10 @@ def _retrieve_rag_context(
             "trace_id": response.trace_id,
             "hit_count": len(response.hits),
             "context": response.answer_context,
+            "citations": [citation.model_dump() for citation in response.citations],
             "sources": [
                 {
+                    "citation_id": hit.citation_id,
                     "source_type": hit.source_type,
                     "doc_id": hit.doc_id,
                     "section_id": hit.section_id,
@@ -218,6 +220,7 @@ def _retrieve_rag_context(
             "trace_id": None,
             "hit_count": 0,
             "context": "",
+            "citations": [],
             "sources": [],
             "error": str(exc),
         }
@@ -231,6 +234,7 @@ def _with_rag_evidence(risk_result: dict[str, Any], rag_result: dict[str, Any]) 
         "rag_hit_count": rag_result.get("hit_count", 0),
         "rag_status": rag_result.get("status"),
         "rag_sources": rag_result.get("sources", []),
+        "rag_citations": rag_result.get("citations", []),
     }
     if rag_result.get("error"):
         evidence["rag_error"] = rag_result["error"][:500]

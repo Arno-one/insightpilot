@@ -8,6 +8,7 @@ class RagSearchRequest(BaseModel):
 
 
 class RagHit(BaseModel):
+    citation_id: str | None = None
     source_type: str
     doc_id: str
     section_id: str | None = None
@@ -17,11 +18,24 @@ class RagHit(BaseModel):
     rank_no: int
 
 
+class RagCitation(BaseModel):
+    citation_id: str
+    source_type: str
+    doc_id: str
+    section_id: str | None = None
+    title: str | None = None
+    rank_no: int
+    score: float | None = None
+    ref: str
+    text_preview: str
+
+
 class RagSearchResponse(BaseModel):
     trace_id: str
     question: str
     rewritten_query: str
     hits: list[RagHit]
+    citations: list[RagCitation] = Field(default_factory=list)
     answer_context: str
 
 
