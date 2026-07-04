@@ -4,7 +4,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.modules.agent.platform import InternalToolRegistry, ToolExecutionContext, build_data_mcp_tools
+from app.modules.agent import intent_router
+from app.modules.agent.platform import execute_agent_chat_tool
 
 
 def _join_section(title: str, items: list[str]) -> list[str]:
@@ -43,27 +44,29 @@ def run_data_analyst_tool(
     context_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """统一 Agent 的经营分析工具封装；实际执行走标准 data.analyze_business Tool。"""
-    registry = InternalToolRegistry(build_data_mcp_tools())
-    context = ToolExecutionContext(
-        tenant_id=current_user["tenant_id"],
-        user_id=current_user["user_id"],
-        run_id="agent_chat_data_analyst",
-        db=db_rw,
-        readonly_db=db_readonly,
-    )
     payload: dict[str, Any] = {"question": question}
     if session_id:
         payload["session_id"] = session_id
     if context_payload:
         payload["context"] = context_payload
-    tool_result = registry.execute("data.analyze_business", context, payload)
-    result = tool_result["output"]
+    routed_result = execute_agent_chat_tool(
+        db_rw=db_rw,
+        db_readonly=db_readonly,
+        current_user=current_user,
+        run_id="agent_chat_data_analyst",
+        intent=intent_router.INTENT_BUSINESS_ANALYSIS,
+        agent_scope="general",
+        payload=payload,
+        preferred_tool="data.analyze_business",
+    )
+    result = routed_result["output"]
     query = result.get("query") or {}
     reply = _build_reply(result)
     return {
         "reply": reply,
         "analysis_result": result,
         "tool_name": "data.analyze_business",
+        "tool_route": routed_result["route"],
         "query_id": query.get("query_id"),
         "nl2sql_session_id": query.get("session_id"),
         "is_cached": bool(query.get("is_cached")),

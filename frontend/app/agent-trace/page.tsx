@@ -159,6 +159,11 @@ const STEP_META: Record<string, StepMeta> = {
     label: "生成执行计划",
     description: "使用稳定模板拆解本次任务，生成可审计的步骤计划。",
   },
+  agent_chat_tool_router: {
+    stage: "Router",
+    label: "选择执行工具",
+    description: "按意图、会话范围和权限选择本次要调用的工具。",
+  },
   agent_chat_tool: {
     stage: "Executor",
     label: "执行对话工具",

@@ -88,7 +88,7 @@ def _build_runtime_step_queue(
     status: str,
     error_message: str | None = None,
 ) -> list[dict[str, Any]]:
-    """构造统一对话 Runtime 的顺序步骤队列，V1 先覆盖路由和工具执行两个内部节点。"""
+    """构造统一对话 Runtime 的顺序步骤队列，覆盖意图、计划、工具路由和工具执行节点。"""
     route_input = {
         "session_id": input_payload.get("session_id"),
         "message_id": input_payload.get("message_id"),
@@ -99,6 +99,12 @@ def _build_runtime_step_queue(
         "selected_handler": handler,
     }
     plan = _build_template_plan(handler, input_payload)
+    tool_route = output_payload.get("runtime", {}).get("tool_route") or {
+        "router": "agent_chat_tool_router_v1",
+        "selected_tool": handler,
+        "allowed": True,
+        "reason": "旧兼容路径未提供独立 Tool Router 结果",
+    }
     return [
         {
             "step_id": new_id("step"),
@@ -130,13 +136,31 @@ def _build_runtime_step_queue(
         },
         {
             "step_id": new_id("step"),
-            "step_code": "tool_handler",
+            "step_code": "tool_router",
             "step_order": 3,
+            "node_name": "agent_chat_tool_router",
+            "tool_name": "agent_chat_tool_router_v1",
+            "step_title": "选择可执行工具",
+            "step_type": "router",
+            "depends_on": ["template_planner"],
+            "input_payload": {
+                "intent": plan.get("intent"),
+                "handler": handler,
+                "planner": plan.get("planner"),
+            },
+            "output_payload": tool_route,
+            "status": "success" if tool_route.get("allowed", True) else "failed",
+            "error_message": None if tool_route.get("allowed", True) else str(tool_route.get("reason") or "")[:1000],
+        },
+        {
+            "step_id": new_id("step"),
+            "step_code": "tool_handler",
+            "step_order": 4,
             "node_name": "agent_chat_tool",
             "tool_name": str(handler)[:80],
             "step_title": f"调用 {handler} 处理统一对话请求"[:120],
             "step_type": "tool_call",
-            "depends_on": ["template_planner"],
+            "depends_on": ["tool_router"],
             "input_payload": input_payload,
             "output_payload": output_payload,
             "status": status,
@@ -366,6 +390,7 @@ def record_successful_runtime_trace(
         "runtime_plan_step_id": plan_result["plan_step_id"],
         "runtime_plan_step_ids": plan_result["plan_step_ids"],
         "runtime_planner": planner_plan,
+        "runtime_tool_route": output_payload.get("runtime", {}).get("tool_route"),
     }
     db.execute(
         text(
@@ -402,6 +427,7 @@ def record_failed_runtime_trace(
     handler: str,
     error_message: str,
     recovery_plan: list[dict[str, Any]] | None = None,
+    tool_route: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """记录统一 Agent Chat 工具失败，保证失败也能进入 Trace 审计链。"""
     run_id = new_id("run")
@@ -419,6 +445,7 @@ def record_failed_runtime_trace(
         "tool_name": assistant_message.get("tool_name"),
         "error": error_message,
         "recovery_plan": recovery_plan or [],
+        "runtime": {"tool_route": tool_route or {}},
     }
     step_records = _build_runtime_step_queue(
         handler=handler,
@@ -483,6 +510,7 @@ def record_failed_runtime_trace(
         "runtime_plan_step_id": plan_result["plan_step_id"],
         "runtime_plan_step_ids": plan_result["plan_step_ids"],
         "runtime_planner": planner_plan,
+        "runtime_tool_route": output_payload.get("runtime", {}).get("tool_route"),
         "runtime_status": "failed",
         "runtime_error": error_message,
         "recovery_plan": recovery_plan or [],

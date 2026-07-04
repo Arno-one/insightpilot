@@ -21,11 +21,20 @@ from app.modules.agent.platform.tool_calling_orchestrator import (
 )
 from app.modules.agent.platform.tool_calling_tools import build_tool_calling_internal_tools
 from app.modules.agent.platform.tool_registry import InternalToolRegistry, ToolDefinition, ToolExecutionContext
+from app.modules.agent.platform.tool_router import (
+    ToolRouteResult,
+    build_agent_chat_tool_registry,
+    execute_agent_chat_tool,
+    list_agent_chat_tool_specs,
+    route_agent_chat_tool,
+)
 
 __all__ = [
     "InternalToolRegistry",
     "ToolDefinition",
     "ToolExecutionContext",
+    "ToolRouteResult",
+    "build_agent_chat_tool_registry",
     "build_customer_profile_mcp_tools",
     "build_data_mcp_tools",
     "build_execution_mcp_tools",
@@ -40,8 +49,11 @@ __all__ = [
     "build_internal_mcp_server",
     "build_shared_mcp_gateway",
     "build_tool_calling_internal_tools",
+    "execute_agent_chat_tool",
     "execute_post_approval_action_flow",
     "get_post_approval_action_run_detail",
+    "list_agent_chat_tool_specs",
     "list_failed_post_approval_action_runs",
+    "route_agent_chat_tool",
     "retry_post_approval_action_run",
 ]

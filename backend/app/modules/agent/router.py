@@ -19,6 +19,7 @@ from app.modules.agent import (
     nl2sql_tool,
     opportunity_tool,
 )
+from app.modules.agent.platform import list_agent_chat_tool_specs, route_agent_chat_tool
 from app.modules.agent.schemas import (
     AgentChatIntentRouteRequest,
     AgentChatMessageCreateRequest,
@@ -581,6 +582,7 @@ def _append_failed_runtime_trace_reply(
     resolved_intent: str,
     handler: str,
     exc: Exception,
+    tool_route: dict | None = None,
 ) -> tuple[dict, dict]:
     """工具异常时写入一条失败助手消息，并同步落 Agent Trace。"""
     error_message = str(exc)[:1000] or "工具运行失败"
@@ -600,6 +602,7 @@ def _append_failed_runtime_trace_reply(
             "runtime_handler": handler,
             "runtime_status": "failed",
             "runtime_error": error_message,
+            "tool_route": tool_route or {},
             "recovery_plan": recovery_plan,
         },
     )
@@ -614,6 +617,7 @@ def _append_failed_runtime_trace_reply(
         handler=handler,
         error_message=error_message,
         recovery_plan=recovery_plan,
+        tool_route=tool_route,
     )
     return assistant_message, {
         "handled": True,
@@ -621,6 +625,7 @@ def _append_failed_runtime_trace_reply(
         "status": "failed",
         "reason": "工具运行失败，已写入 Trace",
         "error": error_message,
+        "tool_route": tool_route or {},
         "recovery_plan": recovery_plan,
         "reply": reply,
         "run_id": trace_result["run_id"],
@@ -938,6 +943,15 @@ def route_agent_chat_intent(
     return success(result.model_dump(), "意图识别完成")
 
 
+@router.get("/chat/tools")
+def list_agent_chat_tools(
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+):
+    """查询统一对话 Tool Router 当前可选择的工具清单。"""
+    specs = list_agent_chat_tool_specs(current_user)
+    return success(specs, "查询成功", total=len(specs))
+
+
 @router.post("/chat/sessions/{session_id}/messages")
 def append_agent_chat_user_message(
     session_id: str,
@@ -974,6 +988,12 @@ def append_agent_chat_user_message(
         intent_router.INTENT_MANAGER_DECISION,
     }
     data_query_context = _load_latest_data_query_context(existing_messages) if resolved_intent in data_context_intents else None
+    tool_route = route_agent_chat_tool(
+        intent=resolved_intent,
+        agent_scope=current_session.get("agent_scope") or "general",
+        current_user=current_user,
+        has_related_customer=bool(current_session.get("related_customer_id")),
+    ).model_dump()
     message = chat_session_service.append_chat_message(
         db,
         tenant_id=current_user["tenant_id"],
@@ -994,6 +1014,7 @@ def append_agent_chat_user_message(
     runtime_result = {
         "handled": False,
         "handler": None,
+        "tool_route": tool_route,
         "reason": "当前意图暂未接入统一运行时",
     }
 
@@ -1006,6 +1027,7 @@ def append_agent_chat_user_message(
             session_id=(data_query_context or {}).get("nl2sql_session_id"),
             context_payload=data_query_context,
         )
+        tool_route = nl2sql_result.get("tool_route") or tool_route
         assistant_message = chat_session_service.append_chat_message(
             db,
             tenant_id=current_user["tenant_id"],
@@ -1024,11 +1046,13 @@ def append_agent_chat_user_message(
                 "error": nl2sql_result["error"],
                 "sql": nl2sql_result["nl2sql"].get("sql"),
                 "followup_context": data_query_context or {},
+                "tool_route": tool_route,
             },
         )
         runtime_result = {
             "handled": True,
             "handler": "data.query_sql",
+            "tool_route": tool_route,
             "reply": nl2sql_result["reply"],
             "nl2sql": nl2sql_result["nl2sql"],
         }
@@ -1041,6 +1065,7 @@ def append_agent_chat_user_message(
             session_id=(data_query_context or {}).get("nl2sql_session_id"),
             context_payload=data_query_context,
         )
+        tool_route = analyst_result.get("tool_route") or tool_route
         query = analyst_result["analysis_result"].get("query") or {}
         analysis = analyst_result["analysis_result"].get("analysis") or {}
         assistant_message = chat_session_service.append_chat_message(
@@ -1062,11 +1087,13 @@ def append_agent_chat_user_message(
                 "sql": query.get("sql"),
                 "analysis": analysis,
                 "followup_context": data_query_context or {},
+                "tool_route": tool_route,
             },
         )
         runtime_result = {
             "handled": True,
             "handler": "data.analyze_business",
+            "tool_route": tool_route,
             "reply": analyst_result["reply"],
             "analysis": analyst_result["analysis_result"],
         }
@@ -1102,11 +1129,13 @@ def append_agent_chat_user_message(
                 "decision": decision,
                 "recommended_action_count": manager_result["recommended_action_count"],
                 "followup_context": data_query_context or {},
+                "tool_route": tool_route,
             },
         )
         runtime_result = {
             "handled": True,
             "handler": "manager.make_decision",
+            "tool_route": tool_route,
             "reply": manager_result["reply"],
             "manager": manager_payload,
         }
@@ -1132,11 +1161,13 @@ def append_agent_chat_user_message(
                     "approval_count": execution_result["approval_count"],
                     "approvals": execution_result["approvals"],
                     "execution": execution_result["execution_result"],
+                    "tool_route": tool_route,
                 },
             )
             runtime_result = {
                 "handled": True,
                 "handler": "execution.propose_actions",
+                "tool_route": tool_route,
                 "reply": execution_result["reply"],
                 "execution": execution_result["execution_result"],
             }
@@ -1144,6 +1175,7 @@ def append_agent_chat_user_message(
             runtime_result = {
                 "handled": False,
                 "handler": "execution.propose_actions",
+                "tool_route": tool_route,
                 "reason": "当前会话没有可提交审批的上一轮建议动作",
             }
     elif resolved_intent == intent_router.INTENT_OPPORTUNITY_ANALYSIS:
@@ -1173,11 +1205,13 @@ def append_agent_chat_user_message(
                     "recommended_actions": opportunity_result["recommended_actions"],
                     "opportunity": opportunity_result["opportunity_result"],
                     "error": opportunity_result["error"],
+                    "tool_route": tool_route,
                 },
             )
             runtime_result = {
                 "handled": True,
                 "handler": "opportunity.scan",
+                "tool_route": tool_route,
                 "reply": opportunity_result["reply"],
                 "opportunity": opportunity_result["opportunity_result"],
             }
@@ -1191,6 +1225,7 @@ def append_agent_chat_user_message(
                 resolved_intent=resolved_intent,
                 handler="opportunity.scan",
                 exc=exc,
+                tool_route=tool_route,
             )
     elif resolved_intent == intent_router.INTENT_FOLLOW_UP_STRATEGY and current_session.get("related_customer_id"):
         try:
@@ -1200,6 +1235,7 @@ def append_agent_chat_user_message(
                 customer_id=current_session["related_customer_id"],
                 question=body.content,
             )
+            tool_route = strategy_result.get("tool_route") or tool_route
             assistant_message = chat_session_service.append_chat_message(
                 db,
                 tenant_id=current_user["tenant_id"],
@@ -1217,11 +1253,13 @@ def append_agent_chat_user_message(
                     "recommended_actions": strategy_result["recommended_actions"],
                     "strategy": strategy_result["strategy_result"],
                     "error": strategy_result["error"],
+                    "tool_route": tool_route,
                 },
             )
             runtime_result = {
                 "handled": True,
                 "handler": "followup.plan_strategy",
+                "tool_route": tool_route,
                 "reply": strategy_result["reply"],
                 "strategy": strategy_result["strategy_result"],
             }
@@ -1235,11 +1273,13 @@ def append_agent_chat_user_message(
                 resolved_intent=resolved_intent,
                 handler="followup.plan_strategy",
                 exc=exc,
+                tool_route=tool_route,
             )
     elif resolved_intent == intent_router.INTENT_FOLLOW_UP_STRATEGY:
         runtime_result = {
             "handled": False,
             "handler": "followup.plan_strategy",
+            "tool_route": tool_route,
             "reason": "跟进策略生成需要会话先关联客户",
         }
     elif resolved_intent == intent_router.INTENT_CUSTOMER_PROFILE and current_session.get("related_customer_id"):
@@ -1262,11 +1302,13 @@ def append_agent_chat_user_message(
                 "customer_id": profile_result["customer_id"],
                 "profile_tags": profile_result["profile_tags"],
                 "summary_text": profile_result["summary_text"],
+                "tool_route": tool_route,
             },
         )
         runtime_result = {
             "handled": True,
             "handler": "profile.generate_customer_memory",
+            "tool_route": tool_route,
             "reply": profile_result["reply"],
             "profile": profile_result["profile_result"],
         }
@@ -1274,6 +1316,7 @@ def append_agent_chat_user_message(
         runtime_result = {
             "handled": False,
             "handler": "profile.generate_customer_memory",
+            "tool_route": tool_route,
             "reason": "客户画像生成需要会话先关联客户",
         }
     elif resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
@@ -1298,11 +1341,13 @@ def append_agent_chat_user_message(
                     "compacted": risk_result["compacted"],
                     "latest_risk": risk_result["latest_risk"],
                 },
+                "tool_route": tool_route,
             },
         )
         runtime_result = {
             "handled": True,
             "handler": "risk_agent",
+            "tool_route": tool_route,
             "reply": risk_result["reply"],
             "risk_chat": risk_result,
         }
@@ -1310,6 +1355,7 @@ def append_agent_chat_user_message(
         runtime_result = {
             "handled": False,
             "handler": "risk_agent",
+            "tool_route": tool_route,
             "reason": "风险分析需要会话先关联客户",
         }
 

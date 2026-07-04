@@ -4,7 +4,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.modules.agent.platform import InternalToolRegistry, ToolExecutionContext, build_followup_strategy_mcp_tools
+from app.modules.agent import intent_router
+from app.modules.agent.platform import execute_agent_chat_tool
 
 
 def _build_reply(result: dict[str, Any]) -> str:
@@ -29,22 +30,23 @@ def run_followup_strategy_tool(
     question: str,
 ) -> dict[str, Any]:
     """统一 Agent 的跟进策略工具封装；只输出策略和审批动作，不直接创建任务。"""
-    registry = InternalToolRegistry(build_followup_strategy_mcp_tools())
-    context = ToolExecutionContext(
-        tenant_id=current_user["tenant_id"],
-        user_id=current_user["user_id"],
+    routed_result = execute_agent_chat_tool(
+        db_rw=db_rw,
+        db_readonly=None,
+        current_user=current_user,
         run_id="agent_chat_followup_strategy",
-        db=db_rw,
+        intent=intent_router.INTENT_FOLLOW_UP_STRATEGY,
+        agent_scope="customer",
+        payload={"customer_id": customer_id, "question": question},
+        has_related_customer=True,
+        preferred_tool="followup.plan_strategy",
     )
-    result = registry.execute(
-        "followup.plan_strategy",
-        context,
-        {"customer_id": customer_id, "question": question},
-    )["output"]
+    result = routed_result["output"]
     return {
         "reply": _build_reply(result),
         "strategy_result": result,
         "tool_name": "followup.plan_strategy",
+        "tool_route": routed_result["route"],
         "customer_id": customer_id,
         "strategy_level": result.get("strategy_level"),
         "recommended_actions": list(result.get("recommended_actions") or []),

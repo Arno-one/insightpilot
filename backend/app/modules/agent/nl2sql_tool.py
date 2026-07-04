@@ -2,7 +2,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.modules.agent.platform import InternalToolRegistry, ToolExecutionContext, build_data_mcp_tools
+from app.modules.agent import intent_router
+from app.modules.agent.platform import execute_agent_chat_tool
 
 
 def _format_cell(value: Any) -> str:
@@ -43,26 +44,28 @@ def run_nl2sql_tool(
     context_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """统一 Agent 的 NL2SQL 工具封装；实际执行走标准 data.query_sql Tool。"""
-    registry = InternalToolRegistry(build_data_mcp_tools())
-    context = ToolExecutionContext(
-        tenant_id=current_user["tenant_id"],
-        user_id=current_user["user_id"],
-        run_id="agent_chat_data_query",
-        db=db_rw,
-        readonly_db=db_readonly,
-    )
     payload: dict[str, Any] = {"question": question}
     if session_id:
         payload["session_id"] = session_id
     if context_payload:
         payload["context"] = context_payload
-    tool_result = registry.execute("data.query_sql", context, payload)
-    result = tool_result["output"]
+    routed_result = execute_agent_chat_tool(
+        db_rw=db_rw,
+        db_readonly=db_readonly,
+        current_user=current_user,
+        run_id="agent_chat_data_query",
+        intent=intent_router.INTENT_DATA_QUERY,
+        agent_scope="general",
+        payload=payload,
+        preferred_tool="data.query_sql",
+    )
+    result = routed_result["output"]
     reply = _build_reply(result)
     return {
         "reply": reply,
         "nl2sql": result,
         "tool_name": "data.query_sql",
+        "tool_route": routed_result["route"],
         "query_id": result.get("query_id"),
         "nl2sql_session_id": result.get("session_id"),
         "is_cached": bool(result.get("is_cached")),

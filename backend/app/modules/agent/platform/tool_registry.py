@@ -48,6 +48,20 @@ class InternalToolRegistry:
             for tool in self._tools.values()
         ]
 
+    def get_tool_spec(self, tool_name: str) -> dict[str, str] | None:
+        """中文注释：给 Tool Router 查询单个工具定义，避免路由层直接读取内部字典。"""
+        tool = self._tools.get(tool_name)
+        if not tool:
+            return None
+        return {
+            "name": tool.name,
+            "description": tool.description,
+        }
+
+    def has_tool(self, tool_name: str) -> bool:
+        """中文注释：路由前先做轻量存在性校验，保留旧 execute 的错误语义。"""
+        return tool_name in self._tools
+
     def execute(self, tool_name: str, context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
         tool = self._tools.get(tool_name)
         if not tool:
