@@ -80,6 +80,46 @@ def _build_template_plan(handler: str, input_payload: dict[str, Any]) -> dict[st
     }
 
 
+def _build_coordinator_output(
+    *,
+    handler: str,
+    output_payload: dict[str, Any],
+    step_records: list[dict[str, Any]],
+    status: str,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    """中文注释：Coordinator V1 先做确定性结果合并，保留后续替换为 LLM 汇总的接口形状。"""
+    runtime = output_payload.get("runtime") if isinstance(output_payload.get("runtime"), dict) else {}
+    final_reply = runtime.get("reply") or output_payload.get("error") or "本次执行已完成。"
+    referenced_steps = [
+        {
+            "step_id": record["step_id"],
+            "step_code": record["step_code"],
+            "tool_name": record["tool_name"],
+            "status": record["status"],
+        }
+        for record in step_records
+        if record["step_code"] in {"intent_route", "template_planner", "tool_router", "tool_handler"}
+    ]
+    return {
+        "coordinator": "agent_chat_coordinator_v1",
+        "handler": handler,
+        "status": status,
+        "final_reply": str(final_reply)[:4000],
+        "referenced_step_ids": [item["step_id"] for item in referenced_steps],
+        "referenced_steps": referenced_steps,
+        "error": error_message,
+    }
+
+
+def _resolve_runtime_step_id(step_records: list[dict[str, Any]]) -> str:
+    """中文注释：失败时仍把可重试的失败工具节点作为主 step_id，成功时指向最终 Coordinator。"""
+    failed_steps = [record for record in step_records if record["status"] == "failed"]
+    if failed_steps:
+        return failed_steps[-1]["step_id"]
+    return step_records[-1]["step_id"]
+
+
 def _build_runtime_step_queue(
     *,
     handler: str,
@@ -105,7 +145,7 @@ def _build_runtime_step_queue(
         "allowed": True,
         "reason": "旧兼容路径未提供独立 Tool Router 结果",
     }
-    return [
+    step_records = [
         {
             "step_id": new_id("step"),
             "step_code": "intent_route",
@@ -167,6 +207,34 @@ def _build_runtime_step_queue(
             "error_message": error_message[:1000] if error_message else None,
         },
     ]
+    coordinator_output = _build_coordinator_output(
+        handler=handler,
+        output_payload=output_payload,
+        step_records=step_records,
+        status=status,
+        error_message=error_message,
+    )
+    step_records.append(
+        {
+            "step_id": new_id("step"),
+            "step_code": "coordinator",
+            "step_order": 5,
+            "node_name": "agent_chat_coordinator",
+            "tool_name": "agent_chat_coordinator_v1",
+            "step_title": "合并执行结果并生成最终回复",
+            "step_type": "coordinator",
+            "depends_on": ["tool_handler"],
+            "input_payload": {
+                "handler": handler,
+                "tool_step_id": step_records[-1]["step_id"],
+                "status": status,
+            },
+            "output_payload": coordinator_output,
+            "status": "success" if status == "success" else "skipped",
+            "error_message": None if status == "success" else "工具失败，Coordinator 已跳过最终合并",
+        }
+    )
+    return step_records
 
 
 def _insert_runtime_steps(
@@ -335,8 +403,9 @@ def record_successful_runtime_trace(
         output_payload=output_payload,
         status="success",
     )
-    step_id = step_records[-1]["step_id"]
+    step_id = _resolve_runtime_step_id(step_records)
     planner_plan = step_records[1]["output_payload"]
+    coordinator_result = step_records[-1]["output_payload"]
 
     db.execute(
         text(
@@ -391,6 +460,7 @@ def record_successful_runtime_trace(
         "runtime_plan_step_ids": plan_result["plan_step_ids"],
         "runtime_planner": planner_plan,
         "runtime_tool_route": output_payload.get("runtime", {}).get("tool_route"),
+        "runtime_coordinator": coordinator_result,
     }
     db.execute(
         text(
@@ -412,7 +482,14 @@ def record_successful_runtime_trace(
     assistant_message["run_id"] = run_id
     assistant_message["metadata_json"] = metadata
     db.commit()
-    return {"run_id": run_id, "step_id": step_id, "step_ids": step_ids, "planner": planner_plan, **plan_result}
+    return {
+        "run_id": run_id,
+        "step_id": step_id,
+        "step_ids": step_ids,
+        "planner": planner_plan,
+        "coordinator": coordinator_result,
+        **plan_result,
+    }
 
 
 def record_failed_runtime_trace(
@@ -454,8 +531,9 @@ def record_failed_runtime_trace(
         status="failed",
         error_message=error_message,
     )
-    step_id = step_records[-1]["step_id"]
+    step_id = _resolve_runtime_step_id(step_records)
     planner_plan = step_records[1]["output_payload"]
+    coordinator_result = step_records[-1]["output_payload"]
 
     db.execute(
         text(
@@ -511,6 +589,7 @@ def record_failed_runtime_trace(
         "runtime_plan_step_ids": plan_result["plan_step_ids"],
         "runtime_planner": planner_plan,
         "runtime_tool_route": output_payload.get("runtime", {}).get("tool_route"),
+        "runtime_coordinator": coordinator_result,
         "runtime_status": "failed",
         "runtime_error": error_message,
         "recovery_plan": recovery_plan or [],
@@ -535,4 +614,11 @@ def record_failed_runtime_trace(
     assistant_message["run_id"] = run_id
     assistant_message["metadata_json"] = metadata
     db.commit()
-    return {"run_id": run_id, "step_id": step_id, "step_ids": step_ids, "planner": planner_plan, **plan_result}
+    return {
+        "run_id": run_id,
+        "step_id": step_id,
+        "step_ids": step_ids,
+        "planner": planner_plan,
+        "coordinator": coordinator_result,
+        **plan_result,
+    }

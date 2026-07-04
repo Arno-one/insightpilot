@@ -169,6 +169,11 @@ const STEP_META: Record<string, StepMeta> = {
     label: "执行对话工具",
     description: "按 Planner 生成的计划调用具体工具，并记录输入输出。",
   },
+  agent_chat_coordinator: {
+    stage: "Coordinator",
+    label: "合并最终结果",
+    description: "汇总上游步骤输出，生成本轮可追踪的最终回复。",
+  },
   load_crm_data: {
     stage: "Data",
     label: "加载 CRM 数据",
