@@ -51,6 +51,42 @@ def test_data_analyze_business_tool_returns_analysis_payload(monkeypatch):
     assert output["trace"]["analysis_status"] == "generated"
 
 
+def test_data_analyze_business_tool_links_recent_reports(monkeypatch):
+    monkeypatch.setattr(
+        data_mcp_tools,
+        "_load_current_user_context",
+        lambda context: {
+            "tenant_id": context.tenant_id,
+            "user_id": context.user_id,
+            "permission_codes": ["crm:customer:read:self", "report:read:team"],
+        },
+    )
+    monkeypatch.setattr(data_mcp_tools.nl2sql_service, "query", _fake_revenue_query)
+    monkeypatch.setattr(
+        data_mcp_tools.report_service,
+        "query_reports",
+        lambda db, current_user, **kwargs: [
+            {
+                "report_id": "report_demo",
+                "report_type": "monthly",
+                "report_date": "2026-07-01",
+                "summary": "收入下滑主要来自重点客户回款延迟",
+                "suggestions": ["优先复盘高价值客户", "跟进负责人转化率"],
+                "metrics_json": {},
+                "risk_top_json": [],
+            }
+        ],
+    )
+
+    registry = InternalToolRegistry(data_mcp_tools.build_data_mcp_tools())
+    output = registry.execute("data.analyze_business", _tool_context(), {"question": "为什么收入下降？"})["output"]
+
+    assert output["trace"]["report_count"] == 1
+    assert output["report_context"]["total"] == 1
+    assert output["analysis"]["report_references"]
+    assert "收入下滑" in output["analysis"]["report_references"][0]
+
+
 def test_unified_agent_chat_runs_data_analyst_for_business_question(monkeypatch):
     _ensure_agent_chat_tables_exist()
     nl2sql_service._cache.clear()

@@ -7,6 +7,7 @@ from app.modules.agent.data_analyst import analyze_query_result
 from app.modules.agent.platform.internal_tools import _load_current_user_context, _require_payload_value, _require_permission
 from app.modules.agent.platform.tool_registry import ToolDefinition, ToolExecutionContext
 from app.modules.nl2sql import service as nl2sql_service
+from app.modules.report import service as report_service
 
 
 def _build_trace_summary(context: ToolExecutionContext, question: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -64,6 +65,24 @@ def _build_contextual_question(question: str, context_payload: Any) -> str:
     return "\n".join(sections)
 
 
+def _load_report_context(context: ToolExecutionContext, current_user: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """读取最近经营报告，作为 Data Analyst Agent 的报告联动依据。"""
+    if "report:read:team" not in current_user.get("permission_codes", []):
+        return {"items": [], "total": 0, "skipped_reason": "缺少 report:read:team 权限"}
+
+    reports = report_service.query_reports(
+        context.db,
+        current_user,
+        customer_id=payload.get("customer_id"),
+        owner_user_id=payload.get("owner_user_id"),
+        report_type=payload.get("report_type"),
+        date_from=payload.get("date_from"),
+        date_to=payload.get("date_to"),
+        limit=int(payload.get("report_limit") or 3),
+    )
+    return {"items": reports, "total": len(reports), "skipped_reason": None}
+
+
 def build_data_mcp_tools() -> list[ToolDefinition]:
     """注册 Data MCP 工具，把问数和经营分析统一挂到平台数据能力下。"""
 
@@ -102,19 +121,24 @@ def build_data_mcp_tools() -> list[ToolDefinition]:
 
     def analyze_business_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
         # 中文注释：经营分析 V1 不新开数据通道，先复用 data.query_sql 的只读、安全和审计链路。
+        current_user = _load_current_user_context(context)
+        _require_permission(current_user, "crm:customer:read:self")
         question = str(_require_payload_value(payload, "question")).strip()
         query_output = query_sql_tool(context, payload)
-        analysis = analyze_query_result(question, query_output)
+        report_context = _load_report_context(context, current_user, payload)
+        analysis = analyze_query_result(question, query_output, report_context=report_context)
         trace = {
             **(query_output.get("trace") or {}),
             "analysis_protocol": analysis["protocol"],
             "analysis_status": "generated" if not query_output.get("error") else "skipped",
+            "report_count": report_context["total"],
         }
         return {
             "protocol": "data.analyze_business.v1",
             "question": question,
             "query": query_output,
             "analysis": analysis,
+            "report_context": report_context,
             "trace": trace,
         }
 

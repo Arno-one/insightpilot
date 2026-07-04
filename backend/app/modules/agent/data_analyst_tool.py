@@ -29,6 +29,7 @@ def _build_reply(result: dict[str, Any]) -> str:
     lines.extend(_join_section("异常识别", list(analysis.get("anomaly_insights") or [])))
     lines.extend(_join_section("指标解释", list(analysis.get("metric_explanations") or [])))
     lines.extend(_join_section("TopN 归因摘要", list(analysis.get("topn_attribution") or [])))
+    lines.extend(_join_section("报告联动依据", list(analysis.get("report_references") or [])))
     return "\n".join(lines)
 
 

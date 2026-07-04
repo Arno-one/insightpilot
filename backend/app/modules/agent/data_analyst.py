@@ -4,6 +4,18 @@ from statistics import mean
 from typing import Any
 
 
+def _compact_text(value: Any, *, max_length: int = 120) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, list):
+        text = "；".join(str(item) for item in value[:3])
+    elif isinstance(value, dict):
+        text = "；".join(f"{key}:{item}" for key, item in list(value.items())[:3])
+    else:
+        text = str(value)
+    return text if len(text) <= max_length else f"{text[: max_length - 3]}..."
+
+
 def _to_number(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -133,7 +145,28 @@ def _build_topn_attribution(numeric_columns: list[str], rows: list[dict[str, Any
     return insights
 
 
-def analyze_query_result(question: str, query_output: dict[str, Any]) -> dict[str, Any]:
+def _build_report_references(report_context: dict[str, Any] | None) -> list[str]:
+    if not report_context:
+        return []
+    reports = list(report_context.get("items") or [])
+    references: list[str] = []
+    for item in reports[:3]:
+        report_type = item.get("report_type") or "report"
+        report_date = item.get("report_date") or "unknown-date"
+        summary = _compact_text(item.get("summary"))
+        suggestions = _compact_text(item.get("suggestions"))
+        detail_parts = [part for part in [summary, suggestions] if part]
+        if detail_parts:
+            references.append(f"{report_type}/{report_date}：{'；'.join(detail_parts)}")
+    return references
+
+
+def analyze_query_result(
+    question: str,
+    query_output: dict[str, Any],
+    *,
+    report_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """基于 data.query_sql 的结构化结果生成经营解释，V1 先保持确定性和可回归。"""
     query_result = query_output.get("result") or {}
     columns = list(query_result.get("columns") or [])
@@ -145,6 +178,7 @@ def analyze_query_result(question: str, query_output: dict[str, Any]) -> dict[st
     trend_insights = _build_trend_insights(question, numeric_columns, rows)
     anomaly_insights = _build_anomaly_insights(numeric_columns, rows, dimension_column)
     topn_attribution = _build_topn_attribution(numeric_columns, rows, dimension_column)
+    report_references = _build_report_references(report_context)
 
     if query_output.get("error"):
         summary = "数据查询未成功，暂时无法形成经营分析。"
@@ -154,6 +188,8 @@ def analyze_query_result(question: str, query_output: dict[str, Any]) -> dict[st
         summary = "已根据查询结果提取可能影响指标变化的维度和异常点。"
     else:
         summary = "已根据查询结果生成趋势、异常、指标和 TopN 归因摘要。"
+    if report_references:
+        summary = f"{summary} 同时参考了最近经营报告。"
 
     return {
         "protocol": "data.analyze_business.v1",
@@ -164,6 +200,11 @@ def analyze_query_result(question: str, query_output: dict[str, Any]) -> dict[st
         "trend_insights": trend_insights,
         "anomaly_insights": anomaly_insights,
         "topn_attribution": topn_attribution,
+        "report_references": report_references,
+        "report_context": {
+            "total": int((report_context or {}).get("total") or 0),
+            "skipped_reason": (report_context or {}).get("skipped_reason"),
+        },
         "data_shape": {
             "columns": columns,
             "numeric_columns": numeric_columns,
