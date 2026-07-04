@@ -20,7 +20,7 @@ from app.modules.agent import (
     nl2sql_tool,
     opportunity_tool,
 )
-from app.modules.agent.platform import list_agent_chat_tool_specs, route_agent_chat_tool
+from app.modules.agent.platform import build_shared_mcp_gateway, list_agent_chat_tool_specs, route_agent_chat_tool
 from app.modules.agent.schemas import (
     AgentChatIntentRouteRequest,
     AgentChatMessageCreateRequest,
@@ -1396,6 +1396,16 @@ def list_agent_chat_tools(
     """查询统一对话 Tool Router 当前可选择的工具清单。"""
     specs = list_agent_chat_tool_specs(current_user)
     return success(specs, "查询成功", total=len(specs))
+
+
+@router.get("/mcp/registry")
+def get_mcp_gateway_registry(
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+):
+    """中文注释：只读输出 MCP Gateway 注册表，不触发任何工具执行或外发动作。"""
+    _ = current_user
+    registry = build_shared_mcp_gateway().list_server_registry()
+    return success(registry, "查询成功", total=registry["server_count"])
 
 
 @router.post("/chat/sessions/{session_id}/messages")

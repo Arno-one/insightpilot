@@ -32,6 +32,21 @@ class MCPToolDefinition:
     def qualified_name(self) -> str:
         return f"{self.server_name}.{self.tool_name}"
 
+    def to_registry_entry(self, display_name: str) -> dict[str, Any]:
+        """中文注释：把工具定义转换为注册表条目，供前端和后续治理能力只读消费。"""
+        scope = self.server_name
+        return {
+            "name": self.qualified_name,
+            "tool_name": self.tool_name,
+            "description": self.description,
+            "server_name": self.server_name,
+            "display_name": display_name,
+            "protocol": self.protocol,
+            "source": self.source,
+            "scope": scope,
+            "scopes": [scope],
+        }
+
 
 class MCPServerAdapter:
     """中文注释：一个 Adapter 代表一个 MCP Server，下挂多个工具。"""
@@ -61,18 +76,28 @@ class MCPServerAdapter:
     def get_tool(self, qualified_name: str) -> MCPToolDefinition | None:
         return self._tools.get(qualified_name)
 
-    def list_tool_specs(self) -> list[dict[str, str]]:
+    def list_tool_specs(self) -> list[dict[str, Any]]:
         return [
-            {
-                "name": tool.qualified_name,
-                "description": tool.description,
-                "server_name": self.server_name,
-                "display_name": self.display_name,
-                "protocol": tool.protocol,
-                "source": tool.source,
-            }
+            tool.to_registry_entry(self.display_name)
             for tool in self._tools.values()
         ]
+
+    def to_registry_entry(self) -> dict[str, Any]:
+        """中文注释：聚合单个 MCP Server 的注册信息，V1 只暴露只读元数据。"""
+        tools = self.list_tool_specs()
+        scopes = sorted({scope for tool in tools for scope in tool.get("scopes", [])})
+        sources = sorted({tool["source"] for tool in tools})
+        return {
+            "server_name": self.server_name,
+            "display_name": self.display_name,
+            "protocol": self.protocol,
+            "source": sources[0] if len(sources) == 1 else ("mixed" if sources else "unknown"),
+            "sources": sources,
+            "scope": self.server_name,
+            "scopes": scopes or [self.server_name],
+            "tool_count": len(tools),
+            "tools": tools,
+        }
 
 
 class MCPGateway:
@@ -93,11 +118,33 @@ class MCPGateway:
             if tool:
                 existing.register(tool)
 
-    def list_tool_specs(self) -> list[dict[str, str]]:
-        specs: list[dict[str, str]] = []
+    def list_tool_specs(self) -> list[dict[str, Any]]:
+        specs: list[dict[str, Any]] = []
         for adapter in self._servers.values():
             specs.extend(adapter.list_tool_specs())
         return specs
+
+    def list_server_registry(self) -> dict[str, Any]:
+        """中文注释：输出统一 MCP Gateway 注册表，为权限、审计和健康检查打基础。"""
+        servers = [adapter.to_registry_entry() for adapter in self._servers.values()]
+        tools = [tool for server in servers for tool in server["tools"]]
+        scope_summary: dict[str, dict[str, Any]] = {}
+        for tool in tools:
+            for scope in tool.get("scopes", []):
+                item = scope_summary.setdefault(scope, {"scope": scope, "server_count": 0, "tool_count": 0})
+                item["tool_count"] += 1
+        for scope, item in scope_summary.items():
+            item["server_count"] = sum(1 for server in servers if scope in server.get("scopes", []))
+
+        return {
+            "registry_version": "mcp_gateway_registry_v1",
+            "server_count": len(servers),
+            "tool_count": len(tools),
+            "scope_count": len(scope_summary),
+            "servers": servers,
+            "tools": tools,
+            "scope_summary": sorted(scope_summary.values(), key=lambda item: item["scope"]),
+        }
 
     def execute(self, qualified_name: str, context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
         server_name, _, _ = qualified_name.partition(".")
