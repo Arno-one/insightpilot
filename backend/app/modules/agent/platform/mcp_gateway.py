@@ -61,12 +61,14 @@ def _build_tool_permission_policy(qualified_name: str, server_name: str, tool_na
     exact_permissions = {
         "report.query": ["report:read:team"],
         "report.generate": ["agent:run:business_report"],
+        "task.preview_from_approval": ["approval:review:agent_task"],
         "task.create_from_approval": ["approval:review:agent_task"],
         "notify.send_task_assignment": ["approval:review:agent_task"],
         "mail.send_task_assignment": ["approval:review:agent_task"],
         "mail.get_delivery_status": ["task:read:team"],
         "mail.list_failed_deliveries": ["task:read:team"],
         "mail.retry_failed_delivery": ["task:read:team"],
+        "calendar.preview_follow_up_event": ["approval:review:agent_task"],
         "calendar.create_follow_up_event": ["approval:review:agent_task"],
     }
     server_permissions = {
