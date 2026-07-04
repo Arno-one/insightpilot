@@ -168,10 +168,14 @@ def test_unified_agent_chat_runtime_writes_agent_trace(monkeypatch):
         run_id = data["assistant_message"]["run_id"]
 
         assert data["runtime"]["run_id"] == run_id
+        assert len(data["runtime"]["step_ids"]) == 2
+        assert data["runtime"]["step_id"] == data["runtime"]["step_ids"][-1]
         assert data["runtime"]["plan_id"].startswith("plan_")
+        assert len(data["runtime"]["plan_step_ids"]) == 2
         assert data["runtime"]["plan_step_id"].startswith("pstep_")
         assert data["assistant_message"]["metadata_json"]["runtime_run_id"] == run_id
         assert data["assistant_message"]["metadata_json"]["runtime_step_id"].startswith("step_")
+        assert data["assistant_message"]["metadata_json"]["runtime_step_ids"] == data["runtime"]["step_ids"]
         assert data["assistant_message"]["metadata_json"]["runtime_plan_id"] == data["runtime"]["plan_id"]
 
         detail_response = client.get(f"/api/agent/runs/{run_id}", headers=headers)
@@ -181,12 +185,18 @@ def test_unified_agent_chat_runtime_writes_agent_trace(monkeypatch):
         assert detail["run"]["run_type"] == "agent_chat_runtime"
         assert detail["run"]["graph_name"] == "unified_agent_chat_runtime"
         assert detail["run"]["status"] == "success"
-        assert detail["steps"][0]["node_name"] == "agent_chat_tool"
-        assert detail["steps"][0]["tool_name"] == "followup.plan_strategy"
+        assert len(detail["steps"]) == 2
+        assert detail["steps"][0]["node_name"] == "agent_chat_intent_route"
+        assert detail["steps"][0]["tool_name"] == "intent_router"
+        assert detail["steps"][1]["node_name"] == "agent_chat_tool"
+        assert detail["steps"][1]["tool_name"] == "followup.plan_strategy"
         assert detail["plans"][0]["plan_id"] == data["runtime"]["plan_id"]
+        assert detail["plans"][0]["plan_type"] == "multi_step"
         assert detail["plans"][0]["status"] == "success"
-        assert detail["plans"][0]["steps"][0]["linked_step_id"] == data["runtime"]["step_id"]
+        assert len(detail["plans"][0]["steps"]) == 2
         assert detail["plans"][0]["steps"][0]["depends_on_json"] == []
+        assert detail["plans"][0]["steps"][1]["linked_step_id"] == data["runtime"]["step_id"]
+        assert detail["plans"][0]["steps"][1]["depends_on_json"] == ["intent_route"]
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
@@ -233,7 +243,10 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
 
         assert data["runtime"]["status"] == "failed"
         assert data["runtime"]["run_id"] == run_id
+        assert len(data["runtime"]["step_ids"]) == 2
+        assert data["runtime"]["step_id"] == data["runtime"]["step_ids"][-1]
         assert data["runtime"]["plan_id"].startswith("plan_")
+        assert len(data["runtime"]["plan_step_ids"]) == 2
         assert data["runtime"]["plan_step_id"].startswith("pstep_")
         assert "策略工具模拟失败" in data["runtime"]["error"]
         assert data["runtime"]["recovery_plan"][0]["action"] == "inspect_trace"
@@ -248,11 +261,16 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         assert detail["run"]["status"] == "failed"
         assert "策略工具模拟失败" in detail["run"]["error_message"]
         assert detail["run"]["output_json"]["recovery_plan"][0]["action"] == "inspect_trace"
-        assert detail["steps"][0]["status"] == "failed"
-        assert detail["steps"][0]["tool_name"] == "followup.plan_strategy"
+        assert len(detail["steps"]) == 2
+        assert detail["steps"][0]["status"] == "success"
+        assert detail["steps"][0]["tool_name"] == "intent_router"
+        assert detail["steps"][1]["status"] == "failed"
+        assert detail["steps"][1]["tool_name"] == "followup.plan_strategy"
         assert detail["plans"][0]["status"] == "failed"
-        assert detail["plans"][0]["steps"][0]["status"] == "failed"
-        assert "策略工具模拟失败" in detail["plans"][0]["steps"][0]["error_message"]
+        assert len(detail["plans"][0]["steps"]) == 2
+        assert detail["plans"][0]["steps"][0]["status"] == "success"
+        assert detail["plans"][0]["steps"][1]["status"] == "failed"
+        assert "策略工具模拟失败" in detail["plans"][0]["steps"][1]["error_message"]
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
         _cleanup_agent_runtime_trace(tenant_id, run_id)

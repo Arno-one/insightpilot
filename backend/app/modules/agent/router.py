@@ -595,8 +595,10 @@ def _append_failed_runtime_trace_reply(
         "reply": reply,
         "run_id": trace_result["run_id"],
         "step_id": trace_result["step_id"],
+        "step_ids": trace_result["step_ids"],
         "plan_id": trace_result["plan_id"],
         "plan_step_id": trace_result["plan_step_id"],
+        "plan_step_ids": trace_result["plan_step_ids"],
     }
 
 
@@ -1293,8 +1295,10 @@ def append_agent_chat_user_message(
             **runtime_result,
             "run_id": trace_result["run_id"],
             "step_id": trace_result["step_id"],
+            "step_ids": trace_result["step_ids"],
             "plan_id": trace_result["plan_id"],
             "plan_step_id": trace_result["plan_step_id"],
+            "plan_step_ids": trace_result["plan_step_ids"],
         }
 
     session = chat_session_service.get_chat_session(
