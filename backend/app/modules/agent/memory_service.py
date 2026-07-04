@@ -358,16 +358,86 @@ def build_customer_memory_snapshot(
     }
 
 
+def _memory_changed_fields(existing: dict[str, Any] | None, snapshot: dict[str, Any]) -> list[str]:
+    if not existing:
+        return ["summary_text", "summary_json", "source_run_id", "last_compiled_at"]
+
+    changed: list[str] = []
+    existing_json = _loads_json(existing.get("summary_json"))
+    if existing.get("summary_text") != snapshot.get("summary_text"):
+        changed.append("summary_text")
+    if existing_json != snapshot.get("summary_json"):
+        changed.append("summary_json")
+    if existing.get("source_run_id") != snapshot.get("source_run_id"):
+        changed.append("source_run_id")
+    return changed
+
+
+def _insert_memory_update_trace(
+    db: Session,
+    *,
+    tenant_id: str,
+    memory_id: str,
+    memory_snapshot: dict[str, Any],
+    update_type: str,
+    changed_fields: list[str],
+) -> dict[str, Any]:
+    trace_id = new_id("memtrace")
+    summary_json = memory_snapshot.get("summary_json") or {}
+    profile_tags = summary_json.get("profile_tags") if isinstance(summary_json, dict) else {}
+    trace_payload = {
+        "tenant_id": tenant_id,
+        "trace_id": trace_id,
+        "memory_id": memory_id,
+        "customer_id": memory_snapshot["customer_id"],
+        "memory_scope": memory_snapshot["memory_scope"],
+        "update_type": update_type,
+        "source_type": "agent_run" if memory_snapshot.get("source_run_id") else "manual",
+        "source_run_id": memory_snapshot.get("source_run_id"),
+        "changed_fields_json": _dumps_json(changed_fields),
+        "summary_preview": str(memory_snapshot.get("summary_text") or "")[:500],
+        "profile_tags_json": _dumps_json(profile_tags if isinstance(profile_tags, dict) else {}),
+        "metadata_json": _dumps_json(
+            {
+                "compiled_at": _iso_datetime(memory_snapshot.get("last_compiled_at")),
+                "summary_json_keys": sorted(summary_json.keys()) if isinstance(summary_json, dict) else [],
+            }
+        ),
+    }
+    db.execute(
+        text(
+            """
+            INSERT INTO memory_update_trace (
+              tenant_id, trace_id, memory_id, customer_id, memory_scope, update_type,
+              source_type, source_run_id, changed_fields_json, summary_preview,
+              profile_tags_json, metadata_json
+            )
+            VALUES (
+              :tenant_id, :trace_id, :memory_id, :customer_id, :memory_scope, :update_type,
+              :source_type, :source_run_id, :changed_fields_json, :summary_preview,
+              :profile_tags_json, :metadata_json
+            )
+            """
+        ),
+        trace_payload,
+    )
+    return {
+        "trace_id": trace_id,
+        "update_type": update_type,
+        "changed_fields": changed_fields,
+    }
+
+
 def upsert_customer_memory(
     db: Session,
     *,
     tenant_id: str,
     memory_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    existing_memory_id = db.execute(
+    existing_memory = db.execute(
         text(
             """
-            SELECT memory_id
+            SELECT memory_id, summary_text, summary_json, source_run_id
             FROM customer_memory
             WHERE tenant_id = :tenant_id
               AND customer_id = :customer_id
@@ -380,8 +450,12 @@ def upsert_customer_memory(
             "customer_id": memory_snapshot["customer_id"],
             "memory_scope": memory_snapshot["memory_scope"],
         },
-    ).scalar_one_or_none()
+    ).mappings().first()
+    existing_memory_item = dict(existing_memory) if existing_memory else None
+    existing_memory_id = existing_memory_item.get("memory_id") if existing_memory_item else None
     memory_id = existing_memory_id or new_id("memo")
+    update_type = "update" if existing_memory_id else "create"
+    changed_fields = _memory_changed_fields(existing_memory_item, memory_snapshot)
 
     db.execute(
         text(
@@ -412,6 +486,15 @@ def upsert_customer_memory(
             "last_compiled_at": memory_snapshot["last_compiled_at"],
         },
     )
+    # 中文注释：记忆正文写入成功后追加审计轨迹，后续治理页可以按客户或 run 追溯每次刷新来源。
+    trace = _insert_memory_update_trace(
+        db,
+        tenant_id=tenant_id,
+        memory_id=memory_id,
+        memory_snapshot=memory_snapshot,
+        update_type=update_type,
+        changed_fields=changed_fields,
+    )
 
     return {
         "memory_id": memory_id,
@@ -421,4 +504,5 @@ def upsert_customer_memory(
         "summary_json": memory_snapshot["summary_json"],
         "source_run_id": memory_snapshot["source_run_id"],
         "last_compiled_at": memory_snapshot["last_compiled_at"].isoformat(),
+        "update_trace": trace,
     }

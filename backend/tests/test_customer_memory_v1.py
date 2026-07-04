@@ -79,6 +79,38 @@ def _ensure_customer_memory_table_exists():
         db.commit()
 
 
+def _ensure_memory_update_trace_table_exists():
+    with SessionLocal() as db:
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS memory_update_trace (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  trace_id VARCHAR(64) NOT NULL,
+                  memory_id VARCHAR(64) NOT NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  memory_scope VARCHAR(30) NOT NULL DEFAULT 'customer',
+                  update_type VARCHAR(30) NOT NULL,
+                  source_type VARCHAR(50) NOT NULL,
+                  source_run_id VARCHAR(64) NULL,
+                  changed_fields_json JSON NULL,
+                  summary_preview TEXT NULL,
+                  profile_tags_json JSON NULL,
+                  metadata_json JSON NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_trace_id (trace_id),
+                  KEY idx_tenant_customer_created (tenant_id, customer_id, created_at),
+                  KEY idx_tenant_memory_created (tenant_id, memory_id, created_at),
+                  KEY idx_tenant_source_run (tenant_id, source_run_id),
+                  KEY idx_tenant_update_type (tenant_id, update_type)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.commit()
+
+
 def _build_headers(client: TestClient) -> tuple[dict[str, str], str, str]:
     login = client.post("/api/auth/login", json={"username": "manager", "password": "Manager@123456"})
     assert login.status_code == 200
@@ -214,6 +246,10 @@ def _cleanup_customer_memory_fixture(tenant_id: str, customer_id: str, deal_id: 
                 {"tenant_id": tenant_id, "run_ids": run_ids},
             )
         db.execute(
+            text("DELETE FROM memory_update_trace WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
+        db.execute(
             text("DELETE FROM customer_memory WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
             {"tenant_id": tenant_id, "customer_id": customer_id},
         )
@@ -257,6 +293,7 @@ def test_customer_memory_is_written_and_reused_by_risk_agent(monkeypatch):
     monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
     _ensure_approval_task_event_table_exists()
     _ensure_customer_memory_table_exists()
+    _ensure_memory_update_trace_table_exists()
     _, tenant_id, user_id = _build_headers(client)
     customer_id, deal_id, report_id = _create_customer_memory_fixture(tenant_id, user_id)
     run_ids: list[str] = []

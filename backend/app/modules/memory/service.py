@@ -371,6 +371,54 @@ def _load_latest_customer_memory(db: Session, *, tenant_id: str, customer_id: st
     return item
 
 
+def _trace_row_to_item(row: dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    changed_fields_raw = item.pop("changed_fields_json", None)
+    if isinstance(changed_fields_raw, list):
+        changed_fields = changed_fields_raw
+    else:
+        try:
+            parsed_changed_fields = json.loads(changed_fields_raw) if changed_fields_raw else []
+        except (TypeError, json.JSONDecodeError):
+            parsed_changed_fields = []
+        changed_fields = parsed_changed_fields if isinstance(parsed_changed_fields, list) else []
+    item["changed_fields"] = changed_fields
+    item["profile_tags"] = _loads_json(item.pop("profile_tags_json", None))
+    item["metadata_json"] = _loads_json(item.get("metadata_json"))
+    item["created_at"] = _iso(item.get("created_at"))
+    return item
+
+
+def list_customer_memory_update_traces(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    customer_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    crm_service.load_customer_or_404(db, current_user, customer_id)
+    rows = db.execute(
+        text(
+            """
+            SELECT trace_id, memory_id, customer_id, memory_scope, update_type, source_type,
+                   source_run_id, changed_fields_json, summary_preview, profile_tags_json,
+                   metadata_json, created_at
+            FROM memory_update_trace
+            WHERE tenant_id = :tenant_id
+              AND customer_id = :customer_id
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {
+            "tenant_id": current_user["tenant_id"],
+            "customer_id": customer_id,
+            "limit": max(1, min(limit, 100)),
+        },
+    ).mappings().all()
+    return [_trace_row_to_item(row) for row in rows]
+
+
 def _build_recommended_focus(
     *,
     risk_state: dict[str, Any],

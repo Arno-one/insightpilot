@@ -68,3 +68,14 @@ def get_customer_long_term_memory(
 ):
     data = service.load_customer_long_term_memory(db, current_user, customer_id=customer_id)
     return success(data, "查询成功")
+
+
+@router.get("/customers/{customer_id}/update-traces")
+def list_customer_memory_update_traces(
+    customer_id: str,
+    limit: int = 50,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    rows = service.list_customer_memory_update_traces(db, current_user, customer_id=customer_id, limit=limit)
+    return success(rows, "查询成功", total=len(rows))
