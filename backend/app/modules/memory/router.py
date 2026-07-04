@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.auth.dependencies import require_permission
 from app.modules.memory import service
+from app.modules.memory.schemas import MemoryGovernanceActionRequest
 from app.shared.response import success
 
 router = APIRouter()
@@ -90,3 +91,64 @@ def get_customer_context_packet(
 ):
     data = service.build_customer_context_packet(db, current_user, customer_id=customer_id, max_chars=max_chars)
     return success(data, "查询成功", total=len(data["sections"]))
+
+
+@router.get("/customers/{customer_id}/governance")
+def get_customer_memory_governance(
+    customer_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.load_customer_memory_governance(db, current_user, customer_id=customer_id)
+    return success(data, "查询成功")
+
+
+@router.post("/customers/{customer_id}/governance/disable")
+def disable_customer_memory(
+    customer_id: str,
+    body: MemoryGovernanceActionRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.update_customer_memory_governance(
+        db,
+        current_user,
+        customer_id=customer_id,
+        action="disable",
+        reason=body.reason,
+    )
+    return success(data, "客户记忆已禁用")
+
+
+@router.post("/customers/{customer_id}/governance/enable")
+def enable_customer_memory(
+    customer_id: str,
+    body: MemoryGovernanceActionRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.update_customer_memory_governance(
+        db,
+        current_user,
+        customer_id=customer_id,
+        action="enable",
+        reason=body.reason,
+    )
+    return success(data, "客户记忆已启用")
+
+
+@router.post("/customers/{customer_id}/governance/request-refresh")
+def request_customer_memory_refresh(
+    customer_id: str,
+    body: MemoryGovernanceActionRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.update_customer_memory_governance(
+        db,
+        current_user,
+        customer_id=customer_id,
+        action="request_refresh",
+        reason=body.reason,
+    )
+    return success(data, "客户记忆刷新已请求")

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.modules.agent import chat_session_service, conversation_memory_service
 from app.modules.crm import service as crm_service
 from app.modules.nl2sql import dao as nl2sql_dao
+from app.shared.ids import new_id
 
 
 ShortTermSource = Literal["agent_chat", "risk_chat", "nl2sql"]
@@ -417,6 +418,160 @@ def list_customer_memory_update_traces(
         },
     ).mappings().all()
     return [_trace_row_to_item(row) for row in rows]
+
+
+def _load_memory_governance_row(db: Session, *, tenant_id: str, customer_id: str) -> dict[str, Any]:
+    row = db.execute(
+        text(
+            """
+            SELECT governance_id, memory_id, customer_id, memory_scope, governance_status,
+                   refresh_status, reason, disabled_at, disabled_by_user_id,
+                   refresh_requested_at, refresh_requested_by_user_id, updated_at
+            FROM memory_governance_state
+            WHERE tenant_id = :tenant_id
+              AND customer_id = :customer_id
+              AND memory_scope = 'customer'
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "customer_id": customer_id},
+    ).mappings().first()
+    return dict(row) if row else {}
+
+
+def _standard_governance_state(
+    *,
+    customer_id: str,
+    latest_memory: dict[str, Any],
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "governance_id": row.get("governance_id"),
+        "memory_id": row.get("memory_id") or latest_memory.get("memory_id"),
+        "customer_id": customer_id,
+        "memory_scope": row.get("memory_scope") or "customer",
+        "governance_status": row.get("governance_status") or "enabled",
+        "refresh_status": row.get("refresh_status") or "idle",
+        "reason": row.get("reason"),
+        "disabled_at": _iso(row.get("disabled_at")),
+        "disabled_by_user_id": row.get("disabled_by_user_id"),
+        "refresh_requested_at": _iso(row.get("refresh_requested_at")),
+        "refresh_requested_by_user_id": row.get("refresh_requested_by_user_id"),
+        "updated_at": _iso(row.get("updated_at")),
+    }
+
+
+def load_customer_memory_governance(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    customer_id: str,
+) -> dict[str, Any]:
+    customer = crm_service.load_customer_or_404(db, current_user, customer_id)
+    latest_memory = _load_latest_customer_memory(db, tenant_id=current_user["tenant_id"], customer_id=customer_id)
+    governance = _standard_governance_state(
+        customer_id=customer_id,
+        latest_memory=latest_memory,
+        row=_load_memory_governance_row(db, tenant_id=current_user["tenant_id"], customer_id=customer_id),
+    )
+    traces = list_customer_memory_update_traces(db, current_user, customer_id=customer_id, limit=5)
+    return {
+        "source_type": "memory_governance",
+        "customer": {
+            "customer_id": customer["customer_id"],
+            "customer_name": customer.get("customer_name"),
+            "owner_user_id": customer.get("owner_user_id"),
+            "owner_user_name": customer.get("owner_user_name"),
+        },
+        "memory": {
+            "memory_id": latest_memory.get("memory_id"),
+            "summary_text": latest_memory.get("summary_text") or "",
+            "source_run_id": latest_memory.get("source_run_id"),
+            "last_compiled_at": _iso(latest_memory.get("last_compiled_at")),
+            "has_memory": bool(latest_memory),
+        },
+        "governance": governance,
+        "latest_update_traces": traces,
+    }
+
+
+def update_customer_memory_governance(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    customer_id: str,
+    action: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    crm_service.load_customer_or_404(db, current_user, customer_id)
+    latest_memory = _load_latest_customer_memory(db, tenant_id=current_user["tenant_id"], customer_id=customer_id)
+    existing = _load_memory_governance_row(db, tenant_id=current_user["tenant_id"], customer_id=customer_id)
+    governance_id = existing.get("governance_id") or new_id("memgov")
+    now = datetime.now()
+    if action == "disable":
+        governance_status = "disabled"
+        refresh_status = existing.get("refresh_status") or "idle"
+        disabled_at = now
+        disabled_by_user_id = current_user["user_id"]
+        refresh_requested_at = existing.get("refresh_requested_at")
+        refresh_requested_by_user_id = existing.get("refresh_requested_by_user_id")
+    elif action == "enable":
+        governance_status = "enabled"
+        refresh_status = existing.get("refresh_status") or "idle"
+        disabled_at = None
+        disabled_by_user_id = None
+        refresh_requested_at = existing.get("refresh_requested_at")
+        refresh_requested_by_user_id = existing.get("refresh_requested_by_user_id")
+    elif action == "request_refresh":
+        governance_status = existing.get("governance_status") or "enabled"
+        refresh_status = "requested"
+        disabled_at = existing.get("disabled_at")
+        disabled_by_user_id = existing.get("disabled_by_user_id")
+        refresh_requested_at = now
+        refresh_requested_by_user_id = current_user["user_id"]
+    else:
+        raise ValueError("不支持的记忆治理动作")
+
+    db.execute(
+        text(
+            """
+            INSERT INTO memory_governance_state (
+              tenant_id, governance_id, memory_id, customer_id, memory_scope,
+              governance_status, refresh_status, reason, disabled_at, disabled_by_user_id,
+              refresh_requested_at, refresh_requested_by_user_id
+            )
+            VALUES (
+              :tenant_id, :governance_id, :memory_id, :customer_id, 'customer',
+              :governance_status, :refresh_status, :reason, :disabled_at, :disabled_by_user_id,
+              :refresh_requested_at, :refresh_requested_by_user_id
+            )
+            ON DUPLICATE KEY UPDATE
+              memory_id = VALUES(memory_id),
+              governance_status = VALUES(governance_status),
+              refresh_status = VALUES(refresh_status),
+              reason = VALUES(reason),
+              disabled_at = VALUES(disabled_at),
+              disabled_by_user_id = VALUES(disabled_by_user_id),
+              refresh_requested_at = VALUES(refresh_requested_at),
+              refresh_requested_by_user_id = VALUES(refresh_requested_by_user_id)
+            """
+        ),
+        {
+            "tenant_id": current_user["tenant_id"],
+            "governance_id": governance_id,
+            "memory_id": latest_memory.get("memory_id"),
+            "customer_id": customer_id,
+            "governance_status": governance_status,
+            "refresh_status": refresh_status,
+            "reason": reason,
+            "disabled_at": disabled_at,
+            "disabled_by_user_id": disabled_by_user_id,
+            "refresh_requested_at": refresh_requested_at,
+            "refresh_requested_by_user_id": refresh_requested_by_user_id,
+        },
+    )
+    db.commit()
+    return load_customer_memory_governance(db, current_user, customer_id=customer_id)
 
 
 def _build_recommended_focus(
