@@ -1,0 +1,175 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(260px, 360px);
+  gap: 18px;
+  align-items: start;
+}
+
+.sidebar,
+.context {
+  position: sticky;
+  top: 26px;
+}
+
+.sessionItem {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.sessionItem:hover,
+.sessionItemActive {
+  border-color: rgba(75, 211, 138, 0.38);
+  background: rgba(75, 211, 138, 0.08);
+}
+
+.sessionItem span,
+.sessionItem small {
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.workspace {
+  min-height: 700px;
+}
+
+.questionBox {
+  display: grid;
+  gap: 12px;
+}
+
+.quickQuestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quickQuestions button {
+  padding: 7px 10px;
+  border: 1px solid rgba(151, 184, 210, 0.22);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.quickQuestions button:hover {
+  color: var(--text);
+  border-color: rgba(57, 208, 255, 0.38);
+}
+
+.resultShell {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.resultHeader {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: 8px;
+}
+
+.resultTable {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.resultTable th,
+.resultTable td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(151, 184, 210, 0.12);
+  text-align: left;
+  vertical-align: top;
+}
+
+.resultTable th {
+  color: var(--text);
+  background: rgba(57, 208, 255, 0.08);
+}
+
+.resultTable td {
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.emptyResult {
+  padding: 18px;
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.history {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.historyItem {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(151, 184, 210, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.historyItem strong {
+  color: var(--text);
+}
+
+.historyItem p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.sqlBlock {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: 8px;
+  color: #c6f3ff;
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.errorBox {
+  padding: 12px;
+  border: 1px solid rgba(255, 108, 108, 0.28);
+  border-radius: 8px;
+  color: #ffb8b8;
+  background: rgba(255, 108, 108, 0.08);
+}
+
+@media (max-width: 1180px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar,
+  .context {
+    position: static;
+  }
+}

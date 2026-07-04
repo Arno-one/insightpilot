@@ -43,7 +43,14 @@ const navItems: NavItem[] = [
     href: "/agent-chat",
     permissions: ["crm:customer:read:self"],
     eyebrow: "Unified Runtime",
-    summary: "从统一入口发起 Agent 对话，当前已接入风险分析，后续会挂入数据问答和经营分析。"
+    summary: "从统一入口发起 Agent 对话，当前已接入风险分析和数据问答。"
+  },
+  {
+    label: "智能问数",
+    href: "/nl2sql",
+    permissions: ["crm:customer:read:self"],
+    eyebrow: "Data Query",
+    summary: "用自然语言生成只读 SQL，查询业务数据并保留可审计的执行记录。"
   },
   {
     label: "客户风险中心",
