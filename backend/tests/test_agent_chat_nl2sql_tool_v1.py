@@ -16,16 +16,15 @@ def test_unified_agent_chat_runs_nl2sql_tool_for_data_query(monkeypatch):
     headers, tenant_id, _ = _build_headers(client)
     session_ids: list[str] = []
     _seed_probe_rows(tenant_id)
+    generated_questions: list[str] = []
 
     monkeypatch.setattr(nl2sql_service, "build_schema_text", lambda: "nl2sql_probe(tenant_id, probe_id, label, is_deleted)")
     monkeypatch.setattr(nl2sql_service, "get_tables_with_column", lambda column_name: {"nl2sql_probe"})
     monkeypatch.setattr(
         nl2sql_service,
         "generate_sql",
-        lambda question, schema_text=None: (
-            "SELECT probe_id, label FROM nl2sql_probe WHERE tenant_id = :tenant_id ORDER BY probe_id",
-            9,
-        ),
+        lambda question, schema_text=None: generated_questions.append(question)
+        or ("SELECT probe_id, label FROM nl2sql_probe WHERE tenant_id = :tenant_id ORDER BY probe_id", 9),
     )
 
     try:
@@ -53,11 +52,25 @@ def test_unified_agent_chat_runs_nl2sql_tool_for_data_query(monkeypatch):
         assert data["assistant_message"]["metadata_json"]["row_count"] == 1
         assert "nl2sql_probe.is_deleted = 0" in data["assistant_message"]["metadata_json"]["sql"]
         assert data["session"]["message_count"] == 2
+        first_nl2sql_session_id = data["assistant_message"]["metadata_json"]["nl2sql_session_id"]
 
         detail_response = client.get(f"/api/agent/chat/sessions/{session_id}", headers=headers)
         assert detail_response.status_code == 200
         detail = detail_response.json()["data"]
         assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
+
+        followup_response = client.post(
+            f"/api/agent/chat/sessions/{session_id}/messages",
+            headers=headers,
+            json={"role": "user", "intent": "data_query", "content": "继续只看可见数据"},
+        )
+        assert followup_response.status_code == 200
+        followup = followup_response.json()["data"]
+
+        assert followup["assistant_message"]["metadata_json"]["nl2sql_session_id"] == first_nl2sql_session_id
+        assert followup["assistant_message"]["metadata_json"]["followup_context"]["nl2sql_session_id"] == first_nl2sql_session_id
+        assert "上一轮数据查询上下文" in generated_questions[-1]
+        assert "上一轮SQL" in generated_questions[-1]
     finally:
         nl2sql_service._cache.clear()
         _cleanup_agent_chat_sessions(tenant_id, session_ids)

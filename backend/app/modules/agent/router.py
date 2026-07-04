@@ -153,6 +153,32 @@ def _load_chat_session_or_404(db: Session, current_user: dict, session_id: str) 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
+    """从统一会话中提取最近一次数据查询上下文，支持下一轮继续追问。"""
+    for index in range(len(messages) - 1, -1, -1):
+        item = messages[index]
+        if item.get("role") != "assistant":
+            continue
+        metadata = item.get("metadata_json") or {}
+        if metadata.get("runtime_handler") not in {"nl2sql_tool", "data.query_sql"}:
+            continue
+
+        previous_question = ""
+        for previous in reversed(messages[:index]):
+            if previous.get("role") == "user":
+                previous_question = str(previous.get("content") or "")
+                break
+
+        return {
+            "question": previous_question,
+            "sql": metadata.get("sql"),
+            "query_id": metadata.get("query_id"),
+            "nl2sql_session_id": metadata.get("nl2sql_session_id"),
+            "row_count": metadata.get("row_count"),
+        }
+    return None
+
+
 def _build_risk_chat_session_payload(
     db: Session,
     current_user: dict,
@@ -482,6 +508,14 @@ def append_agent_chat_user_message(
     current_session = _load_chat_session_or_404(db, current_user, session_id)
     route_result = intent_router.route_intent(body.content)
     resolved_intent = body.intent or route_result.intent
+    existing_messages = chat_session_service.list_chat_messages(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+        limit=20,
+    )
+    data_query_context = _load_latest_data_query_context(existing_messages) if resolved_intent == intent_router.INTENT_DATA_QUERY else None
     message = chat_session_service.append_chat_message(
         db,
         tenant_id=current_user["tenant_id"],
@@ -511,6 +545,8 @@ def append_agent_chat_user_message(
             readonly_db,
             current_user,
             question=body.content,
+            session_id=(data_query_context or {}).get("nl2sql_session_id"),
+            context_payload=data_query_context,
         )
         assistant_message = chat_session_service.append_chat_message(
             db,
@@ -529,6 +565,7 @@ def append_agent_chat_user_message(
                 "row_count": nl2sql_result["row_count"],
                 "error": nl2sql_result["error"],
                 "sql": nl2sql_result["nl2sql"].get("sql"),
+                "followup_context": data_query_context or {},
             },
         )
         runtime_result = {

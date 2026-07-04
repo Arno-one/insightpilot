@@ -81,3 +81,43 @@ def test_shared_mcp_gateway_exposes_and_executes_data_mcp(monkeypatch):
     assert result["output"]["is_cached"] is True
     assert result["audit_record"]["trace_summary"]["query_id"] == "nl2sql_query_demo"
     assert result["audit_record"]["trace_summary"]["is_cached"] is True
+
+
+def test_data_query_sql_tool_injects_followup_context(monkeypatch):
+    _patch_user_context(monkeypatch)
+    captured: dict = {}
+
+    def fake_query(db_rw, db_readonly, current_user, *, question, session_id=None):
+        captured["question"] = question
+        captured["session_id"] = session_id
+        return {
+            "session_id": session_id,
+            "query_id": "nl2sql_query_followup",
+            "sql": "SELECT customer_id FROM crm_customer WHERE tenant_id = :tenant_id LIMIT 100",
+            "result": {"columns": ["customer_id"], "rows": [], "row_count": 0},
+            "is_cached": False,
+            "cost_ms": 5,
+        }
+
+    monkeypatch.setattr(data_mcp_tools.nl2sql_service, "query", fake_query)
+
+    registry = InternalToolRegistry(build_data_mcp_tools())
+    output = registry.execute(
+        "data.query_sql",
+        _tool_context(),
+        {
+            "question": "只看高风险的",
+            "session_id": "nl2sql_sess_previous",
+            "context": {
+                "question": "本月客户有哪些？",
+                "sql": "SELECT customer_id FROM crm_customer WHERE tenant_id = :tenant_id LIMIT 100",
+            },
+        },
+    )["output"]
+
+    assert captured["session_id"] == "nl2sql_sess_previous"
+    assert "上一轮数据查询上下文" in captured["question"]
+    assert "上一轮SQL" in captured["question"]
+    assert "只看高风险的" in captured["question"]
+    assert output["question"] == "只看高风险的"
+    assert output["followup_context"]["question"] == "本月客户有哪些？"

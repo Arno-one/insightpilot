@@ -39,6 +39,8 @@ def run_nl2sql_tool(
     current_user: dict,
     *,
     question: str,
+    session_id: str | None = None,
+    context_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """统一 Agent 的 NL2SQL 工具封装；实际执行走标准 data.query_sql Tool。"""
     registry = InternalToolRegistry(build_data_mcp_tools())
@@ -49,7 +51,12 @@ def run_nl2sql_tool(
         db=db_rw,
         readonly_db=db_readonly,
     )
-    tool_result = registry.execute("data.query_sql", context, {"question": question})
+    payload: dict[str, Any] = {"question": question}
+    if session_id:
+        payload["session_id"] = session_id
+    if context_payload:
+        payload["context"] = context_payload
+    tool_result = registry.execute("data.query_sql", context, payload)
     result = tool_result["output"]
     reply = _build_reply(result)
     return {

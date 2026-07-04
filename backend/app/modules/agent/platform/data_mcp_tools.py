@@ -43,6 +43,26 @@ def _normalize_query_output(context: ToolExecutionContext, question: str, result
     }
 
 
+def _build_contextual_question(question: str, context_payload: Any) -> str:
+    """把上一轮数据查询上下文压进当前问题，支持“继续追问/缩小过滤条件”的 V1 能力。"""
+    if not isinstance(context_payload, dict):
+        return question
+
+    previous_sql = str(context_payload.get("sql") or "").strip()
+    previous_question = str(context_payload.get("question") or "").strip()
+    if not previous_sql and not previous_question:
+        return question
+
+    sections = ["【上一轮数据查询上下文】"]
+    if previous_question:
+        sections.append(f"上一轮问题：{previous_question}")
+    if previous_sql:
+        sections.append(f"上一轮SQL：{previous_sql}")
+    sections.append("【当前追问】")
+    sections.append(question)
+    return "\n".join(sections)
+
+
 def build_data_mcp_tools() -> list[ToolDefinition]:
     """注册 Data MCP V1 工具，先把 NL2SQL 暴露为平台标准数据查询能力。"""
 
@@ -51,15 +71,33 @@ def build_data_mcp_tools() -> list[ToolDefinition]:
         _require_permission(current_user, "crm:customer:read:self")
         question = str(_require_payload_value(payload, "question")).strip()
         session_id = payload.get("session_id")
+        followup_context = payload.get("context")
+        effective_question = _build_contextual_question(question, followup_context)
 
         if context.readonly_db is not None:
-            result = nl2sql_service.query(context.db, context.readonly_db, current_user, question=question, session_id=session_id)
-            return _normalize_query_output(context, question, result)
+            result = nl2sql_service.query(
+                context.db,
+                context.readonly_db,
+                current_user,
+                question=effective_question,
+                session_id=session_id,
+            )
+            output = _normalize_query_output(context, question, result)
+            output["followup_context"] = followup_context if isinstance(followup_context, dict) else {}
+            return output
 
         # 中文注释：后台 Tool/MCP 调用若没有显式只读连接，就临时打开 NL2SQL 专用只读连接。
         with ReadonlySessionLocal() as readonly_db:
-            result = nl2sql_service.query(context.db, readonly_db, current_user, question=question, session_id=session_id)
-            return _normalize_query_output(context, question, result)
+            result = nl2sql_service.query(
+                context.db,
+                readonly_db,
+                current_user,
+                question=effective_question,
+                session_id=session_id,
+            )
+            output = _normalize_query_output(context, question, result)
+            output["followup_context"] = followup_context if isinstance(followup_context, dict) else {}
+            return output
 
     return [
         ToolDefinition(
