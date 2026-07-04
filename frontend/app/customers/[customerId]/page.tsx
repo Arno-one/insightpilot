@@ -416,6 +416,9 @@ export default function CustomerDetailPage() {
           <Link className="button-secondary" href="/risks">
             返回风险中心
           </Link>
+          <Link className="button-secondary" href={`/agent-chat?customerId=${customerId}`}>
+            进入统一 Agent
+          </Link>
           <button className="button" onClick={triggerCustomerRescan} type="button" disabled={rescanLoading}>
             {rescanLoading ? "提交中..." : "重算当前客户风险"}
           </button>

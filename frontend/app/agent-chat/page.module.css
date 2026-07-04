@@ -1,0 +1,114 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(260px, 360px);
+  gap: 18px;
+  align-items: start;
+}
+
+.sidebar,
+.context {
+  position: sticky;
+  top: 26px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.field select {
+  min-height: 46px;
+  padding: 0 42px 0 14px;
+  border: 1px solid rgba(151, 184, 210, 0.26);
+  border-radius: 14px;
+}
+
+.sessionItem {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.sessionItem:hover,
+.sessionItemActive {
+  border-color: rgba(57, 208, 255, 0.42);
+  background: rgba(57, 208, 255, 0.1);
+}
+
+.sessionItem span,
+.sessionItem small {
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.thread {
+  min-height: 680px;
+}
+
+.messageList {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 420px;
+}
+
+.message {
+  display: grid;
+  gap: 10px;
+  max-width: 84%;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.message p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.8;
+}
+
+.messageUser {
+  justify-self: end;
+  border-color: rgba(57, 208, 255, 0.28);
+  background: rgba(57, 208, 255, 0.08);
+}
+
+.messageAssistant {
+  justify-self: start;
+  border-color: rgba(75, 211, 138, 0.22);
+  background: rgba(75, 211, 138, 0.07);
+}
+
+.messageEmpty {
+  max-width: 100%;
+  justify-self: stretch;
+}
+
+.composer {
+  display: grid;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+@media (max-width: 1180px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar,
+  .context {
+    position: static;
+  }
+}

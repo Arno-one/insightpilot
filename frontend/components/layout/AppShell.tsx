@@ -39,6 +39,13 @@ const navItems: NavItem[] = [
     summary: "按客户维度恢复历史对话、查看风险摘要，并直接和 Risk Agent 连续协作。"
   },
   {
+    label: "统一 Agent",
+    href: "/agent-chat",
+    permissions: ["crm:customer:read:self"],
+    eyebrow: "Unified Runtime",
+    summary: "从统一入口发起 Agent 对话，当前已接入风险分析，后续会挂入数据问答和经营分析。"
+  },
+  {
     label: "客户风险中心",
     href: "/risks",
     permissions: ["crm:risk:read:team", "crm:risk:read:all"],
