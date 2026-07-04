@@ -15,6 +15,7 @@ from app.modules.agent import (
     manager_tool,
     memory_service,
     nl2sql_tool,
+    opportunity_tool,
 )
 from app.modules.agent.schemas import (
     AgentChatIntentRouteRequest,
@@ -730,6 +731,38 @@ def append_agent_chat_user_message(
                 "handler": "execution.propose_actions",
                 "reason": "当前会话没有可提交审批的上一轮建议动作",
             }
+    elif resolved_intent == intent_router.INTENT_OPPORTUNITY_ANALYSIS:
+        opportunity_result = opportunity_tool.run_opportunity_scan_tool(
+            db,
+            current_user,
+            question=body.content,
+            customer_id=current_session.get("related_customer_id"),
+        )
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=opportunity_result["reply"],
+            intent=resolved_intent,
+            tool_name="opportunity.scan",
+            metadata_json={
+                "runtime_handler": "opportunity.scan",
+                "total": opportunity_result["total"],
+                "quote_timeout_count": opportunity_result["quote_timeout_count"],
+                "heat_change_count": opportunity_result["heat_change_count"],
+                "priority_count": opportunity_result["priority_count"],
+                "opportunity": opportunity_result["opportunity_result"],
+                "error": opportunity_result["error"],
+            },
+        )
+        runtime_result = {
+            "handled": True,
+            "handler": "opportunity.scan",
+            "reply": opportunity_result["reply"],
+            "opportunity": opportunity_result["opportunity_result"],
+        }
     elif resolved_intent == intent_router.INTENT_CUSTOMER_PROFILE and current_session.get("related_customer_id"):
         profile_result = customer_profile_tool.run_customer_profile_tool(
             db,

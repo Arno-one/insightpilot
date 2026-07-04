@@ -11,6 +11,7 @@ from app.modules.agent.platform.execution_mcp_tools import build_execution_mcp_t
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
 from app.modules.agent.platform.mail_mcp_tools import build_mail_mcp_tools
 from app.modules.agent.platform.manager_mcp_tools import build_manager_mcp_tools
+from app.modules.agent.platform.opportunity_mcp_tools import build_opportunity_mcp_tools
 from app.modules.agent.platform.tool_calling_tools import build_tool_calling_internal_tools
 from app.modules.agent.platform.tool_registry import ToolDefinition, ToolExecutionContext
 
@@ -176,6 +177,7 @@ def build_shared_mcp_gateway() -> MCPGateway:
         *build_manager_mcp_tools(),
         *build_tool_calling_internal_tools(),
         *build_mail_mcp_tools(),
+        *build_opportunity_mcp_tools(),
     ]
     return MCPGateway(
         [
@@ -189,6 +191,7 @@ def build_shared_mcp_gateway() -> MCPGateway:
             build_internal_mcp_server("task", "Task MCP", shared_tools),
             build_internal_mcp_server("notify", "Notify MCP", shared_tools),
             build_internal_mcp_server("mail", "Mail MCP", shared_tools),
+            build_internal_mcp_server("opportunity", "Opportunity MCP", shared_tools),
             build_internal_mcp_server("calendar", "Calendar MCP", shared_tools),
         ]
     )

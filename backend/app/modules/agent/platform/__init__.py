@@ -11,6 +11,7 @@ from app.modules.agent.platform.mcp_gateway import (
     build_internal_mcp_server,
     build_shared_mcp_gateway,
 )
+from app.modules.agent.platform.opportunity_mcp_tools import build_opportunity_mcp_tools
 from app.modules.agent.platform.tool_calling_orchestrator import (
     execute_post_approval_action_flow,
     get_post_approval_action_run_detail,
@@ -30,6 +31,7 @@ __all__ = [
     "build_shared_internal_tools",
     "build_mail_mcp_tools",
     "build_manager_mcp_tools",
+    "build_opportunity_mcp_tools",
     "MCPGateway",
     "MCPServerAdapter",
     "MCPToolDefinition",
