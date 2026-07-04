@@ -10,6 +10,7 @@ from app.shared.backup_recovery import summarize_backup_recovery
 from app.shared.deployment_readiness import summarize_deployment_readiness
 from app.shared.enterprise_hardening import summarize_enterprise_hardening
 from app.shared.event_bus import event_bus
+from app.shared.pilot_data_pack import summarize_pilot_data_pack
 from app.shared.release_gate import summarize_release_gate
 from app.shared.response import success
 from app.shared.smoke_test_plan import summarize_smoke_test_plan
@@ -324,6 +325,16 @@ def get_smoke_test_plan(
     _ = current_user
     plan = summarize_smoke_test_plan()
     return success(plan, "查询成功", total=plan["step_count"])
+
+
+@router.get("/pilot-data-pack")
+def get_pilot_data_pack(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    """中文注释：只读校验企业试点数据包，不自动修 seed、不写入数据库。"""
+    pack = summarize_pilot_data_pack(db, tenant_id=current_user["tenant_id"])
+    return success(pack, "查询成功", total=pack["check_count"])
 
 
 @router.get("/access-control")

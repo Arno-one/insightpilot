@@ -157,12 +157,42 @@ type SmokeTestPlan = {
   };
 };
 
+type PilotDataCheck = {
+  check_id: string;
+  category: string;
+  title: string;
+  status: "pass" | "fail";
+  table_name: string;
+  required_min_count: number;
+  actual_count: number;
+  expected_evidence: string;
+  recommendation: string;
+};
+
+type PilotDataPack = {
+  pack_version: string;
+  tenant_id: string;
+  overall_status: "ready" | "incomplete";
+  check_count: number;
+  status_counts: StatusCounts;
+  category_counts: StatusCounts;
+  checks: PilotDataCheck[];
+  missing_checks: string[];
+  execution_boundary: {
+    readonly: boolean;
+    data_mutation_enabled: boolean;
+    seed_repair_enabled: boolean;
+    description: string;
+  };
+};
+
 type HealthConsoleData = {
   hardening: EnterpriseHardeningReport;
   readiness: DeploymentReadiness;
   backup: BackupRecovery;
   releaseGate: ReleaseGateChecklist;
   smokePlan: SmokeTestPlan;
+  pilotPack: PilotDataPack;
 };
 
 const statusText: Record<string, string> = {
@@ -171,14 +201,15 @@ const statusText: Record<string, string> = {
   warn: "提醒",
   blocked: "阻断",
   pass: "通过",
-  fail: "失败"
+  fail: "失败",
+  incomplete: "不完整"
 };
 
 function statusTone(status: string) {
   if (status === "blocked" || status === "fail") {
     return "tone-danger";
   }
-  if (status === "warn" || status === "ready_with_warnings") {
+  if (status === "warn" || status === "ready_with_warnings" || status === "incomplete") {
     return "tone-warning";
   }
   return "tone-success";
@@ -205,26 +236,28 @@ export default function SystemHealthPage() {
   const [data, setData] = useState<HealthConsoleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"hardening" | "deployment" | "backup" | "release" | "smoke">("hardening");
+  const [activeTab, setActiveTab] = useState<"hardening" | "deployment" | "backup" | "release" | "smoke" | "pilot">("hardening");
   const [smokeDrafts, setSmokeDrafts] = useState<Record<string, string>>({});
 
   async function loadHealthConsole() {
     setLoading(true);
     setError("");
     try {
-      const [hardening, readiness, backup, releaseGate, smokePlan] = await Promise.all([
+      const [hardening, readiness, backup, releaseGate, smokePlan, pilotPack] = await Promise.all([
         apiFetch<EnterpriseHardeningReport>("/api/system/enterprise-hardening"),
         apiFetch<DeploymentReadiness>("/api/system/deployment-readiness"),
         apiFetch<BackupRecovery>("/api/system/backup-recovery"),
         apiFetch<ReleaseGateChecklist>("/api/system/release-gate"),
-        apiFetch<SmokeTestPlan>("/api/system/smoke-test-plan")
+        apiFetch<SmokeTestPlan>("/api/system/smoke-test-plan"),
+        apiFetch<PilotDataPack>("/api/system/pilot-data-pack")
       ]);
       setData({
         hardening: hardening.data,
         readiness: readiness.data,
         backup: backup.data,
         releaseGate: releaseGate.data,
-        smokePlan: smokePlan.data
+        smokePlan: smokePlan.data,
+        pilotPack: pilotPack.data
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "系统健康数据加载失败。");
@@ -289,6 +322,11 @@ export default function SystemHealthPage() {
               <span className="metric-label">冒烟测试项</span>
               <p className="metric-detail">覆盖登录、CRM、Trace、NL2SQL、RAG、通知、审批任务和系统健康。</p>
             </article>
+            <article className={`metric-card ${statusTone(data.pilotPack.overall_status)}`}>
+              <strong className="metric-value">{data.pilotPack.status_counts.pass}/{data.pilotPack.check_count}</strong>
+              <span className="metric-label">试点数据覆盖</span>
+              <p className="metric-detail">{data.pilotPack.missing_checks.length ? `缺失 ${data.pilotPack.missing_checks.length} 项。` : "试点数据包完整。"}</p>
+            </article>
           </section>
 
           <section className="command-panel">
@@ -329,12 +367,13 @@ export default function SystemHealthPage() {
                   ["deployment", "部署就绪"],
                   ["backup", "备份恢复"],
                   ["release", "发布门禁"],
-                  ["smoke", "冒烟计划"]
+                  ["smoke", "冒烟计划"],
+                  ["pilot", "试点数据"]
                 ].map(([key, label]) => (
                   <button
                     className={`workspace-tab ${activeTab === key ? "workspace-tab-active" : ""}`}
                     key={key}
-                    onClick={() => setActiveTab(key as "hardening" | "deployment" | "backup" | "release" | "smoke")}
+                    onClick={() => setActiveTab(key as "hardening" | "deployment" | "backup" | "release" | "smoke" | "pilot")}
                     type="button"
                   >
                     <span className="workspace-tab-dot" />
@@ -389,6 +428,15 @@ export default function SystemHealthPage() {
                 <span>冒烟计划</span>
                 <strong>{data.smokePlan.step_count} 项</strong>
                 <small>P0 {data.smokePlan.priority_counts.p0 || 0} / P1 {data.smokePlan.priority_counts.p1 || 0}</small>
+              </button>
+              <button
+                className={`health-section-card ${activeTab === "pilot" ? "is-active" : ""} ${statusTone(data.pilotPack.overall_status)}`}
+                onClick={() => setActiveTab("pilot")}
+                type="button"
+              >
+                <span>试点数据</span>
+                <strong>{formatStatus(data.pilotPack.overall_status)}</strong>
+                <small>{data.pilotPack.status_counts.pass || 0}/{data.pilotPack.check_count} 项通过</small>
               </button>
             </div>
 
@@ -561,6 +609,36 @@ export default function SystemHealthPage() {
                           placeholder="仅保存在当前页面状态；刷新后清空，不写入后端。"
                         />
                       </label>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {activeTab === "pilot" ? (
+              <div className="health-pilot-layout">
+                <article className="summary-item">
+                  <strong>租户</strong>
+                  <p>{data.pilotPack.tenant_id}</p>
+                </article>
+                <article className="summary-item">
+                  <strong>覆盖状态</strong>
+                  <p>{formatStatus(data.pilotPack.overall_status)}，{data.pilotPack.status_counts.pass || 0} 项通过，{data.pilotPack.status_counts.fail || 0} 项缺失。</p>
+                </article>
+                <article className="summary-item">
+                  <strong>执行边界</strong>
+                  <p>{data.pilotPack.execution_boundary.description}</p>
+                </article>
+                <div className="card-stack">
+                  {data.pilotPack.checks.map((check) => (
+                    <article className="health-check-row" key={check.check_id}>
+                      <span className={`meta-chip ${statusTone(check.status)}`}>{formatStatus(check.status)}</span>
+                      <div>
+                        <p className="eyebrow">{check.category} / {check.table_name}</p>
+                        <h3>{check.title}</h3>
+                        <p>当前 {check.actual_count}，要求至少 {check.required_min_count}。{check.expected_evidence}</p>
+                        {check.status === "fail" ? <p className="danger-text">{check.recommendation}</p> : null}
+                      </div>
                     </article>
                   ))}
                 </div>
