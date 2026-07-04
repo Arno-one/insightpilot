@@ -62,5 +62,7 @@ def run_opportunity_scan_tool(
         "quote_timeout_count": result.get("quote_timeout_count") or 0,
         "heat_change_count": result.get("heat_change_count") or 0,
         "priority_count": len(result.get("priority_items") or []),
+        "recommended_actions": list(result.get("recommended_actions") or []),
+        "recommended_action_count": int(result.get("recommended_action_count") or 0),
         "error": None,
     }

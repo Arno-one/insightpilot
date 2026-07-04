@@ -14,7 +14,9 @@ def build_approval_payload_from_action(action: dict[str, Any]) -> dict[str, Any]
         "description": action.get("reason") or title,
         "priority": priority,
         "recommended_script": action.get("recommended_script") or action.get("reason") or "",
-        "source": "manager_decision",
+        "source": action.get("source") or "manager_decision",
+        "deal_id": action.get("deal_id"),
+        "deal_name": action.get("deal_name"),
         "requires_human_approval": True,
     }
 

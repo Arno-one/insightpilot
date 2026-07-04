@@ -189,7 +189,7 @@ def _score_intent(question: str, intent: str, keywords: list[str]) -> tuple[int,
     if intent == INTENT_ACTION_EXECUTION and any(
         keyword in matched for keyword in ["提交审批", "进入审批", "创建任务", "发通知", "安排日程", "发邮件", "执行"]
     ):
-        score += 5
+        score += 8
     if intent == INTENT_CUSTOMER_PROFILE and any(keyword in matched for keyword in ["客户画像", "画像", "客户标签", "生成画像"]):
         score += 5
     if intent == INTENT_OPPORTUNITY_ANALYSIS and any(

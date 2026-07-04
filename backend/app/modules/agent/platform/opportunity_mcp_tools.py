@@ -81,6 +81,9 @@ def build_opportunity_mcp_tools() -> list[ToolDefinition]:
             "execution_policy": {
                 "auto_execute": False,
                 "requires_human_approval": True,
+                "approval_required_action_types": [
+                    action["action_type"] for action in analysis.get("recommended_actions", []) if action.get("requires_approval")
+                ],
                 "reason": "商机跟进建议只进入人工判断，不自动触发报价、任务或通知。",
             },
             "trace": {

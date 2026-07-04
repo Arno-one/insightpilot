@@ -195,16 +195,43 @@ def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
     return None
 
 
-def _load_latest_manager_decision_actions(messages: list[dict]) -> list[dict]:
-    """读取最近一次经理决策里的建议动作，供执行 Agent 转成审批草稿。"""
+def _load_latest_recommended_actions(messages: list[dict]) -> list[dict]:
+    """读取最近一次可执行建议动作，供执行 Agent 转成审批草稿。"""
     for item in reversed(messages):
         if item.get("role") != "assistant":
             continue
         metadata = item.get("metadata_json") or {}
-        if metadata.get("runtime_handler") != "manager.make_decision":
+        if metadata.get("runtime_handler") == "manager.make_decision":
+            decision = metadata.get("decision") or {}
+            actions = decision.get("recommended_actions")
+            return actions if isinstance(actions, list) else []
+        if metadata.get("runtime_handler") == "opportunity.scan":
+            actions = metadata.get("recommended_actions")
+            if isinstance(actions, list):
+                return actions
+            opportunity = metadata.get("opportunity") or {}
+            actions = opportunity.get("recommended_actions")
+            return actions if isinstance(actions, list) else []
+    return []
+
+
+def _load_latest_manager_decision_actions(messages: list[dict]) -> list[dict]:
+    """兼容旧测试和调用语义；实际会读取最近一次可执行建议动作。"""
+    return _load_latest_recommended_actions(messages)
+
+
+def _load_latest_opportunity_actions(messages: list[dict]) -> list[dict]:
+    for item in reversed(messages):
+        if item.get("role") != "assistant":
             continue
-        decision = metadata.get("decision") or {}
-        actions = decision.get("recommended_actions")
+        metadata = item.get("metadata_json") or {}
+        if metadata.get("runtime_handler") != "opportunity.scan":
+            continue
+        actions = metadata.get("recommended_actions")
+        if isinstance(actions, list):
+            return actions
+        opportunity = metadata.get("opportunity") or {}
+        actions = opportunity.get("recommended_actions")
         return actions if isinstance(actions, list) else []
     return []
 
@@ -696,7 +723,7 @@ def append_agent_chat_user_message(
             "manager": manager_payload,
         }
     elif resolved_intent == intent_router.INTENT_ACTION_EXECUTION:
-        actions = _load_latest_manager_decision_actions(existing_messages)
+        actions = _load_latest_recommended_actions(existing_messages)
         if actions:
             execution_result = execution_tool.run_execution_proposal_tool(
                 db,
@@ -753,6 +780,8 @@ def append_agent_chat_user_message(
                 "quote_timeout_count": opportunity_result["quote_timeout_count"],
                 "heat_change_count": opportunity_result["heat_change_count"],
                 "priority_count": opportunity_result["priority_count"],
+                "recommended_action_count": opportunity_result["recommended_action_count"],
+                "recommended_actions": opportunity_result["recommended_actions"],
                 "opportunity": opportunity_result["opportunity_result"],
                 "error": opportunity_result["error"],
             },

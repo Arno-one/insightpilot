@@ -109,6 +109,45 @@ def _build_follow_up_suggestion(
     return "保持常规跟进，继续观察客户反馈。"
 
 
+def _action_priority(item: dict[str, Any]) -> str:
+    if item.get("quote_timeout") or item.get("heat_state") == "at_risk" or float(item.get("close_probability") or 0) >= 0.7:
+        return "high"
+    if item.get("heat_state") == "cooling":
+        return "medium"
+    return "low"
+
+
+def build_recommended_actions_from_scan(scan_result: dict[str, Any], *, limit: int = 5) -> list[dict[str, Any]]:
+    """把商机扫描结果转换为执行 Agent 可识别的建议动作，真正落地仍必须走人工审批。"""
+    actions: list[dict[str, Any]] = []
+    for item in list(scan_result.get("priority_items") or [])[:limit]:
+        customer_id = item.get("customer_id")
+        if not customer_id:
+            continue
+        customer_name = item.get("customer_name") or customer_id
+        deal_name = item.get("deal_name") or item.get("deal_id") or "未命名商机"
+        alerts = "；".join(item.get("alerts") or [])
+        reason = alerts or item.get("follow_up_suggestion") or "商机进入重点跟进队列，需要负责人确认下一步。"
+        actions.append(
+            {
+                "action_type": "create_follow_up_task",
+                "source": "opportunity_scan",
+                "priority": _action_priority(item),
+                "customer_id": customer_id,
+                "customer_name": customer_name,
+                "deal_id": item.get("deal_id"),
+                "deal_name": deal_name,
+                "owner_user_id": item.get("owner_user_id"),
+                "owner_user_name": item.get("owner_user_name"),
+                "title": f"跟进重点商机：{customer_name} / {deal_name}",
+                "reason": reason,
+                "recommended_script": item.get("follow_up_suggestion") or reason,
+                "requires_approval": True,
+            }
+        )
+    return actions
+
+
 def analyze_opportunities(
     rows: list[dict[str, Any]],
     *,
@@ -162,7 +201,7 @@ def analyze_opportunities(
         key=lambda item: (len(item["alerts"]), item["close_probability"], item["quote_age_days"] or 0),
         reverse=True,
     )[:10]
-    return {
+    result = {
         "protocol": "opportunity.scan.v1",
         "total": len(items),
         "quote_timeout_count": len(timeout_items),
@@ -171,3 +210,6 @@ def analyze_opportunities(
         "priority_items": priority_items,
         "summary": f"扫描 {len(items)} 个商机，发现 {len(timeout_items)} 个报价超时、{len(heat_change_items)} 个热度变化信号。",
     }
+    result["recommended_actions"] = build_recommended_actions_from_scan(result)
+    result["recommended_action_count"] = len(result["recommended_actions"])
+    return result
