@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.modules.auth.dependencies import require_permission
 from app.modules.system.schemas import UpdateRolePermissionsRequest, UpdateUserRolesRequest
 from app.shared.audit_policy import summarize_audit_policy
+from app.shared.backup_recovery import summarize_backup_recovery
 from app.shared.deployment_readiness import summarize_deployment_readiness
 from app.shared.event_bus import event_bus
 from app.shared.response import success
@@ -282,6 +283,16 @@ def get_deployment_readiness(
     _ = current_user
     readiness = summarize_deployment_readiness(public=False)
     return success(readiness, "查询成功", total=sum(readiness["check_counts"].values()))
+
+
+@router.get("/backup-recovery")
+def get_backup_recovery(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+):
+    """中文注释：输出备份恢复策略和演练步骤，不触发真实备份或恢复动作。"""
+    _ = current_user
+    plan = summarize_backup_recovery()
+    return success(plan, "查询成功", total=plan["domain_count"])
 
 
 @router.get("/access-control")
