@@ -1,8 +1,28 @@
+import json
+from datetime import datetime
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 from sqlalchemy import bindparam, text
 
 from app.core.database import SessionLocal
 from app.main import app
+from app.modules.agent import conversation_memory_service
+from app.modules.llm import client as llm_client
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.store: dict[str, str] = {}
+
+    def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self.store[key] = value
+
+    def delete(self, key: str) -> None:
+        self.store.pop(key, None)
 
 
 def _ensure_agent_chat_tables_exist():
@@ -66,6 +86,35 @@ def _ensure_agent_chat_tables_exist():
         db.commit()
 
 
+def _ensure_customer_memory_table_exists():
+    with SessionLocal() as db:
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS customer_memory (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  memory_id VARCHAR(64) NOT NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  memory_scope VARCHAR(30) NOT NULL DEFAULT 'customer',
+                  summary_text TEXT NOT NULL,
+                  summary_json JSON NULL,
+                  source_run_id VARCHAR(64) NULL,
+                  last_compiled_at DATETIME NOT NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_memory_id (memory_id),
+                  UNIQUE KEY uk_tenant_customer_scope (tenant_id, customer_id, memory_scope),
+                  KEY idx_tenant_customer (tenant_id, customer_id),
+                  KEY idx_tenant_compiled_at (tenant_id, last_compiled_at),
+                  KEY idx_source_run_id (source_run_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.commit()
+
+
 def _build_headers(
     client: TestClient,
     *,
@@ -97,6 +146,109 @@ def _cleanup_agent_chat_sessions(tenant_id: str, session_ids: list[str]):
                 bindparam("session_ids", expanding=True)
             ),
             {"tenant_id": tenant_id, "session_ids": session_ids},
+        )
+        db.commit()
+
+
+def _create_risk_chat_customer_fixture(tenant_id: str, user_id: str) -> tuple[str, str]:
+    customer_id = f"cust_unified_{uuid4().hex[:10]}"
+    risk_snapshot_id = f"risk_unified_{uuid4().hex[:10]}"
+    now = datetime.now()
+    summary_json = {
+        "risk_state": {
+            "latest_risk_level": "high",
+            "latest_risk_score": 86,
+            "latest_reason": "客户连续两周未推进且竞品介入明显。",
+            "latest_suggestion": "建议主管介入并核对真实采购节奏。",
+        },
+        "approval_state": {"pending_count": 0},
+        "task_state": {"active_count": 0},
+        "follow_up_state": {"latest_follow_up_at": now.isoformat()},
+    }
+
+    with SessionLocal() as db:
+        db.execute(
+            text(
+                """
+                INSERT INTO crm_customer (
+                  tenant_id, customer_id, customer_name, owner_user_id, lifecycle_stage, intent_level,
+                  customer_level, competitor_involved, next_follow_up_at, last_follow_up_at, last_sentiment
+                )
+                VALUES (
+                  :tenant_id, :customer_id, :customer_name, :owner_user_id, 'opportunity', 'high',
+                  'A', 1, NULL, :last_follow_up_at, 'negative'
+                )
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "customer_id": customer_id,
+                "customer_name": "统一入口风险运行时测试客户",
+                "owner_user_id": user_id,
+                "last_follow_up_at": now,
+            },
+        )
+        db.execute(
+            text(
+                """
+                INSERT INTO customer_risk_snapshot (
+                  tenant_id, risk_snapshot_id, customer_id, owner_user_id, risk_score, risk_level,
+                  rule_hits_json, evidence_json, llm_reason, llm_suggestion, suggested_task_json,
+                  status, generated_by_run_id
+                )
+                VALUES (
+                  :tenant_id, :risk_snapshot_id, :customer_id, :owner_user_id, 86, 'high',
+                  '[]', '{}', :llm_reason, :llm_suggestion, '{}', 'pending_review', NULL
+                )
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "risk_snapshot_id": risk_snapshot_id,
+                "customer_id": customer_id,
+                "owner_user_id": user_id,
+                "llm_reason": "客户连续两周未推进且竞品介入明显。",
+                "llm_suggestion": "建议主管介入并核对真实采购节奏。",
+            },
+        )
+        db.execute(
+            text(
+                """
+                INSERT INTO customer_memory (
+                  tenant_id, memory_id, customer_id, memory_scope, summary_text, summary_json, source_run_id, last_compiled_at
+                )
+                VALUES (
+                  :tenant_id, :memory_id, :customer_id, 'customer', :summary_text, :summary_json, NULL, :last_compiled_at
+                )
+                """
+            ),
+            {
+                "tenant_id": tenant_id,
+                "memory_id": f"memo_unified_{uuid4().hex[:10]}",
+                "customer_id": customer_id,
+                "summary_text": "该客户推进放缓且竞品介入，适合由主管介入核对采购节奏。",
+                "summary_json": json.dumps(summary_json, ensure_ascii=False),
+                "last_compiled_at": now,
+            },
+        )
+        db.commit()
+
+    return customer_id, risk_snapshot_id
+
+
+def _cleanup_risk_chat_customer_fixture(tenant_id: str, customer_id: str, risk_snapshot_id: str):
+    with SessionLocal() as db:
+        db.execute(
+            text("DELETE FROM customer_memory WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
+        db.execute(
+            text("DELETE FROM customer_risk_snapshot WHERE tenant_id = :tenant_id AND risk_snapshot_id = :risk_snapshot_id"),
+            {"tenant_id": tenant_id, "risk_snapshot_id": risk_snapshot_id},
+        )
+        db.execute(
+            text("DELETE FROM crm_customer WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
         )
         db.commit()
 
@@ -165,6 +317,62 @@ def test_unified_agent_chat_api_creates_session_appends_message_and_closes():
         assert created_session["session_id"] not in active_ids
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
+
+
+def test_unified_agent_chat_api_runs_risk_agent_when_session_has_related_customer(monkeypatch):
+    _ensure_agent_chat_tables_exist()
+    _ensure_customer_memory_table_exists()
+    client = TestClient(app)
+    fake_redis = _FakeRedis()
+    monkeypatch.setattr(conversation_memory_service, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(llm_client.settings, "deepseek_api_key", "")
+    headers, tenant_id, user_id = _build_headers(client)
+    customer_id, risk_snapshot_id = _create_risk_chat_customer_fixture(tenant_id, user_id)
+    session_ids: list[str] = []
+
+    try:
+        create_response = client.post(
+            "/api/agent/chat/sessions",
+            headers=headers,
+            json={
+                "agent_scope": "risk",
+                "intent": "unknown",
+                "title": "统一风险运行时",
+                "related_customer_id": customer_id,
+            },
+        )
+        assert create_response.status_code == 200
+        session_id = create_response.json()["data"]["session_id"]
+        session_ids.append(session_id)
+
+        message_response = client.post(
+            f"/api/agent/chat/sessions/{session_id}/messages",
+            headers=headers,
+            json={"role": "user", "content": "这个客户为什么风险这么高？"},
+        )
+        assert message_response.status_code == 200
+        data = message_response.json()["data"]
+
+        assert data["runtime"]["handled"] is True
+        assert data["runtime"]["handler"] == "risk_agent"
+        assert "风险" in data["runtime"]["reply"]
+        assert data["assistant_message"]["role"] == "assistant"
+        assert data["assistant_message"]["metadata_json"]["runtime_handler"] == "risk_agent"
+        assert data["session"]["message_count"] == 2
+        assert data["session"]["last_message_role"] == "assistant"
+        assert len(data["runtime"]["risk_chat"]["recent_messages"]) == 2
+
+        detail_response = client.get(f"/api/agent/chat/sessions/{session_id}", headers=headers)
+        assert detail_response.status_code == 200
+        detail = detail_response.json()["data"]
+        assert [item["role"] for item in detail["messages"]] == ["user", "assistant"]
+
+        risk_session_response = client.get(f"/api/agent/risk-chat/customers/{customer_id}/session", headers=headers)
+        assert risk_session_response.status_code == 200
+        assert len(risk_session_response.json()["data"]["recent_messages"]) == 2
+    finally:
+        _cleanup_agent_chat_sessions(tenant_id, session_ids)
+        _cleanup_risk_chat_customer_fixture(tenant_id, customer_id, risk_snapshot_id)
 
 
 def test_unified_agent_chat_api_rejects_assistant_message_from_direct_entry():

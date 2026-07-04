@@ -189,6 +189,68 @@ def _build_risk_chat_session_payload(
     }
 
 
+def _run_risk_agent_chat_reply(db: Session, current_user: dict, customer_id: str, user_message: str) -> dict:
+    """复用现有 Risk Agent 对话能力，给统一入口和旧 Risk Chat 保持同一套回复与记忆逻辑。"""
+    customer = crm_service.load_customer_or_404(db, current_user, customer_id)
+    latest_risk = _load_latest_customer_risk_snapshot(db, current_user["tenant_id"], customer_id)
+    customer_memory = _load_customer_memory_item(db, current_user["tenant_id"], customer_id)
+    conversation_memory = conversation_memory_service.load_conversation_memory(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id,
+    )
+
+    reply = generate_risk_chat_reply(
+        customer=customer,
+        latest_risk=latest_risk,
+        customer_memory=customer_memory,
+        conversation_memory={
+            "history_summary": conversation_memory.get("history_summary", ""),
+            "recent_messages": [
+                *list(conversation_memory.get("recent_messages", [])),
+                {
+                    "role": "user",
+                    "content": user_message,
+                    "created_at": "pending",
+                },
+            ],
+        },
+        user_message=user_message,
+    )
+    saved_memory, compacted = conversation_memory_service.append_conversation_messages(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id,
+        messages=[
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": reply},
+        ],
+    )
+    session_items = conversation_memory_service.upsert_conversation_session_index(
+        current_user["tenant_id"],
+        current_user["user_id"],
+        customer_id=customer_id,
+        customer_name=customer.get("customer_name") or customer_id,
+        session_key=saved_memory["session_key"],
+        recent_messages=saved_memory["recent_messages"],
+        updated_at=saved_memory["updated_at"],
+        latest_risk_level=latest_risk.get("risk_level"),
+    )
+
+    return {
+        "reply": reply,
+        "session_key": saved_memory["session_key"],
+        "recent_messages": saved_memory["recent_messages"],
+        "history_summary": saved_memory["history_summary"],
+        "memory_window": saved_memory["memory_window"],
+        "updated_at": saved_memory["updated_at"],
+        "compacted": compacted,
+        "customer_memory_summary": customer_memory.get("summary_text", ""),
+        "latest_risk": latest_risk,
+        "session_history": session_items,
+    }
+
+
 @router.get("/runs")
 def list_agent_runs(
     current_user: dict = Depends(require_permission("agent:log:read")),
@@ -416,7 +478,7 @@ def append_agent_chat_user_message(
     if body.role != "user":
         raise HTTPException(status_code=400, detail="统一对话入口 V1 仅允许直接写入用户消息")
 
-    _load_chat_session_or_404(db, current_user, session_id)
+    current_session = _load_chat_session_or_404(db, current_user, session_id)
     route_result = intent_router.route_intent(body.content)
     resolved_intent = body.intent or route_result.intent
     message = chat_session_service.append_chat_message(
@@ -435,13 +497,66 @@ def append_agent_chat_user_message(
             "intent_route": route_result.model_dump(),
         },
     )
+    assistant_message = None
+    runtime_result = {
+        "handled": False,
+        "handler": None,
+        "reason": "当前意图暂未接入统一运行时",
+    }
+
+    if resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
+        risk_result = _run_risk_agent_chat_reply(
+            db,
+            current_user,
+            current_session["related_customer_id"],
+            body.content,
+        )
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=risk_result["reply"],
+            intent=resolved_intent,
+            metadata_json={
+                "runtime_handler": "risk_agent",
+                "risk_chat": {
+                    "session_key": risk_result["session_key"],
+                    "compacted": risk_result["compacted"],
+                    "latest_risk": risk_result["latest_risk"],
+                },
+            },
+        )
+        runtime_result = {
+            "handled": True,
+            "handler": "risk_agent",
+            "reply": risk_result["reply"],
+            "risk_chat": risk_result,
+        }
+    elif resolved_intent == intent_router.INTENT_RISK_ANALYSIS:
+        runtime_result = {
+            "handled": False,
+            "handler": "risk_agent",
+            "reason": "风险分析需要会话先关联客户",
+        }
+
     session = chat_session_service.get_chat_session(
         db,
         tenant_id=current_user["tenant_id"],
         user_id=current_user["user_id"],
         session_id=session_id,
     )
-    return success({"session": session, "message": message, "intent_route": route_result.model_dump()}, "消息已写入统一 Agent 对话")
+    return success(
+        {
+            "session": session,
+            "message": message,
+            "assistant_message": assistant_message,
+            "intent_route": route_result.model_dump(),
+            "runtime": runtime_result,
+        },
+        "消息已写入统一 Agent 对话",
+    )
 
 
 @router.post("/chat/sessions/{session_id}/close")
@@ -492,67 +607,7 @@ def send_risk_chat_message(
     db: Session = Depends(get_db),
 ):
     """发送一条 Risk Agent 对话消息，并把短期记忆压缩为最近 5 轮全量加历史摘要。"""
-    customer = crm_service.load_customer_or_404(db, current_user, customer_id)
-    latest_risk = _load_latest_customer_risk_snapshot(db, current_user["tenant_id"], customer_id)
-    customer_memory = _load_customer_memory_item(db, current_user["tenant_id"], customer_id)
-    conversation_memory = conversation_memory_service.load_conversation_memory(
-        current_user["tenant_id"],
-        current_user["user_id"],
-        customer_id,
-    )
-
-    reply = generate_risk_chat_reply(
-        customer=customer,
-        latest_risk=latest_risk,
-        customer_memory=customer_memory,
-        conversation_memory={
-            "history_summary": conversation_memory.get("history_summary", ""),
-            "recent_messages": [
-                *list(conversation_memory.get("recent_messages", [])),
-                {
-                    "role": "user",
-                    "content": body.message,
-                    "created_at": "pending",
-                },
-            ],
-        },
-        user_message=body.message,
-    )
-    saved_memory, compacted = conversation_memory_service.append_conversation_messages(
-        current_user["tenant_id"],
-        current_user["user_id"],
-        customer_id,
-        messages=[
-            {"role": "user", "content": body.message},
-            {"role": "assistant", "content": reply},
-        ],
-    )
-    session_items = conversation_memory_service.upsert_conversation_session_index(
-        current_user["tenant_id"],
-        current_user["user_id"],
-        customer_id=customer_id,
-        customer_name=customer.get("customer_name") or customer_id,
-        session_key=saved_memory["session_key"],
-        recent_messages=saved_memory["recent_messages"],
-        updated_at=saved_memory["updated_at"],
-        latest_risk_level=latest_risk.get("risk_level"),
-    )
-
-    return success(
-        {
-            "reply": reply,
-            "session_key": saved_memory["session_key"],
-            "recent_messages": saved_memory["recent_messages"],
-            "history_summary": saved_memory["history_summary"],
-            "memory_window": saved_memory["memory_window"],
-            "updated_at": saved_memory["updated_at"],
-            "compacted": compacted,
-            "customer_memory_summary": customer_memory.get("summary_text", ""),
-            "latest_risk": latest_risk,
-            "session_history": session_items,
-        },
-        "回复成功",
-    )
+    return success(_run_risk_agent_chat_reply(db, current_user, customer_id, body.message), "回复成功")
 
 
 @router.delete("/risk-chat/customers/{customer_id}/session")
