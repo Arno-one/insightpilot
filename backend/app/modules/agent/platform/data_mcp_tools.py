@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.database import ReadonlySessionLocal
+from app.modules.agent.data_analyst import analyze_query_result
 from app.modules.agent.platform.internal_tools import _load_current_user_context, _require_payload_value, _require_permission
 from app.modules.agent.platform.tool_registry import ToolDefinition, ToolExecutionContext
 from app.modules.nl2sql import service as nl2sql_service
@@ -64,7 +65,7 @@ def _build_contextual_question(question: str, context_payload: Any) -> str:
 
 
 def build_data_mcp_tools() -> list[ToolDefinition]:
-    """注册 Data MCP V1 工具，先把 NL2SQL 暴露为平台标准数据查询能力。"""
+    """注册 Data MCP 工具，把问数和经营分析统一挂到平台数据能力下。"""
 
     def query_sql_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
         current_user = _load_current_user_context(context)
@@ -99,10 +100,33 @@ def build_data_mcp_tools() -> list[ToolDefinition]:
             output["followup_context"] = followup_context if isinstance(followup_context, dict) else {}
             return output
 
+    def analyze_business_tool(context: ToolExecutionContext, payload: dict[str, Any]) -> dict[str, Any]:
+        # 中文注释：经营分析 V1 不新开数据通道，先复用 data.query_sql 的只读、安全和审计链路。
+        question = str(_require_payload_value(payload, "question")).strip()
+        query_output = query_sql_tool(context, payload)
+        analysis = analyze_query_result(question, query_output)
+        trace = {
+            **(query_output.get("trace") or {}),
+            "analysis_protocol": analysis["protocol"],
+            "analysis_status": "generated" if not query_output.get("error") else "skipped",
+        }
+        return {
+            "protocol": "data.analyze_business.v1",
+            "question": question,
+            "query": query_output,
+            "analysis": analysis,
+            "trace": trace,
+        }
+
     return [
         ToolDefinition(
             name="data.query_sql",
             description="通过 NL2SQL 生成并执行只读 SQL，返回结构化结果、SQL、缓存状态和查询审计摘要。",
             handler=query_sql_tool,
-        )
+        ),
+        ToolDefinition(
+            name="data.analyze_business",
+            description="复用 data.query_sql 查询经营数据，并生成趋势、异常、指标解释和 TopN 归因摘要。",
+            handler=analyze_business_tool,
+        ),
     ]

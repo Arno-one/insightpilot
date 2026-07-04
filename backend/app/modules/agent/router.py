@@ -5,7 +5,14 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db, get_readonly_db
-from app.modules.agent import chat_session_service, conversation_memory_service, intent_router, memory_service, nl2sql_tool
+from app.modules.agent import (
+    chat_session_service,
+    conversation_memory_service,
+    data_analyst_tool,
+    intent_router,
+    memory_service,
+    nl2sql_tool,
+)
 from app.modules.agent.schemas import (
     AgentChatIntentRouteRequest,
     AgentChatMessageCreateRequest,
@@ -160,7 +167,7 @@ def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
         if item.get("role") != "assistant":
             continue
         metadata = item.get("metadata_json") or {}
-        if metadata.get("runtime_handler") not in {"nl2sql_tool", "data.query_sql"}:
+        if metadata.get("runtime_handler") not in {"nl2sql_tool", "data.query_sql", "data.analyze_business"}:
             continue
 
         previous_question = ""
@@ -508,6 +515,14 @@ def append_agent_chat_user_message(
     current_session = _load_chat_session_or_404(db, current_user, session_id)
     route_result = intent_router.route_intent(body.content)
     resolved_intent = body.intent or route_result.intent
+    if (
+        not body.intent
+        and resolved_intent == intent_router.INTENT_BUSINESS_ANALYSIS
+        and current_session.get("agent_scope") == "risk"
+        and current_session.get("related_customer_id")
+    ):
+        # 中文注释：风险工作台里的“为什么风险升高”属于单客户风险对话，不抢到经营分析 Agent。
+        resolved_intent = intent_router.INTENT_RISK_ANALYSIS
     existing_messages = chat_session_service.list_chat_messages(
         db,
         tenant_id=current_user["tenant_id"],
@@ -515,7 +530,11 @@ def append_agent_chat_user_message(
         session_id=session_id,
         limit=20,
     )
-    data_query_context = _load_latest_data_query_context(existing_messages) if resolved_intent == intent_router.INTENT_DATA_QUERY else None
+    data_query_context = (
+        _load_latest_data_query_context(existing_messages)
+        if resolved_intent in {intent_router.INTENT_DATA_QUERY, intent_router.INTENT_BUSINESS_ANALYSIS}
+        else None
+    )
     message = chat_session_service.append_chat_message(
         db,
         tenant_id=current_user["tenant_id"],
@@ -573,6 +592,44 @@ def append_agent_chat_user_message(
             "handler": "data.query_sql",
             "reply": nl2sql_result["reply"],
             "nl2sql": nl2sql_result["nl2sql"],
+        }
+    elif resolved_intent == intent_router.INTENT_BUSINESS_ANALYSIS:
+        analyst_result = data_analyst_tool.run_data_analyst_tool(
+            db,
+            readonly_db,
+            current_user,
+            question=body.content,
+            session_id=(data_query_context or {}).get("nl2sql_session_id"),
+            context_payload=data_query_context,
+        )
+        query = analyst_result["analysis_result"].get("query") or {}
+        analysis = analyst_result["analysis_result"].get("analysis") or {}
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=analyst_result["reply"],
+            intent=resolved_intent,
+            tool_name="data.analyze_business",
+            metadata_json={
+                "runtime_handler": "data.analyze_business",
+                "query_id": analyst_result["query_id"],
+                "nl2sql_session_id": analyst_result["nl2sql_session_id"],
+                "is_cached": analyst_result["is_cached"],
+                "row_count": analyst_result["row_count"],
+                "error": analyst_result["error"],
+                "sql": query.get("sql"),
+                "analysis": analysis,
+                "followup_context": data_query_context or {},
+            },
+        )
+        runtime_result = {
+            "handled": True,
+            "handler": "data.analyze_business",
+            "reply": analyst_result["reply"],
+            "analysis": analyst_result["analysis_result"],
         }
     elif resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
         risk_result = _run_risk_agent_chat_reply(
