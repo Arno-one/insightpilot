@@ -62,6 +62,7 @@ def _build_customer_memory_summary_text(summary_json: dict[str, Any]) -> str:
     approval_state = summary_json.get("approval_state", {})
     task_state = summary_json.get("task_state", {})
     follow_up_state = summary_json.get("follow_up_state", {})
+    deal_state = summary_json.get("deal_state", {})
     report_state = summary_json.get("report_state", {})
     agent_state = summary_json.get("agent_state", {})
 
@@ -96,13 +97,54 @@ def _build_customer_memory_summary_text(summary_json: dict[str, Any]) -> str:
             f"时间 {follow_up_state.get('latest_follow_up_at', 'unknown')}。"
         )
 
+    if deal_state.get("latest_stage"):
+        parts.append(
+            f"最近商机阶段 {deal_state.get('latest_stage')}，"
+            f"报价金额 {deal_state.get('latest_quote_amount', 'unknown')}。"
+        )
+
     if report_state.get("latest_report_summary"):
         parts.append(f"最近经营报告摘要：{str(report_state['latest_report_summary'])[:120]}")
 
     if agent_state.get("latest_review_summary"):
         parts.append(f"最近一次 Agent 复核结论：{agent_state['latest_review_summary']}")
 
+    profile_tags = summary_json.get("profile_tags") or {}
+    if profile_tags:
+        tag_text = "，".join(str(value) for value in profile_tags.values() if value)
+        if tag_text:
+            parts.append(f"画像标签：{tag_text}。")
+
     return "\n".join(part for part in parts if part).strip()
+
+
+def _build_profile_tags(summary_json: dict[str, Any]) -> dict[str, str]:
+    """生成客户画像结构化标签，供画像 Agent 和对话直接读取。"""
+    profile = summary_json.get("profile", {})
+    risk_state = summary_json.get("risk_state", {})
+    follow_up_state = summary_json.get("follow_up_state", {})
+    task_state = summary_json.get("task_state", {})
+    deal_state = summary_json.get("deal_state", {})
+
+    risk_score = risk_state.get("latest_risk_score") or 0
+    risk_level = risk_state.get("latest_risk_level") or "unknown"
+    intent_level = profile.get("intent_level") or "unknown"
+    lifecycle_stage = profile.get("lifecycle_stage") or "unknown"
+    customer_level = profile.get("customer_level") or "unknown"
+    follow_up_count = int(follow_up_state.get("count") or 0)
+    active_task_count = int(task_state.get("active_count") or 0)
+
+    return {
+        "lifecycle_tag": f"阶段:{lifecycle_stage}",
+        "intent_tag": f"意向:{intent_level}",
+        "value_tag": f"客户等级:{customer_level}",
+        "risk_tag": f"风险:{risk_level}/{risk_score}",
+        "engagement_tag": "互动:活跃" if follow_up_count >= 3 else "互动:待激活",
+        "execution_tag": "执行:有未完成任务" if active_task_count else "执行:暂无未完成任务",
+        "competition_tag": "竞品:已介入" if profile.get("competitor_involved") else "竞品:未标记",
+        "deal_tag": f"商机:{deal_state.get('latest_stage') or 'unknown'}",
+        "quote_tag": "报价:已报价" if deal_state.get("latest_quote_amount") else "报价:未标记",
+    }
 
 
 def build_customer_memory_snapshot(
@@ -168,6 +210,20 @@ def build_customer_memory_snapshot(
         {"tenant_id": tenant_id, "customer_id": customer_id},
     ).mappings().all()
 
+    deal_rows = db.execute(
+        text(
+            """
+            SELECT deal_id, deal_name, stage, amount, quote_amount, quoted_at,
+                   expected_close_at, close_result, updated_at
+            FROM crm_deal
+            WHERE tenant_id = :tenant_id AND customer_id = :customer_id
+            ORDER BY updated_at DESC
+            LIMIT 5
+            """
+        ),
+        {"tenant_id": tenant_id, "customer_id": customer_id},
+    ).mappings().all()
+
     follow_up_rows = db.execute(
         text(
             """
@@ -198,6 +254,7 @@ def build_customer_memory_snapshot(
     latest_risk = dict(risk_rows[0]) if risk_rows else {}
     latest_approval = dict(approval_rows[0]) if approval_rows else {}
     latest_task = dict(task_rows[0]) if task_rows else {}
+    latest_deal = dict(deal_rows[0]) if deal_rows else {}
     latest_follow_up = dict(follow_up_rows[0]) if follow_up_rows else {}
     latest_report = dict(report_rows[0]) if report_rows else {}
 
@@ -247,6 +304,17 @@ def build_customer_memory_snapshot(
             "latest_task_result_note": latest_task.get("result_note"),
             "latest_due_at": _iso_datetime(latest_task.get("due_at")),
         },
+        "deal_state": {
+            "total_count": len(deal_rows),
+            "latest_deal_id": latest_deal.get("deal_id"),
+            "latest_deal_name": latest_deal.get("deal_name"),
+            "latest_stage": latest_deal.get("stage"),
+            "latest_amount": latest_deal.get("amount"),
+            "latest_quote_amount": latest_deal.get("quote_amount"),
+            "latest_quoted_at": _iso_datetime(latest_deal.get("quoted_at")),
+            "latest_expected_close_at": _iso_datetime(latest_deal.get("expected_close_at")),
+            "latest_close_result": latest_deal.get("close_result"),
+        },
         "follow_up_state": {
             "count": len(follow_up_rows),
             "latest_follow_up_id": latest_follow_up.get("follow_up_id"),
@@ -277,6 +345,7 @@ def build_customer_memory_snapshot(
             "latest_created_approval_id": runtime_context.get("created", {}).get("approval_id"),
         },
     }
+    summary_json["profile_tags"] = _build_profile_tags(summary_json)
 
     summary_text = _build_customer_memory_summary_text(summary_json)
     return {

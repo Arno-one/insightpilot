@@ -5,6 +5,7 @@ INTENT_RISK_ANALYSIS = "risk_analysis"
 INTENT_BUSINESS_ANALYSIS = "business_analysis"
 INTENT_MANAGER_DECISION = "manager_decision"
 INTENT_ACTION_EXECUTION = "action_execution"
+INTENT_CUSTOMER_PROFILE = "customer_profile"
 INTENT_CUSTOMER_QUERY = "customer_query"
 INTENT_REPORT_QUERY = "report_query"
 INTENT_DATA_QUERY = "data_query"
@@ -77,6 +78,16 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "发送邮件",
         "落地",
     ],
+    INTENT_CUSTOMER_PROFILE: [
+        "客户画像",
+        "画像",
+        "客户标签",
+        "标签",
+        "客户记忆",
+        "生成画像",
+        "更新画像",
+        "画像摘要",
+    ],
     INTENT_DATA_QUERY: [
         "多少",
         "几个",
@@ -128,6 +139,7 @@ INTENT_REASON_LABELS = {
     INTENT_BUSINESS_ANALYSIS: "命中经营分析相关表达",
     INTENT_MANAGER_DECISION: "命中经营决策相关表达",
     INTENT_ACTION_EXECUTION: "命中执行动作相关表达",
+    INTENT_CUSTOMER_PROFILE: "命中客户画像相关表达",
     INTENT_CUSTOMER_QUERY: "命中客户经营相关表达",
     INTENT_REPORT_QUERY: "命中经营报告相关表达",
     INTENT_DATA_QUERY: "命中数据查询相关表达",
@@ -161,6 +173,8 @@ def _score_intent(question: str, intent: str, keywords: list[str]) -> tuple[int,
     if intent == INTENT_ACTION_EXECUTION and any(
         keyword in matched for keyword in ["提交审批", "进入审批", "创建任务", "发通知", "安排日程", "发邮件", "执行"]
     ):
+        score += 5
+    if intent == INTENT_CUSTOMER_PROFILE and any(keyword in matched for keyword in ["客户画像", "画像", "客户标签", "生成画像"]):
         score += 5
     if intent == INTENT_RISK_ANALYSIS and any(keyword in matched for keyword in ["风险", "流失", "预警", "竞品"]):
         score += 3

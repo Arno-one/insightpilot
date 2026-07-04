@@ -1,3 +1,4 @@
+from app.modules.agent.platform.customer_profile_mcp_tools import build_customer_profile_mcp_tools
 from app.modules.agent.platform.data_mcp_tools import build_data_mcp_tools
 from app.modules.agent.platform.execution_mcp_tools import build_execution_mcp_tools
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
@@ -23,6 +24,7 @@ __all__ = [
     "InternalToolRegistry",
     "ToolDefinition",
     "ToolExecutionContext",
+    "build_customer_profile_mcp_tools",
     "build_data_mcp_tools",
     "build_execution_mcp_tools",
     "build_shared_internal_tools",

@@ -8,6 +8,7 @@ from app.core.database import get_db, get_readonly_db
 from app.modules.agent import (
     chat_session_service,
     conversation_memory_service,
+    customer_profile_tool,
     data_analyst_tool,
     execution_tool,
     intent_router,
@@ -729,6 +730,40 @@ def append_agent_chat_user_message(
                 "handler": "execution.propose_actions",
                 "reason": "当前会话没有可提交审批的上一轮建议动作",
             }
+    elif resolved_intent == intent_router.INTENT_CUSTOMER_PROFILE and current_session.get("related_customer_id"):
+        profile_result = customer_profile_tool.run_customer_profile_tool(
+            db,
+            current_user,
+            customer_id=current_session["related_customer_id"],
+        )
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=profile_result["reply"],
+            intent=resolved_intent,
+            tool_name="profile.generate_customer_memory",
+            metadata_json={
+                "runtime_handler": "profile.generate_customer_memory",
+                "customer_id": profile_result["customer_id"],
+                "profile_tags": profile_result["profile_tags"],
+                "summary_text": profile_result["summary_text"],
+            },
+        )
+        runtime_result = {
+            "handled": True,
+            "handler": "profile.generate_customer_memory",
+            "reply": profile_result["reply"],
+            "profile": profile_result["profile_result"],
+        }
+    elif resolved_intent == intent_router.INTENT_CUSTOMER_PROFILE:
+        runtime_result = {
+            "handled": False,
+            "handler": "profile.generate_customer_memory",
+            "reason": "客户画像生成需要会话先关联客户",
+        }
     elif resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
         risk_result = _run_risk_agent_chat_reply(
             db,
