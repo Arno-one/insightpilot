@@ -145,6 +145,22 @@
   text-decoration: underline;
 }
 
+.inlineDetailButton {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  color: #ffe7a1;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.inlineDetailButton:hover {
+  text-decoration: underline;
+}
+
 .traceLink,
 .runtimeTraceLink {
   display: inline-flex;
@@ -221,6 +237,90 @@
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.drawerBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(2, 8, 23, 0.58);
+}
+
+.recoveryDrawer {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  width: min(460px, 100%);
+  height: 100%;
+  padding: 22px;
+  border-left: 1px solid var(--line);
+  background: #07111f;
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.32);
+  overflow-y: auto;
+}
+
+.drawerHeader {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.drawerHeader h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+}
+
+.drawerGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.drawerGrid div,
+.drawerError,
+.drawerNote {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.drawerGrid span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.drawerGrid strong,
+.drawerError strong,
+.drawerNote strong {
+  color: var(--text);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.drawerError {
+  border-color: rgba(255, 104, 104, 0.32);
+  background: rgba(255, 104, 104, 0.08);
+}
+
+.drawerError p,
+.drawerNote p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.drawerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .recoveryPlan {

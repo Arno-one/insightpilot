@@ -135,6 +135,12 @@ type RecoveryEvent = {
   error?: string;
 };
 
+type RecoveryEventDetail = {
+  event: RecoveryEvent;
+  source: string;
+  content?: string;
+};
+
 type RecoveryEventSummary = {
   total: number;
   failedCount: number;
@@ -331,7 +337,15 @@ function MessageTraceLink({ item }: { item: AgentChatMessage }) {
   );
 }
 
-function RecoveryEventMessage({ item, event }: { item: AgentChatMessage; event: RecoveryEvent }) {
+function RecoveryEventMessage({
+  item,
+  event,
+  onOpenDetail,
+}: {
+  item: AgentChatMessage;
+  event: RecoveryEvent;
+  onOpenDetail: (detail: RecoveryEventDetail) => void;
+}) {
   const title = event.title || event.action || "恢复动作";
   return (
     <div className={styles.recoveryEventMessage}>
@@ -347,7 +361,78 @@ function RecoveryEventMessage({ item, event }: { item: AgentChatMessage; event: 
         {event.new_run_id ? (
           <Link href={`/agent-trace?runId=${encodeURIComponent(event.new_run_id)}`}>新 Trace {shortRunId(event.new_run_id)}</Link>
         ) : null}
+        <button
+          className={styles.inlineDetailButton}
+          type="button"
+          onClick={() => onOpenDetail({ event, source: "消息流恢复事件", content: item.content })}
+        >
+          详情
+        </button>
       </div>
+    </div>
+  );
+}
+
+function RecoveryEventDrawer({ detail, onClose }: { detail: RecoveryEventDetail | null; onClose: () => void }) {
+  if (!detail) {
+    return null;
+  }
+  const { event } = detail;
+  return (
+    <div className={styles.drawerBackdrop} role="presentation" onClick={onClose}>
+      <aside className={styles.recoveryDrawer} role="dialog" aria-modal="true" aria-label="恢复事件详情" onClick={(event) => event.stopPropagation()}>
+        <div className={styles.drawerHeader}>
+          <div>
+            <p className="eyebrow">{detail.source}</p>
+            <h2>{event.title || event.action || "恢复动作"}</h2>
+          </div>
+          <button className="ghost-button" type="button" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+        <div className={styles.drawerGrid}>
+          <div>
+            <span>状态</span>
+            <strong>{recoveryEventStatusLabel(event.status)}</strong>
+          </div>
+          <div>
+            <span>动作</span>
+            <strong>{event.action || "未记录"}</strong>
+          </div>
+          <div>
+            <span>源 Run</span>
+            <strong>{event.source_run_id || "未记录"}</strong>
+          </div>
+          <div>
+            <span>新 Run</span>
+            <strong>{event.new_run_id || "未生成"}</strong>
+          </div>
+        </div>
+        {event.error ? (
+          <div className={styles.drawerError}>
+            <strong>错误信息</strong>
+            <p>{event.error}</p>
+          </div>
+        ) : null}
+        {detail.content ? (
+          <div className={styles.drawerNote}>
+            <strong>事件内容</strong>
+            <p>{detail.content}</p>
+          </div>
+        ) : null}
+        <div className={styles.drawerActions}>
+          {event.source_run_id ? (
+            <Link className={styles.recoveryAction} href={`/agent-trace?runId=${encodeURIComponent(event.source_run_id)}`}>
+              查看原 Trace
+            </Link>
+          ) : null}
+          {event.new_run_id ? (
+            <Link className={styles.recoveryAction} href={`/agent-trace?runId=${encodeURIComponent(event.new_run_id)}`}>
+              查看新 Trace
+            </Link>
+          ) : null}
+        </div>
+      </aside>
     </div>
   );
 }
@@ -501,6 +586,7 @@ function AgentChatContent() {
   const [error, setError] = useState("");
   const [runtime, setRuntime] = useState<RuntimeResult | null>(null);
   const [recoveryAction, setRecoveryAction] = useState<RecoveryActionStatus | null>(null);
+  const [recoveryEventDetail, setRecoveryEventDetail] = useState<RecoveryEventDetail | null>(null);
   const [serverRecoveryEventSummary, setServerRecoveryEventSummary] = useState<RecoveryEventSummary | null>(null);
 
   const selectedCustomer = useMemo(
@@ -825,7 +911,14 @@ function AgentChatContent() {
                 messages.map((item, index) => {
                   const recoveryEvent = getRecoveryEvent(item);
                   if (recoveryEvent) {
-                    return <RecoveryEventMessage event={recoveryEvent} item={item} key={item.message_id} />;
+                    return (
+                      <RecoveryEventMessage
+                        event={recoveryEvent}
+                        item={item}
+                        key={item.message_id}
+                        onOpenDetail={setRecoveryEventDetail}
+                      />
+                    );
                   }
                   return (
                     <div
@@ -959,6 +1052,13 @@ function AgentChatContent() {
                           新 Trace {shortRunId(recoveryEventSummary.lastEvent.new_run_id)}
                         </Link>
                       ) : null}
+                      <button
+                        className={styles.inlineDetailButton}
+                        type="button"
+                        onClick={() => setRecoveryEventDetail({ event: recoveryEventSummary.lastEvent, source: "运行上下文恢复摘要" })}
+                      >
+                        详情
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -976,6 +1076,7 @@ function AgentChatContent() {
           </aside>
         </section>
       )}
+      <RecoveryEventDrawer detail={recoveryEventDetail} onClose={() => setRecoveryEventDetail(null)} />
     </AppShell>
   );
 }
