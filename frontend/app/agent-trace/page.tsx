@@ -175,6 +175,31 @@ type LlmUsageMetrics = {
   groups: LlmUsageGroup[];
 };
 
+type LatencyDistribution = {
+  sample_size: number;
+  avg_ms: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  max_ms: number;
+};
+
+type SlowOperation = {
+  operation_type: "agent_step" | "llm_call" | string;
+  ref_id: string;
+  run_id: string | null;
+  name: string;
+  status: string;
+  duration_ms: number;
+  created_at: string | null;
+};
+
+type LatencyMetrics = {
+  runtime: LatencyDistribution;
+  llm: LatencyDistribution;
+  slow_operations: SlowOperation[];
+};
+
 type RunDetail = {
   run: AgentRun & {
     input_json: unknown;
@@ -627,6 +652,11 @@ async function fetchLlmUsageMetrics() {
   return response.data;
 }
 
+async function fetchLatencyMetrics() {
+  const response = await apiFetch<LatencyMetrics>("/api/agent/latency-metrics/distribution?limit=1000");
+  return response.data;
+}
+
 export default function AgentTracePage() {
   const initialRunId = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("runId") || "";
   const [items, setItems] = useState<AgentRun[]>([]);
@@ -636,6 +666,7 @@ export default function AgentTracePage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [toolMetrics, setToolMetrics] = useState<ToolFailureMetrics | null>(null);
   const [llmMetrics, setLlmMetrics] = useState<LlmUsageMetrics | null>(null);
+  const [latencyMetrics, setLatencyMetrics] = useState<LatencyMetrics | null>(null);
   const [error, setError] = useState("");
   const [runFilter, setRunFilter] = useState<RunFilter>("all");
   const [retryingActionRunId, setRetryingActionRunId] = useState("");
@@ -653,15 +684,21 @@ export default function AgentTracePage() {
         setItems(data);
         setSelectedRunId((current) => current || initialRunId || data[0]?.run_id || "");
         try {
-          const [metrics, llmUsage] = await Promise.all([fetchToolFailureMetrics(), fetchLlmUsageMetrics()]);
+          const [metrics, llmUsage, latency] = await Promise.all([
+            fetchToolFailureMetrics(),
+            fetchLlmUsageMetrics(),
+            fetchLatencyMetrics(),
+          ]);
           if (!cancelled) {
             setToolMetrics(metrics);
             setLlmMetrics(llmUsage);
+            setLatencyMetrics(latency);
           }
         } catch {
           if (!cancelled) {
             setToolMetrics(null);
             setLlmMetrics(null);
+            setLatencyMetrics(null);
           }
         }
       } catch (exc) {
@@ -785,6 +822,14 @@ export default function AgentTracePage() {
       currency: llmMetrics?.currency || "USD",
     };
   }, [llmMetrics]);
+
+  const latencyOverview = useMemo(() => {
+    return {
+      runtime: latencyMetrics?.runtime || { sample_size: 0, avg_ms: 0, p50_ms: 0, p95_ms: 0, p99_ms: 0, max_ms: 0 },
+      llm: latencyMetrics?.llm || { sample_size: 0, avg_ms: 0, p50_ms: 0, p95_ms: 0, p99_ms: 0, max_ms: 0 },
+      slowOperations: latencyMetrics?.slow_operations || [],
+    };
+  }, [latencyMetrics]);
 
   const approvalSummary = useMemo(() => {
     if (!detail) {
@@ -983,6 +1028,61 @@ export default function AgentTracePage() {
                     </div>
                     <p className={`panel-copy ${styles.wrapText}`}>
                       预估成本 {item.estimated_cost.toFixed(6)} {llmMetricsOverview.currency}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="metric-grid">
+            <article className="metric-card">
+              <strong className="metric-value">{formatDuration(latencyOverview.runtime.p50_ms)}</strong>
+              <span className="metric-label">Runtime P50</span>
+              <p className="metric-detail">样本 {latencyOverview.runtime.sample_size} 条，平均 {formatDuration(latencyOverview.runtime.avg_ms)}。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">{formatDuration(latencyOverview.runtime.p95_ms)}</strong>
+              <span className="metric-label">Runtime P95</span>
+              <p className="metric-detail">用于识别大多数慢 Step 的真实边界。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">{formatDuration(latencyOverview.llm.p95_ms)}</strong>
+              <span className="metric-label">LLM P95</span>
+              <p className="metric-detail">样本 {latencyOverview.llm.sample_size} 条，最大 {formatDuration(latencyOverview.llm.max_ms)}。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">{formatDuration(latencyOverview.runtime.p99_ms)}</strong>
+              <span className="metric-label">Runtime P99</span>
+              <p className="metric-detail">用于排查极端慢调用和偶发阻塞。</p>
+            </article>
+          </section>
+
+          {latencyOverview.slowOperations.length ? (
+            <section className="command-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Latency Distribution</p>
+                  <h2>慢操作 TopN</h2>
+                </div>
+                <span className="meta-chip">P99 {formatDuration(latencyOverview.runtime.p99_ms)}</span>
+              </div>
+              <div className={styles.toolMetricGrid}>
+                {latencyOverview.slowOperations.map((item) => (
+                  <article className={styles.toolMetricCard} key={`${item.operation_type}-${item.ref_id}`}>
+                    <div className={styles.toolMetricHeader}>
+                      <strong className={styles.wrapText}>{item.name}</strong>
+                      <span className={`pill ${item.status === "failed" ? "tone-danger" : "tone-info"}`}>
+                        {formatDuration(item.duration_ms)}
+                      </span>
+                    </div>
+                    <div className="meta-row">
+                      <span className="meta-chip">{item.operation_type === "llm_call" ? "LLM" : "Step"}</span>
+                      <span className="meta-chip">{item.status}</span>
+                      {item.run_id ? <span className="meta-chip">Run {item.run_id}</span> : null}
+                    </div>
+                    <p className={`panel-copy ${styles.wrapText}`}>
+                      {item.ref_id} · {formatDateTime(item.created_at)}
                     </p>
                   </article>
                 ))}

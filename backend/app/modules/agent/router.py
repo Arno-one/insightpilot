@@ -1,4 +1,5 @@
 import json
+import math
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import bindparam, text
@@ -496,6 +497,100 @@ def _build_llm_usage_metrics(db: Session, tenant_id: str, limit: int = 1000) -> 
         "currency": rows[0]["currency"] if rows else "USD",
         "latest_failed_call": latest_failed_call,
         "groups": groups,
+    }
+
+
+def _percentile_ms(values: list[int], percentile: float) -> float:
+    """中文注释：使用线性插值计算百分位，样本少时也能得到稳定可解释的结果。"""
+    if not values:
+        return 0
+    sorted_values = sorted(values)
+    position = (len(sorted_values) - 1) * percentile
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return float(sorted_values[lower_index])
+    lower_value = sorted_values[lower_index]
+    upper_value = sorted_values[upper_index]
+    return round(lower_value + (upper_value - lower_value) * (position - lower_index), 2)
+
+
+def _latency_distribution(values: list[int]) -> dict:
+    """中文注释：统一输出耗时分布字段，前端可以直接渲染 Runtime / LLM 两类指标。"""
+    clean_values = [int(value or 0) for value in values if int(value or 0) >= 0]
+    return {
+        "sample_size": len(clean_values),
+        "avg_ms": round(sum(clean_values) / len(clean_values), 2) if clean_values else 0,
+        "p50_ms": _percentile_ms(clean_values, 0.5),
+        "p95_ms": _percentile_ms(clean_values, 0.95),
+        "p99_ms": _percentile_ms(clean_values, 0.99),
+        "max_ms": max(clean_values) if clean_values else 0,
+    }
+
+
+def _build_latency_distribution_metrics(db: Session, tenant_id: str, limit: int = 1000) -> dict:
+    """中文注释：聚合 Runtime Step 与 LLM 调用耗时分布，用于定位慢节点。"""
+    safe_limit = max(1, min(int(limit or 1000), 5000))
+    step_rows = db.execute(
+        text(
+            """
+            SELECT step_id, run_id, node_name, tool_name, status, duration_ms, created_at
+            FROM agent_step
+            WHERE tenant_id = :tenant_id
+              AND duration_ms IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {"tenant_id": tenant_id, "limit": safe_limit},
+    ).mappings().all()
+    llm_rows = db.execute(
+        text(
+            """
+            SELECT call_id, source, model, status, latency_ms, created_at
+            FROM llm_call_log
+            WHERE tenant_id = :tenant_id
+              AND latency_ms IS NOT NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {"tenant_id": tenant_id, "limit": safe_limit},
+    ).mappings().all()
+
+    step_values = [int(row["duration_ms"] or 0) for row in step_rows]
+    llm_values = [int(row["latency_ms"] or 0) for row in llm_rows]
+    slow_operations: list[dict] = []
+    for row in step_rows:
+        slow_operations.append(
+            {
+                "operation_type": "agent_step",
+                "ref_id": row["step_id"],
+                "run_id": row["run_id"],
+                "name": row["tool_name"] or row["node_name"],
+                "status": row["status"],
+                "duration_ms": int(row["duration_ms"] or 0),
+                "created_at": row["created_at"],
+            }
+        )
+    for row in llm_rows:
+        slow_operations.append(
+            {
+                "operation_type": "llm_call",
+                "ref_id": row["call_id"],
+                "run_id": None,
+                "name": f"{row['source']} / {row['model']}",
+                "status": row["status"],
+                "duration_ms": int(row["latency_ms"] or 0),
+                "created_at": row["created_at"],
+            }
+        )
+    slow_operations.sort(key=lambda item: item["duration_ms"], reverse=True)
+
+    return {
+        "runtime": _latency_distribution(step_values),
+        "llm": _latency_distribution(llm_values),
+        "slow_operations": slow_operations[:10],
     }
 
 
@@ -1039,6 +1134,17 @@ def get_agent_llm_usage_metrics(
     """查询 LLM token、模型、耗时和预估成本，供 Observability 指标卡使用。"""
     metrics = _build_llm_usage_metrics(db, current_user["tenant_id"], limit=limit)
     return success(metrics, "查询成功", total=metrics["call_count"])
+
+
+@router.get("/latency-metrics/distribution")
+def get_agent_latency_distribution_metrics(
+    limit: int = 1000,
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    """查询 Runtime Step 与 LLM 调用耗时分布，供慢节点定位使用。"""
+    metrics = _build_latency_distribution_metrics(db, current_user["tenant_id"], limit=limit)
+    return success(metrics, "查询成功", total=len(metrics["slow_operations"]))
 
 
 @router.get("/runs/{run_id}")
