@@ -387,6 +387,30 @@ def validate_agent_tool_policy(
     }
 
 
+def publish_agent_definition(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str,
+) -> dict[str, Any]:
+    validation = validate_agent_tool_policy(db, current_user, definition_id=definition_id)
+    if not validation["valid"]:
+        return {
+            "published": False,
+            "definition": validation["definition"],
+            "validation": validation,
+            "message": "Agent Definition 未通过发布门禁",
+        }
+
+    published = update_agent_definition_status(db, current_user, definition_id=definition_id, status="active")
+    return {
+        "published": True,
+        "definition": published,
+        "validation": validation,
+        "message": "Agent Definition 已发布",
+    }
+
+
 def list_agent_definitions(
     db: Session,
     current_user: dict[str, Any],
