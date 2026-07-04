@@ -239,6 +239,13 @@ def _normalize_string_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _build_tool_manifest(tool_policy: dict[str, Any], current_user: dict[str, Any]) -> dict[str, Any]:
     tool_specs = list_agent_chat_tool_specs(current_user)
     specs_by_name = {item["name"]: item for item in tool_specs}
@@ -307,7 +314,7 @@ def build_agent_manifest(
         "memory_manifest": {
             "enabled": bool(memory_policy),
             "context_packet": bool(memory_policy.get("context_packet")),
-            "max_chars": int(memory_policy.get("max_chars") or 0),
+            "max_chars": _safe_int(memory_policy.get("max_chars")),
             "policy": memory_policy,
         },
         "governance": {
@@ -452,6 +459,79 @@ def validate_agent_runtime_config(
     }
 
 
+def validate_agent_memory_policy(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str | None = None,
+    agent_code: str | None = None,
+) -> dict[str, Any]:
+    manifest = build_agent_manifest(db, current_user, definition_id=definition_id, agent_code=agent_code)
+    memory_manifest = manifest["memory_manifest"]
+    policy = memory_manifest["policy"]
+    context_packet = policy.get("context_packet")
+    max_chars_value = policy.get("max_chars")
+    max_chars = _safe_int(max_chars_value)
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    if not policy:
+        warnings.append(
+            {
+                "code": "memory_policy_empty",
+                "message": "当前 Agent 未配置记忆策略，将按默认无上下文包策略运行",
+            }
+        )
+
+    if context_packet is not None and not isinstance(context_packet, bool):
+        errors.append(
+            {
+                "code": "memory_context_packet_invalid",
+                "message": "context_packet 必须是布尔值",
+            }
+        )
+
+    if context_packet is True and max_chars <= 0:
+        errors.append(
+            {
+                "code": "memory_max_chars_missing",
+                "message": "启用 context_packet 时必须配置 max_chars",
+            }
+        )
+    elif max_chars_value is not None and not isinstance(max_chars_value, int):
+        errors.append(
+            {
+                "code": "memory_max_chars_invalid",
+                "message": "max_chars 必须是整数",
+            }
+        )
+    elif max_chars and (max_chars < 500 or max_chars > 12000):
+        errors.append(
+            {
+                "code": "memory_max_chars_out_of_range",
+                "max_chars": max_chars,
+                "message": "max_chars 必须在 500 到 12000 之间",
+            }
+        )
+
+    # 中文注释：Memory Policy 校验防止上下文包过大或配置类型错误，避免运行时上下文失控。
+    return {
+        "validation_version": "agent_memory_policy_validation_v1",
+        "valid": not errors,
+        "definition": manifest["definition"],
+        "summary": {
+            "enabled": memory_manifest["enabled"],
+            "context_packet": memory_manifest["context_packet"],
+            "max_chars": memory_manifest["max_chars"],
+            "warning_count": len(warnings),
+            "error_count": len(errors),
+        },
+        "errors": errors,
+        "warnings": warnings,
+        "memory_manifest": memory_manifest,
+    }
+
+
 def validate_agent_publish_readiness(
     db: Session,
     current_user: dict[str, Any],
@@ -460,8 +540,9 @@ def validate_agent_publish_readiness(
 ) -> dict[str, Any]:
     tool_validation = validate_agent_tool_policy(db, current_user, definition_id=definition_id)
     runtime_validation = validate_agent_runtime_config(db, current_user, definition_id=definition_id)
-    errors = [*tool_validation["errors"], *runtime_validation["errors"]]
-    warnings = [*tool_validation["warnings"], *runtime_validation["warnings"]]
+    memory_validation = validate_agent_memory_policy(db, current_user, definition_id=definition_id)
+    errors = [*tool_validation["errors"], *runtime_validation["errors"], *memory_validation["errors"]]
+    warnings = [*tool_validation["warnings"], *runtime_validation["warnings"], *memory_validation["warnings"]]
     return {
         "validation_version": "agent_publish_readiness_v1",
         "valid": not errors,
@@ -469,6 +550,7 @@ def validate_agent_publish_readiness(
         "summary": {
             "tool_error_count": tool_validation["summary"]["error_count"],
             "runtime_error_count": runtime_validation["summary"]["error_count"],
+            "memory_error_count": memory_validation["summary"]["error_count"],
             "warning_count": len(warnings),
             "error_count": len(errors),
         },
@@ -477,6 +559,7 @@ def validate_agent_publish_readiness(
         "checks": {
             "tool_policy": tool_validation,
             "runtime_config": runtime_validation,
+            "memory_policy": memory_validation,
         },
     }
 
