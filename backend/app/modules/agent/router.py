@@ -11,6 +11,7 @@ from app.modules.agent import (
     customer_profile_tool,
     data_analyst_tool,
     execution_tool,
+    followup_strategy_tool,
     intent_router,
     manager_tool,
     memory_service,
@@ -211,6 +212,13 @@ def _load_latest_recommended_actions(messages: list[dict]) -> list[dict]:
                 return actions
             opportunity = metadata.get("opportunity") or {}
             actions = opportunity.get("recommended_actions")
+            return actions if isinstance(actions, list) else []
+        if metadata.get("runtime_handler") == "followup.plan_strategy":
+            actions = metadata.get("recommended_actions")
+            if isinstance(actions, list):
+                return actions
+            strategy = metadata.get("strategy") or {}
+            actions = strategy.get("recommended_actions")
             return actions if isinstance(actions, list) else []
     return []
 
@@ -791,6 +799,44 @@ def append_agent_chat_user_message(
             "handler": "opportunity.scan",
             "reply": opportunity_result["reply"],
             "opportunity": opportunity_result["opportunity_result"],
+        }
+    elif resolved_intent == intent_router.INTENT_FOLLOW_UP_STRATEGY and current_session.get("related_customer_id"):
+        strategy_result = followup_strategy_tool.run_followup_strategy_tool(
+            db,
+            current_user,
+            customer_id=current_session["related_customer_id"],
+            question=body.content,
+        )
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=strategy_result["reply"],
+            intent=resolved_intent,
+            tool_name="followup.plan_strategy",
+            metadata_json={
+                "runtime_handler": "followup.plan_strategy",
+                "customer_id": strategy_result["customer_id"],
+                "strategy_level": strategy_result["strategy_level"],
+                "recommended_action_count": strategy_result["recommended_action_count"],
+                "recommended_actions": strategy_result["recommended_actions"],
+                "strategy": strategy_result["strategy_result"],
+                "error": strategy_result["error"],
+            },
+        )
+        runtime_result = {
+            "handled": True,
+            "handler": "followup.plan_strategy",
+            "reply": strategy_result["reply"],
+            "strategy": strategy_result["strategy_result"],
+        }
+    elif resolved_intent == intent_router.INTENT_FOLLOW_UP_STRATEGY:
+        runtime_result = {
+            "handled": False,
+            "handler": "followup.plan_strategy",
+            "reason": "跟进策略生成需要会话先关联客户",
         }
     elif resolved_intent == intent_router.INTENT_CUSTOMER_PROFILE and current_session.get("related_customer_id"):
         profile_result = customer_profile_tool.run_customer_profile_tool(

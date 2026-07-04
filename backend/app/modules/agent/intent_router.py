@@ -7,6 +7,7 @@ INTENT_MANAGER_DECISION = "manager_decision"
 INTENT_ACTION_EXECUTION = "action_execution"
 INTENT_CUSTOMER_PROFILE = "customer_profile"
 INTENT_OPPORTUNITY_ANALYSIS = "opportunity_analysis"
+INTENT_FOLLOW_UP_STRATEGY = "follow_up_strategy"
 INTENT_CUSTOMER_QUERY = "customer_query"
 INTENT_REPORT_QUERY = "report_query"
 INTENT_DATA_QUERY = "data_query"
@@ -103,6 +104,19 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
         "开放商机",
         "重点商机",
     ],
+    INTENT_FOLLOW_UP_STRATEGY: [
+        "跟进策略",
+        "跟进计划",
+        "回访策略",
+        "触达策略",
+        "沟通策略",
+        "跟进话术",
+        "回访话术",
+        "怎么跟进",
+        "如何跟进",
+        "下一次跟进",
+        "客户跟进",
+    ],
     INTENT_DATA_QUERY: [
         "多少",
         "几个",
@@ -156,6 +170,7 @@ INTENT_REASON_LABELS = {
     INTENT_ACTION_EXECUTION: "命中执行动作相关表达",
     INTENT_CUSTOMER_PROFILE: "命中客户画像相关表达",
     INTENT_OPPORTUNITY_ANALYSIS: "命中商机分析相关表达",
+    INTENT_FOLLOW_UP_STRATEGY: "命中跟进策略相关表达",
     INTENT_CUSTOMER_QUERY: "命中客户经营相关表达",
     INTENT_REPORT_QUERY: "命中经营报告相关表达",
     INTENT_DATA_QUERY: "命中数据查询相关表达",
@@ -196,6 +211,10 @@ def _score_intent(question: str, intent: str, keywords: list[str]) -> tuple[int,
         keyword in matched for keyword in ["商机分析", "报价超时", "成交概率", "热度变化", "跟进建议", "重点商机"]
     ):
         score += 5
+    if intent == INTENT_FOLLOW_UP_STRATEGY and any(
+        keyword in matched for keyword in ["跟进策略", "跟进计划", "回访策略", "触达策略", "跟进话术", "怎么跟进", "如何跟进"]
+    ):
+        score += 6
     if intent == INTENT_RISK_ANALYSIS and any(keyword in matched for keyword in ["风险", "流失", "预警", "竞品"]):
         score += 3
     if intent == INTENT_REPORT_QUERY and any(keyword in matched for keyword in ["报告", "日报", "周报", "月报", "经营简报"]):

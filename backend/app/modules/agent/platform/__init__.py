@@ -1,6 +1,7 @@
 from app.modules.agent.platform.customer_profile_mcp_tools import build_customer_profile_mcp_tools
 from app.modules.agent.platform.data_mcp_tools import build_data_mcp_tools
 from app.modules.agent.platform.execution_mcp_tools import build_execution_mcp_tools
+from app.modules.agent.platform.followup_strategy_mcp_tools import build_followup_strategy_mcp_tools
 from app.modules.agent.platform.internal_tools import build_shared_internal_tools
 from app.modules.agent.platform.mail_mcp_tools import build_mail_mcp_tools
 from app.modules.agent.platform.manager_mcp_tools import build_manager_mcp_tools
@@ -28,6 +29,7 @@ __all__ = [
     "build_customer_profile_mcp_tools",
     "build_data_mcp_tools",
     "build_execution_mcp_tools",
+    "build_followup_strategy_mcp_tools",
     "build_shared_internal_tools",
     "build_mail_mcp_tools",
     "build_manager_mcp_tools",
