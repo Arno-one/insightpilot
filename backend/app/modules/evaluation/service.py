@@ -215,3 +215,125 @@ def list_cases(
         params,
     ).mappings().all()
     return [_row_to_case(row) for row in rows]
+
+
+def _row_to_nl2sql_result(row) -> dict:
+    item = dict(row)
+    item["metadata_json"] = _loads(item.get("metadata_json")) or {}
+    return item
+
+
+def create_nl2sql_evaluation_result(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    case_id: str,
+    query_id: str | None,
+    generated_sql: str | None,
+    status: str,
+    row_count: int,
+    error_message: str | None = None,
+    elapsed_ms: int = 0,
+    metadata_json: dict | None = None,
+) -> dict:
+    case = get_case(db, tenant_id=tenant_id, case_id=case_id)
+    if case["target_type"] != "nl2sql":
+        raise ValueError("评测样本不是 NL2SQL 类型")
+    result_id = new_id("evalres")
+    db.execute(
+        text(
+            """
+            INSERT INTO nl2sql_evaluation_result (
+              tenant_id, result_id, dataset_id, case_id, query_id, generated_sql,
+              status, row_count, error_message, elapsed_ms, metadata_json, created_by_user_id
+            )
+            VALUES (
+              :tenant_id, :result_id, :dataset_id, :case_id, :query_id, :generated_sql,
+              :status, :row_count, :error_message, :elapsed_ms, :metadata_json, :created_by_user_id
+            )
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "result_id": result_id,
+            "dataset_id": case["dataset_id"],
+            "case_id": case_id,
+            "query_id": query_id,
+            "generated_sql": generated_sql,
+            "status": status,
+            "row_count": row_count,
+            "error_message": error_message,
+            "elapsed_ms": elapsed_ms,
+            "metadata_json": _dumps(metadata_json),
+            "created_by_user_id": user_id,
+        },
+    )
+    db.commit()
+    return get_nl2sql_evaluation_result(db, tenant_id=tenant_id, result_id=result_id)
+
+
+def get_nl2sql_evaluation_result(db: Session, *, tenant_id: str, result_id: str) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT result_id, tenant_id, dataset_id, case_id, query_id, generated_sql,
+                   status, row_count, error_message, elapsed_ms, metadata_json,
+                   created_by_user_id, created_at
+            FROM nl2sql_evaluation_result
+            WHERE tenant_id = :tenant_id AND result_id = :result_id
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "result_id": result_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError("NL2SQL 评测结果不存在")
+    return _row_to_nl2sql_result(row)
+
+
+def summarize_nl2sql_evaluation(db: Session, *, tenant_id: str, dataset_id: str | None = None) -> dict:
+    filters = ["tenant_id = :tenant_id"]
+    params = {"tenant_id": tenant_id, "dataset_id": dataset_id}
+    if dataset_id:
+        filters.append("dataset_id = :dataset_id")
+    row = db.execute(
+        text(
+            f"""
+            SELECT COUNT(*) AS total_count,
+                   SUM(CASE WHEN status = 'executed' THEN 1 ELSE 0 END) AS success_count,
+                   SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                   COALESCE(SUM(row_count), 0) AS total_row_count,
+                   COALESCE(AVG(elapsed_ms), 0) AS avg_elapsed_ms
+            FROM nl2sql_evaluation_result
+            WHERE {' AND '.join(filters)}
+            """
+        ),
+        params,
+    ).mappings().first()
+    latest_errors = db.execute(
+        text(
+            f"""
+            SELECT result_id, case_id, error_message, created_at
+            FROM nl2sql_evaluation_result
+            WHERE {' AND '.join(filters)}
+              AND status = 'failed'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 5
+            """
+        ),
+        params,
+    ).mappings().all()
+    total_count = int(row["total_count"] or 0)
+    success_count = int(row["success_count"] or 0)
+    failed_count = int(row["failed_count"] or 0)
+    return {
+        "dataset_id": dataset_id,
+        "total_count": total_count,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "success_rate": round(success_count / total_count, 4) if total_count else 0,
+        "total_row_count": int(row["total_row_count"] or 0),
+        "avg_elapsed_ms": round(float(row["avg_elapsed_ms"] or 0), 2),
+        "latest_errors": [dict(item) for item in latest_errors],
+    }

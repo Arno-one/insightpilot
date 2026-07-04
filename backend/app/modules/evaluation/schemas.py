@@ -22,3 +22,14 @@ class EvaluationCaseCreateRequest(BaseModel):
     target_name: str = Field(..., min_length=1, max_length=120)
     tags: list[str] = Field(default_factory=list, max_length=20)
     metadata_json: dict | None = None
+
+
+class NL2SQLEvaluationResultCreateRequest(BaseModel):
+    case_id: str = Field(..., min_length=1, max_length=64)
+    query_id: str | None = Field(None, max_length=64)
+    generated_sql: str | None = Field(None, max_length=12000)
+    status: Literal["executed", "failed"]
+    row_count: int = Field(0, ge=0)
+    error_message: str | None = Field(None, max_length=4000)
+    elapsed_ms: int = Field(0, ge=0)
+    metadata_json: dict | None = None
