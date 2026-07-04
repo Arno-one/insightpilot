@@ -41,6 +41,7 @@ type AgentChatMessage = {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   intent: string | null;
+  tool_name: string | null;
   metadata_json: Record<string, unknown>;
   created_at: string;
 };
@@ -68,6 +69,15 @@ type SendMessageResult = {
     matched_keywords: string[];
   };
   runtime: RuntimeResult;
+};
+
+type NL2SQLMessageMeta = {
+  sql: string;
+  queryId: string;
+  sessionId: string;
+  rowCount: number;
+  isCached: boolean;
+  error: string;
 };
 
 function intentLabel(intent: string | null | undefined) {
@@ -100,6 +110,74 @@ function sessionTitle(session: AgentChatSession, customers: CustomerOption[]) {
   }
   const customer = customers.find((item) => item.customer_id === session.related_customer_id);
   return customer?.customer_name || "统一 Agent 对话";
+}
+
+function getStringMeta(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === "string" ? value : "";
+}
+
+function getNumberMeta(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === "number" ? value : 0;
+}
+
+function getBooleanMeta(metadata: Record<string, unknown>, key: string) {
+  return metadata[key] === true;
+}
+
+function getNL2SQLMeta(item: AgentChatMessage): NL2SQLMessageMeta | null {
+  const metadata = item.metadata_json || {};
+  if (metadata.runtime_handler !== "nl2sql_tool") {
+    return null;
+  }
+  return {
+    sql: getStringMeta(metadata, "sql"),
+    queryId: getStringMeta(metadata, "query_id"),
+    sessionId: getStringMeta(metadata, "nl2sql_session_id"),
+    rowCount: getNumberMeta(metadata, "row_count"),
+    isCached: getBooleanMeta(metadata, "is_cached"),
+    error: getStringMeta(metadata, "error"),
+  };
+}
+
+function MessageBody({ item }: { item: AgentChatMessage }) {
+  const nl2sqlMeta = getNL2SQLMeta(item);
+  if (!nl2sqlMeta) {
+    return <p>{item.content}</p>;
+  }
+
+  const [summary, ...previewLines] = item.content.split("\n");
+  return (
+    <div className={styles.nl2sqlArtifact}>
+      <div className={styles.artifactHeader}>
+        <div>
+          <strong>NL2SQL 查询结果</strong>
+          <span>{summary || "数据查询已完成"}</span>
+        </div>
+        <div className={styles.artifactStats}>
+          <span>{nl2sqlMeta.rowCount} 行</span>
+          <span>{nl2sqlMeta.isCached ? "缓存命中" : "实时查询"}</span>
+        </div>
+      </div>
+
+      {nl2sqlMeta.error ? <p className={styles.artifactError}>{nl2sqlMeta.error}</p> : null}
+
+      {nl2sqlMeta.sql ? (
+        <details className={styles.sqlDetails}>
+          <summary>查看 SQL</summary>
+          <pre>{nl2sqlMeta.sql}</pre>
+        </details>
+      ) : null}
+
+      {previewLines.length ? <pre className={styles.resultPreview}>{previewLines.join("\n")}</pre> : null}
+
+      <div className={styles.artifactFooter}>
+        {nl2sqlMeta.queryId ? <span>Query {nl2sqlMeta.queryId}</span> : null}
+        {nl2sqlMeta.sessionId ? <span>Session {nl2sqlMeta.sessionId}</span> : null}
+      </div>
+    </div>
+  );
 }
 
 function AgentChatContent() {
@@ -249,7 +327,7 @@ function AgentChatContent() {
         <div>
           <p className="eyebrow">Unified Agent Runtime</p>
           <h1>统一 Agent 对话</h1>
-          <p className="lead">从一个入口发起客户、风险、报告和数据问题；当前版本已接入 Risk Agent，后续会继续挂入 Data Query。</p>
+          <p className="lead">从一个入口发起客户、风险、报告和数据问题；当前版本已接入 Risk Agent 和 NL2SQL 数据查询。</p>
         </div>
         <div className="page-actions">
           <button className="button-secondary" type="button" onClick={createSession} disabled={sending}>
@@ -334,13 +412,13 @@ function AgentChatContent() {
                       <span className="meta-chip">{intentLabel(item.intent)}</span>
                       <span className="meta-chip">{formatDateTime(item.created_at)}</span>
                     </div>
-                    <p>{item.content}</p>
+                    <MessageBody item={item} />
                   </div>
                 ))
               ) : (
                 <div className={`${styles.message} ${styles.messageEmpty}`}>
                   <strong>还没有消息</strong>
-                  <p>选择一个客户后直接问“这个客户为什么风险高”，统一入口会路由到 Risk Agent。</p>
+                  <p>可以问“这个客户为什么风险高”，也可以直接问“本月高风险客户有多少”。</p>
                 </div>
               )}
             </div>
@@ -348,7 +426,7 @@ function AgentChatContent() {
             <div className={styles.composer}>
               <textarea
                 className="input-like textarea-like"
-                placeholder="例如：这个客户为什么风险这么高？下一步应该怎么跟进？"
+                placeholder="例如：这个客户为什么风险这么高？本月高风险客户有多少？"
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 rows={4}
@@ -393,7 +471,7 @@ function AgentChatContent() {
               </div>
               <div className="summary-item">
                 <strong>能力边界</strong>
-                <p>当前版本已接 Risk Agent。数据查询、报告解释和执行 Agent 会在后续版本挂入同一入口。</p>
+                <p>当前版本已接 Risk Agent 和 NL2SQL 数据查询。报告解释和执行 Agent 会在后续版本挂入同一入口。</p>
               </div>
               {selectedCustomer ? (
                 <Link className="button-secondary" href={`/customers/${selectedCustomer.customer_id}`}>

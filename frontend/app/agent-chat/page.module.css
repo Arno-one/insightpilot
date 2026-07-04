@@ -78,6 +78,102 @@
   line-height: 1.8;
 }
 
+.nl2sqlArtifact {
+  display: grid;
+  gap: 12px;
+  min-width: min(560px, 100%);
+}
+
+.artifactHeader {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.artifactHeader div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.artifactHeader strong {
+  color: var(--text);
+}
+
+.artifactHeader span,
+.artifactFooter {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.artifactStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.artifactStats span {
+  padding: 4px 8px;
+  border: 1px solid rgba(75, 211, 138, 0.28);
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(75, 211, 138, 0.08);
+  white-space: nowrap;
+}
+
+.artifactError {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 108, 108, 0.28);
+  border-radius: 8px;
+  color: #ffb8b8 !important;
+  background: rgba(255, 108, 108, 0.08);
+}
+
+.sqlDetails {
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.sqlDetails summary {
+  padding: 10px 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.sqlDetails pre,
+.resultPreview {
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.sqlDetails pre {
+  padding: 12px;
+  border-top: 1px solid rgba(151, 184, 210, 0.14);
+  color: #c6f3ff;
+}
+
+.resultPreview {
+  padding: 12px;
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.artifactFooter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .messageUser {
   justify-self: end;
   border-color: rgba(57, 208, 255, 0.28);
