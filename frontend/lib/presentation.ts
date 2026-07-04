@@ -18,6 +18,7 @@ const STATUS_META: Record<string, Meta> = {
   failed: { label: "失败", tone: "danger" },
   success: { label: "成功", tone: "success" },
   running: { label: "运行中", tone: "info" },
+  skipped: { label: "已跳过", tone: "neutral" },
   cancelled: { label: "已取消", tone: "neutral" }
 };
 
