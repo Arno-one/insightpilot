@@ -8,6 +8,7 @@ from app.modules.system.schemas import UpdateRolePermissionsRequest, UpdateUserR
 from app.shared.audit_policy import summarize_audit_policy
 from app.shared.backup_recovery import summarize_backup_recovery
 from app.shared.deployment_readiness import summarize_deployment_readiness
+from app.shared.enterprise_hardening import summarize_enterprise_hardening
 from app.shared.event_bus import event_bus
 from app.shared.response import success
 
@@ -293,6 +294,15 @@ def get_backup_recovery(
     _ = current_user
     plan = summarize_backup_recovery()
     return success(plan, "查询成功", total=plan["domain_count"])
+
+
+@router.get("/enterprise-hardening")
+def get_enterprise_hardening(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+):
+    """中文注释：企业级硬化阶段总览，聚合部署、审计、队列、事件、备份恢复等只读状态。"""
+    report = summarize_enterprise_hardening(tenant_id=current_user["tenant_id"])
+    return success(report, "查询成功", total=report["control_count"])
 
 
 @router.get("/access-control")
