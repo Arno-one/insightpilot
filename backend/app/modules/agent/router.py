@@ -336,6 +336,84 @@ def _build_agent_run_timeline(
     return sorted(items, key=lambda item: str(item.get("occurred_at") or ""))
 
 
+def _build_tool_failure_metrics(db: Session, tenant_id: str, limit: int = 1000) -> dict:
+    """中文注释：基于 agent_step 聚合工具稳定性，V1 先按最近 N 条 Step 做轻量统计。"""
+    safe_limit = max(1, min(int(limit or 1000), 5000))
+    rows = db.execute(
+        text(
+            """
+            SELECT step_id, run_id, node_name, tool_name, status, error_message,
+                   duration_ms, started_at, finished_at, created_at
+            FROM agent_step
+            WHERE tenant_id = :tenant_id
+              AND tool_name IS NOT NULL
+              AND tool_name <> ''
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {"tenant_id": tenant_id, "limit": safe_limit},
+    ).mappings().all()
+
+    metrics_by_tool: dict[str, dict] = {}
+    for row in rows:
+        tool_name = row["tool_name"]
+        item = metrics_by_tool.setdefault(
+            tool_name,
+            {
+                "tool_name": tool_name,
+                "total_count": 0,
+                "success_count": 0,
+                "failed_count": 0,
+                "skipped_count": 0,
+                "running_count": 0,
+                "avg_duration_ms": 0,
+                "_duration_sum": 0,
+                "_duration_count": 0,
+                "latest_failed_step": None,
+            },
+        )
+        item["total_count"] += 1
+        status = row["status"]
+        if status == "success":
+            item["success_count"] += 1
+        elif status == "failed":
+            item["failed_count"] += 1
+            if item["latest_failed_step"] is None:
+                item["latest_failed_step"] = {
+                    "step_id": row["step_id"],
+                    "run_id": row["run_id"],
+                    "node_name": row["node_name"],
+                    "error_message": row["error_message"],
+                    "created_at": row["created_at"],
+                }
+        elif status == "skipped":
+            item["skipped_count"] += 1
+        elif status == "running":
+            item["running_count"] += 1
+
+        duration_ms = int(row["duration_ms"] or 0)
+        item["_duration_sum"] += duration_ms
+        item["_duration_count"] += 1
+
+    tools: list[dict] = []
+    for item in metrics_by_tool.values():
+        duration_count = item.pop("_duration_count")
+        duration_sum = item.pop("_duration_sum")
+        finished_count = item["success_count"] + item["failed_count"] + item["skipped_count"]
+        item["avg_duration_ms"] = round(duration_sum / duration_count, 2) if duration_count else 0
+        item["failure_rate"] = round(item["failed_count"] / finished_count, 4) if finished_count else 0
+        tools.append(item)
+
+    tools.sort(key=lambda item: (item["failed_count"], item["failure_rate"], item["total_count"]), reverse=True)
+    return {
+        "sample_size": len(rows),
+        "tool_count": len(tools),
+        "total_failed_count": sum(item["failed_count"] for item in tools),
+        "tools": tools,
+    }
+
+
 def _collect_action_approval_ids(run_output: object) -> list[str]:
     """中文注释：优先从 Agent Run 输出里提取审批单，减少详情页回查数据库的次数。"""
     if not isinstance(run_output, dict):
@@ -854,6 +932,17 @@ def list_agent_runs(
         {"tenant_id": current_user["tenant_id"]},
     ).mappings().all()
     return success(list(rows), "查询成功", total=len(rows))
+
+
+@router.get("/tool-metrics/failures")
+def get_agent_tool_failure_metrics(
+    limit: int = 1000,
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    """查询工具失败率、成功数和平均耗时，供 Observability 指标卡使用。"""
+    metrics = _build_tool_failure_metrics(db, current_user["tenant_id"], limit=limit)
+    return success(metrics, "查询成功", total=metrics["tool_count"])
 
 
 @router.get("/runs/{run_id}")

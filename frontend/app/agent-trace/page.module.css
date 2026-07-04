@@ -293,6 +293,51 @@
   overflow-wrap: anywhere;
 }
 
+.toolMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.toolMetricCard {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.toolMetricHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolMetricHeader h3 {
+  margin: 0;
+  min-width: 0;
+  font-size: 1rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.toolMetricHeader + p,
+.toolMetricCard p {
+  margin: 0;
+  color: rgba(15, 23, 42, 0.68);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.toolMetricCard .traceStatValue {
+  font-size: clamp(22px, 1.8vw, 32px);
+}
+
 @media (max-width: 900px) {
   .traceToolbar {
     gap: 12px;
@@ -308,5 +353,9 @@
 
   .timelineBody {
     padding: 12px;
+  }
+
+  .toolMetricGrid {
+    grid-template-columns: 1fr;
   }
 }

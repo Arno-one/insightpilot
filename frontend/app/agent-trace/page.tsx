@@ -121,6 +121,31 @@ type TimelineItem = {
   metadata: Record<string, unknown>;
 };
 
+type ToolFailureMetric = {
+  tool_name: string;
+  total_count: number;
+  success_count: number;
+  failed_count: number;
+  skipped_count: number;
+  running_count: number;
+  avg_duration_ms: number;
+  failure_rate: number;
+  latest_failed_step: {
+    step_id: string;
+    run_id: string;
+    node_name: string;
+    error_message: string | null;
+    created_at: string | null;
+  } | null;
+};
+
+type ToolFailureMetrics = {
+  sample_size: number;
+  tool_count: number;
+  total_failed_count: number;
+  tools: ToolFailureMetric[];
+};
+
 type RunDetail = {
   run: AgentRun & {
     input_json: unknown;
@@ -563,6 +588,11 @@ async function fetchAgentRunDetail(runId: string) {
   return response.data;
 }
 
+async function fetchToolFailureMetrics() {
+  const response = await apiFetch<ToolFailureMetrics>("/api/agent/tool-metrics/failures?limit=1000");
+  return response.data;
+}
+
 export default function AgentTracePage() {
   const initialRunId = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("runId") || "";
   const [items, setItems] = useState<AgentRun[]>([]);
@@ -570,6 +600,7 @@ export default function AgentTracePage() {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [toolMetrics, setToolMetrics] = useState<ToolFailureMetrics | null>(null);
   const [error, setError] = useState("");
   const [runFilter, setRunFilter] = useState<RunFilter>("all");
   const [retryingActionRunId, setRetryingActionRunId] = useState("");
@@ -586,6 +617,16 @@ export default function AgentTracePage() {
         }
         setItems(data);
         setSelectedRunId((current) => current || initialRunId || data[0]?.run_id || "");
+        try {
+          const metrics = await fetchToolFailureMetrics();
+          if (!cancelled) {
+            setToolMetrics(metrics);
+          }
+        } catch {
+          if (!cancelled) {
+            setToolMetrics(null);
+          }
+        }
       } catch (exc) {
         if (!cancelled) {
           setError(exc instanceof Error ? exc.message : "Agent 执行记录加载失败。");
@@ -677,6 +718,27 @@ export default function AgentTracePage() {
     };
   }, [detail]);
 
+  const toolMetricsOverview = useMemo(() => {
+    const tools = toolMetrics?.tools || [];
+    const failedTools = tools.filter((item) => item.failed_count > 0);
+    const totalFinished = tools.reduce(
+      (sum, item) => sum + item.success_count + item.failed_count + item.skipped_count,
+      0
+    );
+    const totalFailures = tools.reduce((sum, item) => sum + item.failed_count, 0);
+    const avgDuration = tools.length
+      ? Math.round(tools.reduce((sum, item) => sum + item.avg_duration_ms, 0) / tools.length)
+      : 0;
+    return {
+      failedToolCount: failedTools.length,
+      totalFailures,
+      overallFailureRate: totalFinished ? totalFailures / totalFinished : 0,
+      avgDuration,
+      riskiestTool: tools[0] || null,
+      topFailedTools: failedTools.slice(0, 5),
+    };
+  }, [toolMetrics]);
+
   const approvalSummary = useMemo(() => {
     if (!detail) {
       return null;
@@ -763,6 +825,67 @@ export default function AgentTracePage() {
               <p className="metric-detail">帮助快速判断系统响应是否健康。</p>
             </article>
           </section>
+
+          <section className="metric-grid">
+            <article className="metric-card">
+              <strong className="metric-value">{toolMetrics?.tool_count || 0}</strong>
+              <span className="metric-label">纳入统计工具</span>
+              <p className="metric-detail">基于最近 {toolMetrics?.sample_size || 0} 条 Agent Step 聚合。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">{toolMetricsOverview.failedToolCount}</strong>
+              <span className="metric-label">出现失败工具</span>
+              <p className="metric-detail">有失败记录的工具越多，越需要优先治理工具稳定性。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">{(toolMetricsOverview.overallFailureRate * 100).toFixed(1)}%</strong>
+              <span className="metric-label">工具失败率</span>
+              <p className="metric-detail">按成功、失败和跳过三类完成态计算。</p>
+            </article>
+            <article className="metric-card">
+              <strong className={`metric-value ${styles.wrapText}`}>
+                {toolMetricsOverview.riskiestTool?.tool_name || "暂无"}
+              </strong>
+              <span className="metric-label">最高风险工具</span>
+              <p className="metric-detail">平均耗时 {formatDuration(toolMetricsOverview.avgDuration)}</p>
+            </article>
+          </section>
+
+          {toolMetricsOverview.topFailedTools.length ? (
+            <section className="command-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Tool Failure Metrics</p>
+                  <h2>最近失败工具 TopN</h2>
+                </div>
+                <span className="meta-chip">失败 {toolMetricsOverview.totalFailures} 次</span>
+              </div>
+              <div className={styles.toolMetricGrid}>
+                {toolMetricsOverview.topFailedTools.map((item) => (
+                  <article className={styles.toolMetricCard} key={item.tool_name}>
+                    <div className={styles.toolMetricHeader}>
+                      <strong className={styles.wrapText}>{item.tool_name}</strong>
+                      <span className={`pill ${item.failure_rate > 0.2 ? "tone-danger" : "tone-warning"}`}>
+                        {(item.failure_rate * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="meta-row">
+                      <span className="meta-chip">成功 {item.success_count}</span>
+                      <span className="meta-chip">失败 {item.failed_count}</span>
+                      <span className="meta-chip">跳过 {item.skipped_count}</span>
+                      <span className="meta-chip">均耗 {formatDuration(item.avg_duration_ms)}</span>
+                    </div>
+                    {item.latest_failed_step ? (
+                      <p className={`panel-copy ${styles.wrapText}`}>
+                        最近失败：{item.latest_failed_step.error_message || "未记录错误"} ·{" "}
+                        {formatDateTime(item.latest_failed_step.created_at)}
+                      </p>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section className="trace-layout">
             <div className="run-list">
