@@ -861,3 +861,56 @@ def summarize_agent_evaluation(
         "failure_reason_distribution": [dict(item) for item in failure_reasons],
         "latest_failures": [dict(item) for item in latest_failures],
     }
+
+
+def summarize_evaluation_overview(db: Session, *, tenant_id: str) -> dict:
+    nl2sql = summarize_nl2sql_evaluation(db, tenant_id=tenant_id)
+    rag = summarize_rag_evaluation(db, tenant_id=tenant_id)
+    tool = summarize_tool_evaluation(db, tenant_id=tenant_id)
+    agent = summarize_agent_evaluation(db, tenant_id=tenant_id)
+    domains = [
+        {
+            "target_type": "nl2sql",
+            "total_count": nl2sql["total_count"],
+            "primary_metric_name": "success_rate",
+            "primary_metric_value": nl2sql["success_rate"],
+            "risk_count": nl2sql["failed_count"],
+        },
+        {
+            "target_type": "rag",
+            "total_count": rag["total_count"],
+            "primary_metric_name": "recall_at_k",
+            "primary_metric_value": rag["recall_at_k"],
+            "risk_count": len(rag["latest_misses"]),
+        },
+        {
+            "target_type": "tool",
+            "total_count": tool["total_count"],
+            "primary_metric_name": "success_rate",
+            "primary_metric_value": tool["success_rate"],
+            "risk_count": tool["failed_count"],
+        },
+        {
+            "target_type": "agent",
+            "total_count": agent["total_count"],
+            "primary_metric_name": "completion_rate",
+            "primary_metric_value": agent["completion_rate"],
+            "risk_count": agent["failed_count"] + agent["partial_count"] + agent["cancelled_count"],
+        },
+    ]
+    total_evaluation_count = sum(item["total_count"] for item in domains)
+    active_domain_count = sum(1 for item in domains if item["total_count"] > 0)
+    return {
+        "stage": "observability_evaluation_v1",
+        "stage_versions": ["VNext-37", "VNext-38", "VNext-39", "VNext-40", "VNext-41", "VNext-42", "VNext-43", "VNext-44", "VNext-45", "VNext-46"],
+        "total_evaluation_count": total_evaluation_count,
+        "active_domain_count": active_domain_count,
+        "domain_count": len(domains),
+        "domains": domains,
+        "summaries": {
+            "nl2sql": nl2sql,
+            "rag": rag,
+            "tool": tool,
+            "agent": agent,
+        },
+    }

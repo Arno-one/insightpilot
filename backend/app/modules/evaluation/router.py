@@ -17,6 +17,15 @@ from app.shared.response import success
 router = APIRouter()
 
 
+@router.get("/overview")
+def get_evaluation_overview(
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    overview = service.summarize_evaluation_overview(db, tenant_id=current_user["tenant_id"])
+    return success(overview, "查询成功", total=overview["total_evaluation_count"])
+
+
 @router.get("/datasets")
 def list_evaluation_datasets(
     target_type: str | None = None,
