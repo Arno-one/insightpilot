@@ -3,7 +3,11 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.agent_studio import service
-from app.modules.agent_studio.schemas import AgentDefinitionCreateRequest
+from app.modules.agent_studio.schemas import (
+    AgentDefinitionCloneRequest,
+    AgentDefinitionCreateRequest,
+    AgentDefinitionStatusRequest,
+)
 from app.modules.auth.dependencies import require_permission
 from app.shared.response import success
 
@@ -45,6 +49,19 @@ def create_agent_definition(
     return success(item, "Agent Definition 已创建")
 
 
+@router.get("/definitions/by-code/{agent_code}/latest-active")
+def get_latest_active_agent_definition(
+    agent_code: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.get_latest_active_agent_definition(db, current_user, agent_code=agent_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "查询成功")
+
+
 @router.get("/definitions/{definition_id}")
 def get_agent_definition(
     definition_id: str,
@@ -56,3 +73,42 @@ def get_agent_definition(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return success(item, "查询成功")
+
+
+@router.post("/definitions/{definition_id}/clone")
+def clone_agent_definition(
+    definition_id: str,
+    body: AgentDefinitionCloneRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.clone_agent_definition(
+            db,
+            current_user,
+            definition_id=definition_id,
+            version=body.version,
+            status=body.status,
+            agent_name=body.agent_name,
+            description=body.description,
+            config_json=body.config_json,
+            tool_policy_json=body.tool_policy_json,
+            memory_policy_json=body.memory_policy_json,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "Agent Definition 已复制")
+
+
+@router.post("/definitions/{definition_id}/status")
+def update_agent_definition_status(
+    definition_id: str,
+    body: AgentDefinitionStatusRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.update_agent_definition_status(db, current_user, definition_id=definition_id, status=body.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "Agent Definition 状态已更新")

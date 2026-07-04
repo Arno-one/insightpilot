@@ -14,3 +14,17 @@ class AgentDefinitionCreateRequest(BaseModel):
     config_json: dict | None = None
     tool_policy_json: dict | None = None
     memory_policy_json: dict | None = None
+
+
+class AgentDefinitionCloneRequest(BaseModel):
+    version: int | None = Field(None, ge=1, le=9999)
+    status: Literal["draft", "active", "disabled"] = "draft"
+    agent_name: str | None = Field(None, min_length=1, max_length=120)
+    description: str | None = Field(None, max_length=1000)
+    config_json: dict | None = None
+    tool_policy_json: dict | None = None
+    memory_policy_json: dict | None = None
+
+
+class AgentDefinitionStatusRequest(BaseModel):
+    status: Literal["draft", "active", "disabled"]
