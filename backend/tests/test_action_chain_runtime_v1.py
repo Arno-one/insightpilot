@@ -314,6 +314,9 @@ def test_action_chain_runtime_supports_failed_step_resume(monkeypatch):
         detail_body = detail_response.json()["data"]
         assert detail_body["status"] == "failed"
         assert detail_body["current_step_code"] == "create_calendar_event"
+        assert detail_body["recovery_plan"]["retry_mode"] == "resume_from_failed_step"
+        assert detail_body["recovery_plan"]["failed_step_code"] == "create_calendar_event"
+        assert detail_body["recovery_plan"]["compensation_items"][0]["strategy"] == "reuse_success_output"
         assert len(detail_body["tool_executions"]) == 3
         assert detail_body["tool_executions"][-1]["status"] == "failed"
         assert "calendar provider temporarily unavailable" in detail_body["tool_executions"][-1]["error_message"]
@@ -322,6 +325,7 @@ def test_action_chain_runtime_supports_failed_step_resume(monkeypatch):
         assert retry_response.status_code == 200
         retry_body = retry_response.json()["data"]
         assert retry_body["status"] == "success"
+        assert retry_body["recovery_plan"] is None
         assert retry_body["calendar_event"]["event_id"]
         assert retry_body["tool_executions"][-1]["status"] == "success"
 

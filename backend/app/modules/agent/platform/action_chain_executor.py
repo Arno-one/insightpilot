@@ -373,6 +373,7 @@ def _build_action_run_result(db: Session, *, tenant_id: str, action_run_id: str)
         )
         for item in steps
     ]
+    recovery_plan = _build_recovery_plan(run_row, steps)
     return {
         "action_run_id": run_row["action_run_id"],
         "chain_code": run_row["chain_code"],
@@ -387,9 +388,45 @@ def _build_action_run_result(db: Session, *, tenant_id: str, action_run_id: str)
         "calendar_event": runtime_payload.get("calendar_event"),
         "tool_executions": tool_executions,
         "steps": steps,
+        "recovery_plan": recovery_plan,
         "created_at": run_row.get("created_at"),
         "finished_at": run_row.get("finished_at"),
         "can_retry": run_row["status"] == ACTION_RUN_STATUS_FAILED,
+    }
+
+
+def _build_recovery_plan(run_row: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """为失败动作链生成局部恢复计划，避免人工重试时看不清哪些步骤会复用、哪些要补偿。"""
+    if run_row.get("status") != ACTION_RUN_STATUS_FAILED:
+        return None
+
+    failed_step = next((item for item in steps if item.get("status") == ACTION_STEP_STATUS_FAILED), None)
+    successful_steps = [item for item in steps if item.get("status") == ACTION_STEP_STATUS_SUCCESS]
+    compensation_items = [
+        {
+            "step_code": item.get("step_code"),
+            "tool_name": item.get("tool_name"),
+            "strategy": "reuse_success_output",
+            "reason": "该步骤已成功，重试时不重复执行，直接复用上下文中的执行结果。",
+        }
+        for item in successful_steps
+    ]
+    if failed_step:
+        compensation_items.append(
+            {
+                "step_code": failed_step.get("step_code"),
+                "tool_name": failed_step.get("tool_name"),
+                "strategy": "retry_from_failed_step",
+                "reason": "从失败步骤继续执行，保留前序已成功结果。",
+            }
+        )
+
+    return {
+        "failed_step_code": failed_step.get("step_code") if failed_step else run_row.get("current_step_code"),
+        "failed_tool_name": failed_step.get("tool_name") if failed_step else None,
+        "can_retry": True,
+        "retry_mode": "resume_from_failed_step",
+        "compensation_items": compensation_items,
     }
 
 
@@ -650,6 +687,11 @@ def list_failed_post_approval_action_runs(
         context_payload = _loads_json(item.get("context_payload_json"))
         item["task_id"] = (context_payload.get("task") or {}).get("task_id")
         item["can_retry"] = True
+        item["recovery_plan"] = {
+            "failed_step_code": item.get("current_step_code"),
+            "can_retry": True,
+            "retry_mode": "resume_from_failed_step",
+        }
         item.pop("context_payload_json", None)
         items.append(item)
     return items
