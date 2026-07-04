@@ -201,6 +201,25 @@ def list_agent_publish_audits(
     return success(rows, "查询成功", total=len(rows))
 
 
+@router.get("/definitions/{base_definition_id}/diff/{target_definition_id}")
+def diff_agent_definitions(
+    base_definition_id: str,
+    target_definition_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.diff_agent_definitions(
+            db,
+            current_user,
+            base_definition_id=base_definition_id,
+            target_definition_id=target_definition_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "Agent Definition 差异对比完成")
+
+
 @router.post("/definitions/{definition_id}/clone")
 def clone_agent_definition(
     definition_id: str,

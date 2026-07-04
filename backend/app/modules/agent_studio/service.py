@@ -658,6 +658,86 @@ def rollback_agent_definition(
     }
 
 
+def _append_diff(changes: list[dict[str, Any]], path: str, before: Any, after: Any) -> None:
+    if before == after:
+        return
+    changes.append(
+        {
+            "path": path,
+            "before": before,
+            "after": after,
+        }
+    )
+
+
+def _diff_dict(before: dict[str, Any], after: dict[str, Any], *, prefix: str) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for key in sorted(set(before.keys()) | set(after.keys())):
+        before_value = before.get(key)
+        after_value = after.get(key)
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(before_value, dict) and isinstance(after_value, dict):
+            changes.extend(_diff_dict(before_value, after_value, prefix=path))
+            continue
+        _append_diff(changes, path, before_value, after_value)
+    return changes
+
+
+def diff_agent_definitions(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    base_definition_id: str,
+    target_definition_id: str,
+) -> dict[str, Any]:
+    base = get_agent_definition(db, current_user, definition_id=base_definition_id)
+    target = get_agent_definition(db, current_user, definition_id=target_definition_id)
+    metadata_fields = ["agent_code", "agent_name", "description", "agent_type", "runtime_type", "status", "version"]
+    metadata_changes: list[dict[str, Any]] = []
+    for field in metadata_fields:
+        _append_diff(metadata_changes, f"definition.{field}", base.get(field), target.get(field))
+
+    config_changes = _diff_dict(base["config_json"], target["config_json"], prefix="config_json")
+    tool_policy_changes = _diff_dict(base["tool_policy_json"], target["tool_policy_json"], prefix="tool_policy_json")
+    memory_policy_changes = _diff_dict(
+        base["memory_policy_json"],
+        target["memory_policy_json"],
+        prefix="memory_policy_json",
+    )
+    changes = [*metadata_changes, *config_changes, *tool_policy_changes, *memory_policy_changes]
+    # 中文注释：Diff 只做结构化只读对比，不修改定义，供发布评审和回滚前确认使用。
+    return {
+        "diff_version": "agent_definition_diff_v1",
+        "base_definition": {
+            "definition_id": base["definition_id"],
+            "agent_code": base["agent_code"],
+            "version": base["version"],
+            "status": base["status"],
+        },
+        "target_definition": {
+            "definition_id": target["definition_id"],
+            "agent_code": target["agent_code"],
+            "version": target["version"],
+            "status": target["status"],
+        },
+        "summary": {
+            "changed": bool(changes),
+            "changed_count": len(changes),
+            "metadata_change_count": len(metadata_changes),
+            "config_change_count": len(config_changes),
+            "tool_policy_change_count": len(tool_policy_changes),
+            "memory_policy_change_count": len(memory_policy_changes),
+        },
+        "changed_paths": [item["path"] for item in changes],
+        "changes": {
+            "metadata": metadata_changes,
+            "config_json": config_changes,
+            "tool_policy_json": tool_policy_changes,
+            "memory_policy_json": memory_policy_changes,
+        },
+    }
+
+
 def create_agent_publish_audit(
     db: Session,
     current_user: dict[str, Any],
