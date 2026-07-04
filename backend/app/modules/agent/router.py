@@ -160,6 +160,36 @@ def _load_agent_run_plans(db: Session, tenant_id: str, run_id: str) -> list[dict
     return plans
 
 
+def _load_agent_run_recovery_links(db: Session, tenant_id: str, run_id: str) -> list[dict]:
+    """查询当前 Run 参与过的恢复链路，既支持源 Run，也支持恢复后新 Run。"""
+    rows = db.execute(
+        text(
+            """
+            SELECT message_id, session_id, run_id, content, metadata_json, created_at
+            FROM agent_chat_message
+            WHERE tenant_id = :tenant_id
+              AND tool_name = 'agent_chat.recovery_event'
+              AND (
+                run_id = :run_id
+                OR JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.recovery_event.source_run_id')) = :run_id
+                OR JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.recovery_event.new_run_id')) = :run_id
+              )
+            ORDER BY created_at DESC, id DESC
+            LIMIT 20
+            """
+        ),
+        {"tenant_id": tenant_id, "run_id": run_id},
+    ).mappings().all()
+    links: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        metadata = _loads_json(item.get("metadata_json"))
+        item["metadata_json"] = metadata
+        item["recovery_event"] = metadata.get("recovery_event") if isinstance(metadata, dict) else {}
+        links.append(item)
+    return links
+
+
 def _collect_action_approval_ids(run_output: object) -> list[str]:
     """中文注释：优先从 Agent Run 输出里提取审批单，减少详情页回查数据库的次数。"""
     if not isinstance(run_output, dict):
@@ -780,6 +810,7 @@ def get_agent_run_detail(
         [approval_id for approval_id in dict.fromkeys(approval_ids) if approval_id],
     )
     plans = _load_agent_run_plans(db, current_user["tenant_id"], run_id)
+    recovery_links = _load_agent_run_recovery_links(db, current_user["tenant_id"], run_id)
 
     return success(
         {
@@ -788,6 +819,7 @@ def get_agent_run_detail(
             "steps": steps,
             "rag_traces": rag_traces,
             "action_runs": action_runs,
+            "recovery_links": recovery_links,
         },
         "查询成功",
         total=len(steps),
@@ -1361,14 +1393,18 @@ def record_agent_chat_recovery_event(
     return success(message, "恢复动作事件已记录")
 
 
-@router.post("/runs/{run_id}/steps/{step_id}/retry")
-def retry_agent_run_step(
+def _recover_agent_run_step(
+    *,
     run_id: str,
     step_id: str,
-    current_user: dict = Depends(require_permission("crm:customer:read:self")),
-    db: Session = Depends(get_db),
+    current_user: dict,
+    db: Session,
+    recovery_action: str,
+    recovery_title: str,
+    response_key: str,
+    event_source: str,
 ):
-    """重试失败的统一对话内部工具步骤；V1 只允许无外发副作用的策略类工具。"""
+    """执行失败步骤恢复；V1 复用安全工具白名单，禁止外发或审批动作自动恢复。"""
     step_row = db.execute(
         text(
             """
@@ -1393,13 +1429,13 @@ def retry_agent_run_step(
         },
     ).mappings().first()
     if not step_row:
-        raise HTTPException(status_code=404, detail="可重试步骤不存在或无权访问")
+        raise HTTPException(status_code=404, detail="可恢复步骤不存在或无权访问")
     if step_row["status"] != "failed" or step_row["node_name"] != "agent_chat_tool":
-        raise HTTPException(status_code=400, detail="仅支持重试失败的统一对话工具步骤")
+        raise HTTPException(status_code=400, detail="仅支持恢复失败的统一对话工具步骤")
 
     handler = step_row["tool_name"]
     if handler != "followup.plan_strategy":
-        raise HTTPException(status_code=400, detail="该工具暂未开放内部重试，外发或高风险动作不会自动重试")
+        raise HTTPException(status_code=400, detail="该工具暂未开放内部恢复，外发或高风险动作不会自动执行")
 
     input_payload = _loads_json(step_row["input_json"])
     session_id = input_payload.get("session_id")
@@ -1438,6 +1474,8 @@ def retry_agent_run_step(
                 "runtime_handler": "followup.plan_strategy",
                 "retry_source_run_id": run_id,
                 "retry_source_step_id": step_id,
+                "resume_source_run_id": run_id,
+                "resume_from_step": step_id,
                 "strategy_level": retry_result["strategy_level"],
                 "recommended_action_count": retry_result["recommended_action_count"],
                 "recommended_actions": retry_result["recommended_actions"],
@@ -1458,6 +1496,7 @@ def retry_agent_run_step(
                 "handler": "followup.plan_strategy",
                 "reply": retry_result["reply"],
                 "retry": {"source_run_id": run_id, "source_step_id": step_id},
+                "resume": {"source_run_id": run_id, "resume_from_step": step_id},
                 "strategy": retry_result["strategy_result"],
             },
         )
@@ -1482,6 +1521,8 @@ def retry_agent_run_step(
                 "runtime_error": recovery_error,
                 "retry_source_run_id": run_id,
                 "retry_source_step_id": step_id,
+                "resume_source_run_id": run_id,
+                "resume_from_step": step_id,
                 "recovery_plan": recovery_plan,
             },
         )
@@ -1499,11 +1540,12 @@ def retry_agent_run_step(
         )
 
     event_payload = {
-        "action": "step_retry",
-        "title": "重试失败步骤",
+        "action": recovery_action,
+        "title": recovery_title,
         "status": recovery_status,
         "source_run_id": run_id,
         "new_run_id": trace_result["run_id"],
+        "resume_from_step": step_id,
         "error": recovery_error,
     }
     recovery_event = chat_session_service.append_chat_message(
@@ -1512,26 +1554,66 @@ def retry_agent_run_step(
         user_id=current_user["user_id"],
         session_id=session_id,
         role="system",
-        content=f"恢复动作事件：重试失败步骤（{recovery_status}）",
+        content=f"恢复动作事件：{recovery_title}（{recovery_status}）",
         intent="recovery_event",
         tool_name="agent_chat.recovery_event",
         run_id=trace_result["run_id"],
         metadata_json={
             "runtime_handler": "agent_chat.recovery_event",
             "recovery_event": event_payload,
-            "source": "agent_step_retry",
+            "source": event_source,
             "source_step_id": step_id,
             "new_step_id": trace_result["step_id"],
         },
     )
     return success(
         {
-            "retry": event_payload,
+            response_key: event_payload,
             "trace": trace_result,
             "assistant_message": assistant_message,
             "recovery_event": recovery_event,
         },
-        "步骤重试已完成",
+        f"{recovery_title}已完成",
+    )
+
+
+@router.post("/runs/{run_id}/steps/{step_id}/retry")
+def retry_agent_run_step(
+    run_id: str,
+    step_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """重试失败的统一对话内部工具步骤；V1 只允许无外发副作用的策略类工具。"""
+    return _recover_agent_run_step(
+        run_id=run_id,
+        step_id=step_id,
+        current_user=current_user,
+        db=db,
+        recovery_action="step_retry",
+        recovery_title="重试失败步骤",
+        response_key="retry",
+        event_source="agent_step_retry",
+    )
+
+
+@router.post("/runs/{run_id}/steps/{step_id}/resume")
+def resume_agent_run_from_step(
+    run_id: str,
+    step_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """从指定失败步骤局部恢复，生成新的 Run 并保留源 Run / Step 关联。"""
+    return _recover_agent_run_step(
+        run_id=run_id,
+        step_id=step_id,
+        current_user=current_user,
+        db=db,
+        recovery_action="partial_resume",
+        recovery_title="从失败步骤继续",
+        response_key="resume",
+        event_source="agent_partial_resume",
     )
 
 

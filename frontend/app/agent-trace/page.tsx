@@ -90,6 +90,26 @@ type ActionRun = {
   steps: ActionRunStep[];
 };
 
+type RecoveryEvent = {
+  action?: string;
+  title?: string;
+  status?: string;
+  source_run_id?: string | null;
+  new_run_id?: string | null;
+  resume_from_step?: string | null;
+  error?: string | null;
+};
+
+type RecoveryLink = {
+  message_id: string;
+  session_id: string;
+  run_id: string | null;
+  content: string;
+  metadata_json: Record<string, unknown>;
+  recovery_event: RecoveryEvent;
+  created_at: string | null;
+};
+
 type RunDetail = {
   run: AgentRun & {
     input_json: unknown;
@@ -99,6 +119,7 @@ type RunDetail = {
   steps: AgentStep[];
   rag_traces: RagTrace[];
   action_runs: ActionRun[];
+  recovery_links: RecoveryLink[];
 };
 
 type ApprovalSummary = {
@@ -226,6 +247,15 @@ function getStepMeta(nodeName: string): StepMeta {
 
 function getActionStepLabel(stepCode: string) {
   return ACTION_STEP_LABELS[stepCode] || stepCode;
+}
+
+function getRecoveryActionLabel(action: string | null | undefined) {
+  const labels: Record<string, string> = {
+    step_retry: "步骤重试",
+    partial_resume: "局部恢复",
+    retry: "整轮重试",
+  };
+  return labels[action || ""] || action || "恢复动作";
 }
 
 function getApprovalSummaryFromRunOutput(output: unknown): ApprovalSummary | null {
@@ -816,6 +846,46 @@ export default function AgentTracePage() {
                     ) : null}
 
                     {detail.run.error_message ? <p className={`danger-text ${styles.errorMessage}`}>{detail.run.error_message}</p> : null}
+
+                    {detail.recovery_links.length ? (
+                      <div className={styles.recoveryLinkStack}>
+                        {detail.recovery_links.map((link) => {
+                          const event = link.recovery_event || {};
+                          const statusMeta = getStatusMeta(event.status || "running");
+                          const isCurrentNewRun = event.new_run_id === detail.run.run_id;
+                          const relatedRunId = isCurrentNewRun ? event.source_run_id : event.new_run_id;
+
+                          return (
+                            <article className={styles.recoveryLinkCard} key={link.message_id}>
+                              <div className={styles.recoveryLinkHeader}>
+                                <div>
+                                  <p className="eyebrow">Recovery Link</p>
+                                  <h3>{getRecoveryActionLabel(event.action)}</h3>
+                                </div>
+                                <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
+                              </div>
+                              <div className="meta-row">
+                                <span className="meta-chip">{isCurrentNewRun ? "当前 Run 为恢复结果" : "当前 Run 为恢复来源"}</span>
+                                <span className="meta-chip">源 Run {event.source_run_id || "无"}</span>
+                                <span className="meta-chip">新 Run {event.new_run_id || "无"}</span>
+                                <span className="meta-chip">恢复起点 {event.resume_from_step || "未指定"}</span>
+                                <span className="meta-chip">记录于 {formatDateTime(link.created_at)}</span>
+                              </div>
+                              {relatedRunId ? (
+                                <button
+                                  className="button-secondary"
+                                  onClick={() => setSelectedRunId(relatedRunId)}
+                                  type="button"
+                                >
+                                  查看关联 Run
+                                </button>
+                              ) : null}
+                              {event.error ? <p className={`danger-text ${styles.errorMessage}`}>{event.error}</p> : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : null}
 
                     <details>
                       <summary>查看 Run 输入与输出</summary>

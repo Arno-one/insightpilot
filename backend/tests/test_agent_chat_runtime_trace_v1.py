@@ -212,6 +212,7 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
     session_ids: list[str] = []
     run_id: str | None = None
     retry_run_id: str | None = None
+    resume_run_id: str | None = None
 
     def raise_followup_error(*args, **kwargs):
         raise RuntimeError("策略工具模拟失败")
@@ -313,8 +314,37 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         assert retry_detail["run"]["status"] == "success"
         assert len(retry_detail["steps"]) == 2
         assert retry_detail["steps"][1]["tool_name"] == "followup.plan_strategy"
+
+        resume_response = client.post(f"/api/agent/runs/{run_id}/steps/{failed_step_id}/resume", headers=headers)
+        assert resume_response.status_code == 200
+        resume_data = resume_response.json()["data"]
+        resume_run_id = resume_data["trace"]["run_id"]
+
+        assert resume_data["resume"]["status"] == "succeeded"
+        assert resume_data["resume"]["source_run_id"] == run_id
+        assert resume_data["resume"]["new_run_id"] == resume_run_id
+        assert resume_data["resume"]["resume_from_step"] == failed_step_id
+        assert resume_data["assistant_message"]["metadata_json"]["resume_from_step"] == failed_step_id
+        assert resume_data["recovery_event"]["metadata_json"]["source"] == "agent_partial_resume"
+        assert resume_data["recovery_event"]["metadata_json"]["recovery_event"]["action"] == "partial_resume"
+
+        source_detail_response = client.get(f"/api/agent/runs/{run_id}", headers=headers)
+        assert source_detail_response.status_code == 200
+        source_detail = source_detail_response.json()["data"]
+        assert any(
+            item["recovery_event"]["new_run_id"] == resume_run_id
+            and item["recovery_event"]["resume_from_step"] == failed_step_id
+            for item in source_detail["recovery_links"]
+        )
+
+        resume_detail_response = client.get(f"/api/agent/runs/{resume_run_id}", headers=headers)
+        assert resume_detail_response.status_code == 200
+        resume_detail = resume_detail_response.json()["data"]
+        assert resume_detail["run"]["status"] == "success"
+        assert any(item["recovery_event"]["source_run_id"] == run_id for item in resume_detail["recovery_links"])
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
+        _cleanup_agent_runtime_trace(tenant_id, resume_run_id)
         _cleanup_agent_runtime_trace(tenant_id, retry_run_id)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
         _cleanup_risk_chat_customer_fixture(tenant_id, customer_id, risk_snapshot_id)

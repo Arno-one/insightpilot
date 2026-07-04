@@ -205,6 +205,32 @@
   line-height: 1.75;
 }
 
+.recoveryLinkStack {
+  display: grid;
+  gap: 12px;
+}
+
+.recoveryLinkCard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(14, 116, 144, 0.2);
+  background: rgba(14, 116, 144, 0.06);
+}
+
+.recoveryLinkHeader {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recoveryLinkHeader h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 @media (max-width: 900px) {
   .traceToolbar {
     gap: 12px;
