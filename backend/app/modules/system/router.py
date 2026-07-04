@@ -6,6 +6,7 @@ from app.core.database import get_db
 from app.modules.auth.dependencies import require_permission
 from app.modules.system.schemas import UpdateRolePermissionsRequest, UpdateUserRolesRequest
 from app.shared.audit_policy import summarize_audit_policy
+from app.shared.event_bus import event_bus
 from app.shared.response import success
 
 router = APIRouter()
@@ -261,6 +262,15 @@ def get_audit_policy(
     _ = current_user
     policy = summarize_audit_policy()
     return success(policy, "查询成功", total=policy["rule_count"])
+
+
+@router.get("/event-bus/overview")
+def get_event_bus_overview(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+):
+    """中文注释：只读输出内部事件总线概览，V1 不依赖外部消息中间件。"""
+    overview = event_bus.overview(tenant_id=current_user["tenant_id"])
+    return success(overview, "查询成功", total=overview["event_count"])
 
 
 @router.get("/access-control")
