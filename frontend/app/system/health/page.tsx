@@ -97,10 +97,38 @@ type BackupRecovery = {
   };
 };
 
+type ReleaseGateItem = {
+  item_id: string;
+  category: string;
+  severity: "pass" | "warning" | "blocker";
+  title: string;
+  evidence: Record<string, unknown>;
+  required_action: string;
+  source: string;
+};
+
+type ReleaseGateChecklist = {
+  gate_version: string;
+  release_decision: string;
+  can_release_to_pilot: boolean;
+  can_release_to_production: boolean;
+  item_count: number;
+  severity_counts: StatusCounts;
+  items: ReleaseGateItem[];
+  manual_confirmation_required: string[];
+  execution_boundary: {
+    checklist_only: boolean;
+    external_write_enabled: boolean;
+    auto_release_enabled: boolean;
+    description: string;
+  };
+};
+
 type HealthConsoleData = {
   hardening: EnterpriseHardeningReport;
   readiness: DeploymentReadiness;
   backup: BackupRecovery;
+  releaseGate: ReleaseGateChecklist;
 };
 
 const statusText: Record<string, string> = {
@@ -143,21 +171,23 @@ export default function SystemHealthPage() {
   const [data, setData] = useState<HealthConsoleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeTab, setActiveTab] = useState<"hardening" | "deployment" | "backup">("hardening");
+  const [activeTab, setActiveTab] = useState<"hardening" | "deployment" | "backup" | "release">("hardening");
 
   async function loadHealthConsole() {
     setLoading(true);
     setError("");
     try {
-      const [hardening, readiness, backup] = await Promise.all([
+      const [hardening, readiness, backup, releaseGate] = await Promise.all([
         apiFetch<EnterpriseHardeningReport>("/api/system/enterprise-hardening"),
         apiFetch<DeploymentReadiness>("/api/system/deployment-readiness"),
-        apiFetch<BackupRecovery>("/api/system/backup-recovery")
+        apiFetch<BackupRecovery>("/api/system/backup-recovery"),
+        apiFetch<ReleaseGateChecklist>("/api/system/release-gate")
       ]);
       setData({
         hardening: hardening.data,
         readiness: readiness.data,
-        backup: backup.data
+        backup: backup.data,
+        releaseGate: releaseGate.data
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "系统健康数据加载失败。");
@@ -203,9 +233,9 @@ export default function SystemHealthPage() {
               <p className="metric-detail">{data.hardening.phase_range}，{data.hardening.control_count} 个控制项。</p>
             </article>
             <article className="metric-card">
-              <strong className="metric-value">{data.hardening.status_counts.ready || 0}</strong>
-              <span className="metric-label">已就绪控制项</span>
-              <p className="metric-detail">当前无阻断项，可进入企业试点，但 warning 仍需上线前处理。</p>
+              <strong className="metric-value">{data.releaseGate.can_release_to_pilot ? "允许" : "阻断"}</strong>
+              <span className="metric-label">企业试点准入</span>
+              <p className="metric-detail">发布门禁结论：{data.releaseGate.release_decision}。</p>
             </article>
             <article className={`metric-card ${data.readiness.blocking_count ? "tone-danger" : "tone-warning"}`}>
               <strong className="metric-value">{data.readiness.blocking_count}/{data.readiness.warning_count}</strong>
@@ -255,12 +285,13 @@ export default function SystemHealthPage() {
                 {[
                   ["hardening", "硬化报告"],
                   ["deployment", "部署就绪"],
-                  ["backup", "备份恢复"]
+                  ["backup", "备份恢复"],
+                  ["release", "发布门禁"]
                 ].map(([key, label]) => (
                   <button
                     className={`workspace-tab ${activeTab === key ? "workspace-tab-active" : ""}`}
                     key={key}
-                    onClick={() => setActiveTab(key as "hardening" | "deployment" | "backup")}
+                    onClick={() => setActiveTab(key as "hardening" | "deployment" | "backup" | "release")}
                     type="button"
                   >
                     <span className="workspace-tab-dot" />
@@ -345,6 +376,37 @@ export default function SystemHealthPage() {
                       <strong>{guardrail.guardrail_id}</strong>
                       <p>{guardrail.stage} / {guardrail.required ? "必须执行" : "建议执行"}</p>
                       <p>{guardrail.description}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {activeTab === "release" ? (
+              <div className="health-release-layout">
+                <article className="summary-item">
+                  <strong>试点准入</strong>
+                  <p>{data.releaseGate.can_release_to_pilot ? "当前允许进入企业试点。" : "当前存在阻断项，不能进入企业试点。"}</p>
+                </article>
+                <article className="summary-item">
+                  <strong>生产发布</strong>
+                  <p>{data.releaseGate.can_release_to_production ? "当前满足生产候选门槛。" : "当前仍需处理 blocker 或 warning 后再进入生产发布。"}</p>
+                </article>
+                <article className="summary-item">
+                  <strong>人工确认项</strong>
+                  <p>{data.releaseGate.manual_confirmation_required.join(" / ") || "暂无人工确认项。"}</p>
+                </article>
+                <div className="card-stack">
+                  {data.releaseGate.items.map((item) => (
+                    <article className="health-check-row" key={item.item_id}>
+                      <span className={`meta-chip ${statusTone(item.severity === "blocker" ? "blocked" : item.severity === "warning" ? "warn" : "ready")}`}>
+                        {item.severity === "blocker" ? "阻断" : item.severity === "warning" ? "提醒" : "通过"}
+                      </span>
+                      <div>
+                        <p className="eyebrow">{item.category} / {item.source}</p>
+                        <h3>{item.title}</h3>
+                        <p>{item.required_action}</p>
+                      </div>
                     </article>
                   ))}
                 </div>

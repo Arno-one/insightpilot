@@ -10,6 +10,7 @@ from app.shared.backup_recovery import summarize_backup_recovery
 from app.shared.deployment_readiness import summarize_deployment_readiness
 from app.shared.enterprise_hardening import summarize_enterprise_hardening
 from app.shared.event_bus import event_bus
+from app.shared.release_gate import summarize_release_gate
 from app.shared.response import success
 
 router = APIRouter()
@@ -303,6 +304,15 @@ def get_enterprise_hardening(
     """中文注释：企业级硬化阶段总览，聚合部署、审计、队列、事件、备份恢复等只读状态。"""
     report = summarize_enterprise_hardening(tenant_id=current_user["tenant_id"])
     return success(report, "查询成功", total=report["control_count"])
+
+
+@router.get("/release-gate")
+def get_release_gate(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+):
+    """中文注释：发布准入清单只做判断，不自动发布、不自动修复。"""
+    checklist = summarize_release_gate(tenant_id=current_user["tenant_id"])
+    return success(checklist, "查询成功", total=checklist["item_count"])
 
 
 @router.get("/access-control")

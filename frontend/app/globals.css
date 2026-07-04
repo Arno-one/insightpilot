@@ -2100,6 +2100,17 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   align-items: start;
 }
 
+.health-release-layout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.health-release-layout .card-stack {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 1180px) {
   .metric-grid,
   .trace-overview {
@@ -2111,6 +2122,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   .report-risk-layout,
   .health-backup-layout,
   .health-gate-grid,
+  .health-release-layout,
   .workspace-grid,
   .system-grid,
   .auth-shell,
