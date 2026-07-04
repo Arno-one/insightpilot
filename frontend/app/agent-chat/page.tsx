@@ -143,6 +143,8 @@ type RecoveryEventSummary = {
   lastEvent: RecoveryEvent;
 };
 
+type RecoverySessionFilter = "all" | "any" | "opened" | "running" | "succeeded" | "failed";
+
 type ServerRecoveryEventSummary = {
   total: number;
   failed_count: number;
@@ -268,6 +270,26 @@ function recoveryEventSessionLabel(summary: ServerRecoveryEventSummary | null | 
   }
   const status = recoveryEventStatusLabel(summary.last_event?.status);
   return `恢复${status} · ${summary.total} 条`;
+}
+
+function recoverySessionFilterLabel(filter: RecoverySessionFilter) {
+  const labels: Record<RecoverySessionFilter, string> = {
+    all: "全部会话",
+    any: "有恢复事件",
+    opened: "已查看 Trace",
+    running: "恢复执行中",
+    succeeded: "恢复成功",
+    failed: "恢复失败",
+  };
+  return labels[filter];
+}
+
+function buildSessionsPath(filter: RecoverySessionFilter) {
+  const params = new URLSearchParams({ limit: "80" });
+  if (filter !== "all") {
+    params.set("recovery_status", filter);
+  }
+  return `/api/agent/chat/sessions?${params.toString()}`;
 }
 
 function buildRecoveryEventSummary(messages: AgentChatMessage[]): RecoveryEventSummary | null {
@@ -471,6 +493,7 @@ function AgentChatContent() {
   const [activeSessionId, setActiveSessionId] = useState("");
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState(initialCustomerId);
+  const [recoveryFilter, setRecoveryFilter] = useState<RecoverySessionFilter>("all");
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
@@ -508,7 +531,7 @@ function AgentChatContent() {
     try {
       const [customerResponse, sessionResponse] = await Promise.all([
         apiFetch<CustomerOption[]>("/api/crm/customers?limit=80"),
-        apiFetch<AgentChatSession[]>("/api/agent/chat/sessions?limit=80"),
+        apiFetch<AgentChatSession[]>(buildSessionsPath(recoveryFilter)),
       ]);
       setCustomers(customerResponse.data);
       setSessions(sessionResponse.data);
@@ -528,12 +551,17 @@ function AgentChatContent() {
     }
   }
 
-  async function loadSessions(nextActiveSessionId?: string) {
-    const response = await apiFetch<AgentChatSession[]>("/api/agent/chat/sessions?limit=80");
+  async function loadSessions(nextActiveSessionId?: string, nextRecoveryFilter: RecoverySessionFilter = recoveryFilter) {
+    const response = await apiFetch<AgentChatSession[]>(buildSessionsPath(nextRecoveryFilter));
     setSessions(response.data);
     if (nextActiveSessionId) {
       setActiveSessionId(nextActiveSessionId);
     }
+  }
+
+  async function changeRecoveryFilter(nextFilter: RecoverySessionFilter) {
+    setRecoveryFilter(nextFilter);
+    await loadSessions(undefined, nextFilter);
   }
 
   async function createSession() {
@@ -551,7 +579,8 @@ function AgentChatContent() {
         },
       }),
     });
-    await loadSessions(response.data.session_id);
+    setRecoveryFilter("all");
+    await loadSessions(response.data.session_id, "all");
     setMessages([]);
     setServerRecoveryEventSummary(null);
     setRuntime(null);
@@ -734,6 +763,16 @@ function AgentChatContent() {
                 {customers.map((customer) => (
                   <option key={customer.customer_id} value={customer.customer_id}>
                     {customer.customer_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              <span>恢复状态</span>
+              <select value={recoveryFilter} onChange={(event) => changeRecoveryFilter(event.target.value as RecoverySessionFilter)}>
+                {(["all", "any", "failed", "running", "succeeded", "opened"] as RecoverySessionFilter[]).map((item) => (
+                  <option key={item} value={item}>
+                    {recoverySessionFilterLabel(item)}
                   </option>
                 ))}
               </select>

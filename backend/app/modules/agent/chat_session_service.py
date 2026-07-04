@@ -138,6 +138,7 @@ def list_chat_sessions(
     user_id: str,
     agent_scope: str | None = None,
     status: str = "active",
+    recovery_status: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     filters = ["tenant_id = :tenant_id", "user_id = :user_id", "status = :status"]
@@ -150,6 +151,23 @@ def list_chat_sessions(
     if agent_scope:
         filters.append("agent_scope = :agent_scope")
         params["agent_scope"] = agent_scope
+    if recovery_status:
+        recovery_filter = """
+        EXISTS (
+          SELECT 1
+          FROM agent_chat_message acm
+          WHERE acm.tenant_id = agent_chat_session.tenant_id
+            AND acm.user_id = agent_chat_session.user_id
+            AND acm.session_id = agent_chat_session.session_id
+            AND acm.tool_name = 'agent_chat.recovery_event'
+        """
+        if recovery_status != "any":
+            recovery_filter += """
+            AND JSON_UNQUOTE(JSON_EXTRACT(acm.metadata_json, '$.recovery_event.status')) = :recovery_status
+            """
+            params["recovery_status"] = recovery_status
+        recovery_filter += ")"
+        filters.append(recovery_filter)
 
     rows = db.execute(
         text(

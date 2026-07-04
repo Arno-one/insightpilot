@@ -686,17 +686,21 @@ def create_agent_chat_session(
 def list_agent_chat_sessions(
     agent_scope: str | None = None,
     status: str = "active",
+    recovery_status: str | None = None,
     limit: int = 50,
     current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
 ):
     """查询当前用户的统一 Agent 对话会话列表。"""
+    if recovery_status and recovery_status not in {"any", "opened", "running", "succeeded", "failed"}:
+        raise HTTPException(status_code=400, detail="恢复状态筛选参数无效")
     data = chat_session_service.list_chat_sessions(
         db,
         tenant_id=current_user["tenant_id"],
         user_id=current_user["user_id"],
         agent_scope=agent_scope,
         status=status,
+        recovery_status=recovery_status,
         limit=limit,
     )
     data = _attach_recovery_event_summaries(db, current_user, data)
