@@ -10,6 +10,15 @@ from app.shared.response import success
 router = APIRouter()
 
 
+@router.get("/overview")
+def get_memory_system_overview(
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.summarize_memory_system(db, current_user)
+    return success(data, "查询成功")
+
+
 @router.get("/short-term")
 def list_short_term_memory_sessions(
     source_type: service.ShortTermSource | None = None,

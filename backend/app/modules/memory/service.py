@@ -349,6 +349,95 @@ def summarize_short_term_memory(
     }
 
 
+def summarize_memory_system(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    redis_client=None,
+) -> dict[str, Any]:
+    tenant_id = current_user["tenant_id"]
+    short_term = summarize_short_term_memory(db, current_user, redis_client=redis_client)
+    memory_row = db.execute(
+        text(
+            """
+            SELECT COUNT(*) AS total_count, MAX(last_compiled_at) AS latest_compiled_at
+            FROM customer_memory
+            WHERE tenant_id = :tenant_id
+            """
+        ),
+        {"tenant_id": tenant_id},
+    ).mappings().first()
+    trace_row = db.execute(
+        text(
+            """
+            SELECT COUNT(*) AS total_count, MAX(created_at) AS latest_trace_at
+            FROM memory_update_trace
+            WHERE tenant_id = :tenant_id
+            """
+        ),
+        {"tenant_id": tenant_id},
+    ).mappings().first()
+    governance_rows = db.execute(
+        text(
+            """
+            SELECT governance_status, refresh_status, COUNT(*) AS count
+            FROM memory_governance_state
+            WHERE tenant_id = :tenant_id
+            GROUP BY governance_status, refresh_status
+            """
+        ),
+        {"tenant_id": tenant_id},
+    ).mappings().all()
+    governance_by_status: dict[str, int] = {}
+    refresh_by_status: dict[str, int] = {}
+    for row in governance_rows:
+        governance_by_status[row["governance_status"]] = governance_by_status.get(row["governance_status"], 0) + int(row["count"])
+        refresh_by_status[row["refresh_status"]] = refresh_by_status.get(row["refresh_status"], 0) + int(row["count"])
+    recent_trace_rows = db.execute(
+        text(
+            """
+            SELECT trace_id, memory_id, customer_id, memory_scope, update_type, source_type,
+                   source_run_id, changed_fields_json, summary_preview, profile_tags_json,
+                   metadata_json, created_at
+            FROM memory_update_trace
+            WHERE tenant_id = :tenant_id
+            ORDER BY created_at DESC, id DESC
+            LIMIT 5
+            """
+        ),
+        {"tenant_id": tenant_id},
+    ).mappings().all()
+    return {
+        "source_type": "memory_system_overview",
+        "generated_at": datetime.now().isoformat(),
+        "short_term": short_term,
+        "customer_memory": {
+            "total_count": int((memory_row or {}).get("total_count") or 0),
+            "latest_compiled_at": _iso((memory_row or {}).get("latest_compiled_at")),
+        },
+        "update_trace": {
+            "total_count": int((trace_row or {}).get("total_count") or 0),
+            "latest_trace_at": _iso((trace_row or {}).get("latest_trace_at")),
+            "recent_traces": [_trace_row_to_item(row) for row in recent_trace_rows],
+        },
+        "governance": {
+            "total_count": sum(governance_by_status.values()),
+            "by_governance_status": governance_by_status,
+            "by_refresh_status": refresh_by_status,
+        },
+        "capabilities": [
+            "short_term_memory",
+            "customer_working_memory",
+            "customer_long_term_memory",
+            "memory_update_trace",
+            "knowledge_citation",
+            "context_compression",
+            "memory_governance",
+        ],
+        "stage_status": "memory_stage_v1_ready",
+    }
+
+
 def _load_latest_customer_memory(db: Session, *, tenant_id: str, customer_id: str) -> dict[str, Any]:
     row = db.execute(
         text(
