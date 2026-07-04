@@ -133,6 +133,34 @@
   line-height: 1.6;
 }
 
+.recoveryAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 30px;
+  margin-top: 4px;
+  padding: 5px 11px;
+  border: 1px solid rgba(255, 200, 87, 0.36);
+  border-radius: 999px;
+  color: #ffe7a1;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  background: rgba(255, 200, 87, 0.1);
+  cursor: pointer;
+}
+
+.recoveryAction:hover:not(:disabled) {
+  border-color: rgba(255, 200, 87, 0.62);
+  background: rgba(255, 200, 87, 0.16);
+}
+
+.recoveryAction:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .nl2sqlArtifact {
   display: grid;
   gap: 12px;

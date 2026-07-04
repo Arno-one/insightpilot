@@ -91,6 +91,14 @@ type RecoveryPlanItem = {
   description?: string;
 };
 
+type RecoveryPlanListProps = {
+  items: RecoveryPlanItem[];
+  runId: string;
+  retryContent: string;
+  sending: boolean;
+  onRetry: (content: string) => void;
+};
+
 function intentLabel(intent: string | null | undefined) {
   const labels: Record<string, string> = {
     risk_analysis: "风险分析",
@@ -168,6 +176,16 @@ function getRecoveryPlan(item: AgentChatMessage): RecoveryPlanItem[] {
   return value.filter((entry): entry is RecoveryPlanItem => typeof entry === "object" && entry !== null);
 }
 
+function getPreviousUserContent(messages: AgentChatMessage[], currentIndex: number) {
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const item = messages[index];
+    if (item.role === "user" && item.content.trim()) {
+      return item.content;
+    }
+  }
+  return "";
+}
+
 function MessageTraceLink({ item }: { item: AgentChatMessage }) {
   const runId = getMessageRunId(item);
   if (!runId) {
@@ -180,14 +198,27 @@ function MessageTraceLink({ item }: { item: AgentChatMessage }) {
   );
 }
 
-function MessageBody({ item }: { item: AgentChatMessage }) {
+function MessageBody({
+  item,
+  retryContent,
+  sending,
+  onRetry,
+}: {
+  item: AgentChatMessage;
+  retryContent: string;
+  sending: boolean;
+  onRetry: (content: string) => void;
+}) {
   const nl2sqlMeta = getNL2SQLMeta(item);
   const recoveryPlan = getRecoveryPlan(item);
+  const runId = getMessageRunId(item);
   if (!nl2sqlMeta) {
     return (
       <>
         <p>{item.content}</p>
-        {recoveryPlan.length ? <RecoveryPlanList items={recoveryPlan} /> : null}
+        {recoveryPlan.length ? (
+          <RecoveryPlanList items={recoveryPlan} runId={runId} retryContent={retryContent} sending={sending} onRetry={onRetry} />
+        ) : null}
       </>
     );
   }
@@ -221,22 +252,57 @@ function MessageBody({ item }: { item: AgentChatMessage }) {
         {nl2sqlMeta.queryId ? <span>Query {nl2sqlMeta.queryId}</span> : null}
         {nl2sqlMeta.sessionId ? <span>Session {nl2sqlMeta.sessionId}</span> : null}
       </div>
-      {recoveryPlan.length ? <RecoveryPlanList items={recoveryPlan} /> : null}
+      {recoveryPlan.length ? (
+        <RecoveryPlanList items={recoveryPlan} runId={runId} retryContent={retryContent} sending={sending} onRetry={onRetry} />
+      ) : null}
     </div>
   );
 }
 
-function RecoveryPlanList({ items }: { items: RecoveryPlanItem[] }) {
+function RecoveryPlanList({ items, runId, retryContent, sending, onRetry }: RecoveryPlanListProps) {
   return (
     <div className={styles.recoveryPlan}>
       {items.map((item, index) => (
         <div className={styles.recoveryItem} key={`${item.action || "recovery"}-${index}`}>
           <strong>{item.title || item.action || "恢复建议"}</strong>
           <span>{item.description || "请查看 Trace 详情后继续处理。"}</span>
+          <RecoveryPlanAction item={item} runId={runId} retryContent={retryContent} sending={sending} onRetry={onRetry} />
         </div>
       ))}
     </div>
   );
+}
+
+function RecoveryPlanAction({
+  item,
+  runId,
+  retryContent,
+  sending,
+  onRetry,
+}: {
+  item: RecoveryPlanItem;
+  runId: string;
+  retryContent: string;
+  sending: boolean;
+  onRetry: (content: string) => void;
+}) {
+  if (item.action === "inspect_trace" && runId) {
+    return (
+      <Link className={styles.recoveryAction} href={`/agent-trace?runId=${encodeURIComponent(runId)}`}>
+        查看 Trace
+      </Link>
+    );
+  }
+
+  if (item.action === "retry") {
+    return (
+      <button className={styles.recoveryAction} type="button" disabled={sending || !retryContent} onClick={() => onRetry(retryContent)}>
+        {sending ? "重试中..." : "重新发送"}
+      </button>
+    );
+  }
+
+  return null;
 }
 
 function AgentChatContent() {
@@ -326,8 +392,8 @@ function AgentChatContent() {
     return response.data;
   }
 
-  async function sendMessage() {
-    const content = draft.trim();
+  async function sendMessage(nextContent?: string) {
+    const content = (nextContent ?? draft).trim();
     if (!content) {
       return;
     }
@@ -356,6 +422,12 @@ function AgentChatContent() {
     } finally {
       setSending(false);
     }
+  }
+
+  async function retryMessage(content: string) {
+    // 恢复建议里的重试动作复用原发送链路，继续走统一 Runtime 和后端审批边界。
+    setDraft(content);
+    await sendMessage(content);
   }
 
   async function closeSession() {
@@ -459,7 +531,7 @@ function AgentChatContent() {
 
             <div className={styles.messageList}>
               {messages.length ? (
-                messages.map((item) => (
+                messages.map((item, index) => (
                   <div
                     className={`${styles.message} ${
                       item.role === "assistant" ? styles.messageAssistant : item.role === "user" ? styles.messageUser : ""
@@ -472,7 +544,12 @@ function AgentChatContent() {
                       <span className="meta-chip">{formatDateTime(item.created_at)}</span>
                       <MessageTraceLink item={item} />
                     </div>
-                    <MessageBody item={item} />
+                    <MessageBody
+                      item={item}
+                      retryContent={getPreviousUserContent(messages, index)}
+                      sending={sending}
+                      onRetry={retryMessage}
+                    />
                   </div>
                 ))
               ) : (
@@ -493,7 +570,7 @@ function AgentChatContent() {
                 disabled={sending}
               />
               <div className="page-actions">
-                <button className="button" type="button" onClick={sendMessage} disabled={sending || !draft.trim()}>
+                <button className="button" type="button" onClick={() => sendMessage()} disabled={sending || !draft.trim()}>
                   {sending ? "运行中..." : "发送"}
                 </button>
               </div>
