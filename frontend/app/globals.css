@@ -2180,6 +2180,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   align-items: start;
 }
 
+.health-operations-layout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
 .health-smoke-layout .card-stack {
   grid-column: 1 / -1;
 }
@@ -2189,6 +2196,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .health-acceptance-layout .card-stack {
+  grid-column: 1 / -1;
+}
+
+.health-operations-layout .card-stack {
   grid-column: 1 / -1;
 }
 
@@ -2263,6 +2274,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   .health-smoke-layout,
   .health-pilot-layout,
   .health-acceptance-layout,
+  .health-operations-layout,
   .health-smoke-grid,
   .health-section-overview,
   .workspace-grid,

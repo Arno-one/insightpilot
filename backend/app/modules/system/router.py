@@ -12,6 +12,7 @@ from app.shared.enterprise_hardening import summarize_enterprise_hardening
 from app.shared.event_bus import event_bus
 from app.shared.pilot_acceptance_report import summarize_pilot_acceptance_report
 from app.shared.pilot_data_pack import summarize_pilot_data_pack
+from app.shared.pilot_operations_runbook import summarize_pilot_operations_runbook
 from app.shared.release_gate import summarize_release_gate
 from app.shared.response import success
 from app.shared.smoke_test_plan import summarize_smoke_test_plan
@@ -346,6 +347,16 @@ def get_pilot_acceptance_report(
     """中文注释：输出企业试点验收报告，只读聚合证据，不自动验收或触发真实发布动作。"""
     report = summarize_pilot_acceptance_report(db, tenant_id=current_user["tenant_id"])
     return success(report, "查询成功", total=report["acceptance_gate"]["blocker_count"])
+
+
+@router.get("/pilot-operations-runbook")
+def get_pilot_operations_runbook(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    """中文注释：输出试点运营手册，只读聚合运营值守流程，不写入运营记录。"""
+    runbook = summarize_pilot_operations_runbook(db, tenant_id=current_user["tenant_id"])
+    return success(runbook, "查询成功", total=runbook["cadence_count"])
 
 
 @router.get("/access-control")

@@ -238,6 +238,58 @@ type PilotAcceptanceReport = {
   };
 };
 
+type PilotOperationsRunbook = {
+  runbook_version: string;
+  tenant_id: string;
+  overall_status: "ready" | "ready_with_warnings" | "blocked";
+  pilot_operable: boolean;
+  source_report_version: string;
+  acceptance_status: string;
+  watch_item_count: number;
+  watch_items: Array<{
+    source: string;
+    reason: string;
+    items: string[];
+    severity: "warning" | "blocker";
+  }>;
+  cadence_count: number;
+  cadences: Array<{
+    cadence_id: string;
+    title: string;
+    frequency: string;
+    owner_role: string;
+    steps: string[];
+    evidence: string[];
+  }>;
+  incident_levels: Array<{
+    level: string;
+    trigger: string;
+    owner_role: string;
+    response_target: string;
+    escalation_path: string[];
+    allowed_actions: string[];
+  }>;
+  operator_boundaries: Array<{
+    boundary_id: string;
+    title: string;
+    allowed: boolean;
+    description: string;
+  }>;
+  handoff_checklist: Array<{
+    item_id: string;
+    title: string;
+    source: string;
+    status: string;
+  }>;
+  execution_boundary: {
+    readonly: boolean;
+    external_write_enabled: boolean;
+    auto_execute_enabled: boolean;
+    operator_record_persistence_enabled: boolean;
+    description: string;
+  };
+};
+
 type HealthConsoleData = {
   hardening: EnterpriseHardeningReport;
   readiness: DeploymentReadiness;
@@ -246,6 +298,7 @@ type HealthConsoleData = {
   smokePlan: SmokeTestPlan;
   pilotPack: PilotDataPack;
   acceptanceReport: PilotAcceptanceReport;
+  operationsRunbook: PilotOperationsRunbook;
 };
 
 const statusText: Record<string, string> = {
@@ -287,7 +340,7 @@ function stringifyEvidence(value: unknown) {
   return String(value ?? "-");
 }
 
-type HealthTab = "hardening" | "deployment" | "backup" | "release" | "smoke" | "pilot" | "acceptance";
+type HealthTab = "hardening" | "deployment" | "backup" | "release" | "smoke" | "pilot" | "acceptance" | "operations";
 
 export default function SystemHealthPage() {
   const [data, setData] = useState<HealthConsoleData | null>(null);
@@ -300,14 +353,15 @@ export default function SystemHealthPage() {
     setLoading(true);
     setError("");
     try {
-      const [hardening, readiness, backup, releaseGate, smokePlan, pilotPack, acceptanceReport] = await Promise.all([
+      const [hardening, readiness, backup, releaseGate, smokePlan, pilotPack, acceptanceReport, operationsRunbook] = await Promise.all([
         apiFetch<EnterpriseHardeningReport>("/api/system/enterprise-hardening"),
         apiFetch<DeploymentReadiness>("/api/system/deployment-readiness"),
         apiFetch<BackupRecovery>("/api/system/backup-recovery"),
         apiFetch<ReleaseGateChecklist>("/api/system/release-gate"),
         apiFetch<SmokeTestPlan>("/api/system/smoke-test-plan"),
         apiFetch<PilotDataPack>("/api/system/pilot-data-pack"),
-        apiFetch<PilotAcceptanceReport>("/api/system/pilot-acceptance-report")
+        apiFetch<PilotAcceptanceReport>("/api/system/pilot-acceptance-report"),
+        apiFetch<PilotOperationsRunbook>("/api/system/pilot-operations-runbook")
       ]);
       setData({
         hardening: hardening.data,
@@ -316,7 +370,8 @@ export default function SystemHealthPage() {
         releaseGate: releaseGate.data,
         smokePlan: smokePlan.data,
         pilotPack: pilotPack.data,
-        acceptanceReport: acceptanceReport.data
+        acceptanceReport: acceptanceReport.data,
+        operationsRunbook: operationsRunbook.data
       });
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "系统健康数据加载失败。");
@@ -393,6 +448,13 @@ export default function SystemHealthPage() {
                 {formatStatus(data.acceptanceReport.overall_status)}，{data.acceptanceReport.acceptance_gate.blocker_count} 个阻断，{data.acceptanceReport.acceptance_gate.warning_count} 个提醒。
               </p>
             </article>
+            <article className={`metric-card ${statusTone(data.operationsRunbook.overall_status)}`}>
+              <strong className="metric-value">{data.operationsRunbook.pilot_operable ? "可运营" : "暂停"}</strong>
+              <span className="metric-label">试点运营手册</span>
+              <p className="metric-detail">
+                {data.operationsRunbook.cadence_count} 个值守节奏，{data.operationsRunbook.watch_item_count} 个关注项。
+              </p>
+            </article>
           </section>
 
           <section className="command-panel">
@@ -435,7 +497,8 @@ export default function SystemHealthPage() {
                   ["release", "发布门禁"],
                   ["smoke", "冒烟计划"],
                   ["pilot", "试点数据"],
-                  ["acceptance", "验收报告"]
+                  ["acceptance", "验收报告"],
+                  ["operations", "运营手册"]
                 ].map(([key, label]) => (
                   <button
                     className={`workspace-tab ${activeTab === key ? "workspace-tab-active" : ""}`}
@@ -513,6 +576,15 @@ export default function SystemHealthPage() {
                 <span>验收报告</span>
                 <strong>{formatStatus(data.acceptanceReport.overall_status)}</strong>
                 <small>{data.acceptanceReport.acceptance_gate.blocker_count} 阻断 / {data.acceptanceReport.acceptance_gate.warning_count} 提醒</small>
+              </button>
+              <button
+                className={`health-section-card ${activeTab === "operations" ? "is-active" : ""} ${statusTone(data.operationsRunbook.overall_status)}`}
+                onClick={() => setActiveTab("operations")}
+                type="button"
+              >
+                <span>运营手册</span>
+                <strong>{data.operationsRunbook.pilot_operable ? "可运营" : "暂停试点"}</strong>
+                <small>{data.operationsRunbook.cadence_count} 节奏 / {data.operationsRunbook.watch_item_count} 关注项</small>
               </button>
             </div>
 
@@ -781,6 +853,88 @@ export default function SystemHealthPage() {
                         <p className="eyebrow">{deliverable.source}</p>
                         <h3>{deliverable.title}</h3>
                         <p>{deliverable.deliverable_id}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {activeTab === "operations" ? (
+              <div className="health-operations-layout">
+                <article className="summary-item">
+                  <strong>运营状态</strong>
+                  <p>
+                    {formatStatus(data.operationsRunbook.overall_status)}，{data.operationsRunbook.pilot_operable ? "当前允许按手册进入试点运营。" : "当前应暂停试点运营。"}
+                  </p>
+                </article>
+                <article className="summary-item">
+                  <strong>验收来源</strong>
+                  <p>{data.operationsRunbook.source_report_version} / {formatStatus(data.operationsRunbook.acceptance_status)}</p>
+                </article>
+                <article className="summary-item">
+                  <strong>执行边界</strong>
+                  <p>{data.operationsRunbook.execution_boundary.description}</p>
+                </article>
+                <div className="card-stack">
+                  {data.operationsRunbook.cadences.map((cadence) => (
+                    <article className="health-smoke-card" key={cadence.cadence_id}>
+                      <div className="health-control-header">
+                        <div>
+                          <p className="eyebrow">{cadence.frequency} / {cadence.owner_role}</p>
+                          <h3>{cadence.title}</h3>
+                        </div>
+                        <span className="meta-chip tone-info">{cadence.steps.length} 步</span>
+                      </div>
+                      <div className="health-smoke-grid">
+                        <div>
+                          <strong>执行步骤</strong>
+                          <p>{cadence.steps.join(" / ")}</p>
+                        </div>
+                        <div>
+                          <strong>证据入口</strong>
+                          <p>{cadence.evidence.join(" / ")}</p>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="card-stack">
+                  {data.operationsRunbook.incident_levels.map((level) => (
+                    <article className="health-check-row" key={level.level}>
+                      <span className={`meta-chip ${level.level === "p0" ? "tone-danger" : level.level === "p1" ? "tone-warning" : "tone-info"}`}>
+                        {level.level.toUpperCase()}
+                      </span>
+                      <div>
+                        <p className="eyebrow">{level.owner_role} / {level.response_target}</p>
+                        <h3>{level.trigger}</h3>
+                        <p>升级路径：{level.escalation_path.join(" / ")}；允许动作：{level.allowed_actions.join(" / ")}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="card-stack">
+                  {data.operationsRunbook.operator_boundaries.map((boundary) => (
+                    <article className="health-check-row" key={boundary.boundary_id}>
+                      <span className={`meta-chip ${boundary.allowed ? "tone-success" : "tone-danger"}`}>
+                        {boundary.allowed ? "允许" : "禁止"}
+                      </span>
+                      <div>
+                        <p className="eyebrow">{boundary.boundary_id}</p>
+                        <h3>{boundary.title}</h3>
+                        <p>{boundary.description}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="card-stack">
+                  {data.operationsRunbook.handoff_checklist.map((item) => (
+                    <article className="health-check-row" key={item.item_id}>
+                      <span className={`meta-chip ${statusTone(item.status)}`}>{formatStatus(item.status)}</span>
+                      <div>
+                        <p className="eyebrow">{item.source}</p>
+                        <h3>{item.title}</h3>
+                        <p>{item.item_id}</p>
                       </div>
                     </article>
                   ))}
