@@ -79,3 +79,14 @@ def list_customer_memory_update_traces(
 ):
     rows = service.list_customer_memory_update_traces(db, current_user, customer_id=customer_id, limit=limit)
     return success(rows, "查询成功", total=len(rows))
+
+
+@router.get("/customers/{customer_id}/context-packet")
+def get_customer_context_packet(
+    customer_id: str,
+    max_chars: int = 2400,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.build_customer_context_packet(db, current_user, customer_id=customer_id, max_chars=max_chars)
+    return success(data, "查询成功", total=len(data["sections"]))

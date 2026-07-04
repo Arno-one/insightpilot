@@ -465,6 +465,17 @@ def _last_text_samples(items: list[dict[str, Any]], key: str, *, limit: int = 3)
     return samples
 
 
+def _clip_text(value: Any, max_chars: int) -> str:
+    text_value = str(value or "").strip()
+    if len(text_value) <= max_chars:
+        return text_value
+    return f"{text_value[: max(max_chars - 1, 0)]}…"
+
+
+def _join_non_empty(parts: list[str], separator: str = "；") -> str:
+    return separator.join(part for part in parts if part)
+
+
 def _build_long_term_usage_hints(
     *,
     preference_state: dict[str, Any],
@@ -483,6 +494,48 @@ def _build_long_term_usage_hints(
     if not hints:
         hints.append("长期记忆样本较少，Agent 应降低确定性表达并优先补充事实")
     return hints[:5]
+
+
+def _context_section(
+    *,
+    section_type: str,
+    title: str,
+    content: str,
+    source_refs: list[str],
+    priority: int,
+) -> dict[str, Any]:
+    return {
+        "section_type": section_type,
+        "title": title,
+        "content": content,
+        "source_refs": source_refs,
+        "priority": priority,
+        "char_count": len(content),
+    }
+
+
+def _pack_context_sections(sections: list[dict[str, Any]], *, max_chars: int) -> tuple[list[dict[str, Any]], str, bool]:
+    used = 0
+    packed: list[dict[str, Any]] = []
+    lines: list[str] = []
+    overflow = False
+    for section in sorted(sections, key=lambda item: item["priority"]):
+        header = f"[{section['title']}]"
+        content = str(section.get("content") or "")
+        block = f"{header}\n{content}"
+        remaining = max_chars - used
+        if remaining <= len(header) + 8:
+            overflow = True
+            continue
+        if len(block) > remaining:
+            overflow = True
+            content = _clip_text(content, max(remaining - len(header) - 1, 0))
+            block = f"{header}\n{content}"
+        packed_section = {**section, "content": content, "char_count": len(content)}
+        packed.append(packed_section)
+        lines.append(block)
+        used += len(block) + 2
+    return packed, "\n\n".join(lines), overflow
 
 
 def load_customer_working_memory(
@@ -755,5 +808,133 @@ def load_customer_long_term_memory(
             "approval_count": len(approvals),
             "task_count": len(tasks),
             "report_ref_count": len(report_refs),
+        },
+    }
+
+
+def build_customer_context_packet(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    customer_id: str,
+    max_chars: int = 2400,
+) -> dict[str, Any]:
+    char_budget = max(600, min(max_chars, 6000))
+    working = load_customer_working_memory(db, current_user, customer_id=customer_id)
+    long_term = load_customer_long_term_memory(db, current_user, customer_id=customer_id)
+    profile = working["profile"]
+    risk_state = working["risk_state"]
+    opportunity_state = working["opportunity_state"]
+    follow_up_state = working["follow_up_state"]
+    approval_state = working["approval_state"]
+    task_state = working["task_state"]
+    preference_state = long_term["preference_state"]
+    behavior_state = long_term["behavior_state"]
+    long_term_profile = long_term["long_term_profile"]
+    memory_state = long_term["memory_state"]
+
+    # 中文注释：Context Packet 只保留 Agent 决策所需事实，完整 JSON 仍可通过 Memory API 回查。
+    sections = [
+        _context_section(
+            section_type="customer_profile",
+            title="客户画像",
+            priority=10,
+            source_refs=["crm_customer", "customer_memory"],
+            content=_join_non_empty(
+                [
+                    f"{profile.get('customer_name')}({customer_id})",
+                    f"阶段:{long_term_profile.get('lifecycle_stage')}",
+                    f"意向:{long_term_profile.get('intent_level')}",
+                    f"等级:{long_term_profile.get('customer_level')}",
+                    f"行业:{preference_state.get('industry')}",
+                    f"区域:{preference_state.get('region')}",
+                    "竞品已介入" if long_term_profile.get("competitor_involved") else "",
+                    f"标签:{'，'.join(long_term_profile.get('stable_traits') or [])}",
+                ]
+            ),
+        ),
+        _context_section(
+            section_type="working_memory",
+            title="当前状态",
+            priority=20,
+            source_refs=["crm_detail_bundle"],
+            content=_join_non_empty(
+                [
+                    f"风险:{risk_state.get('latest_risk_level')}/{risk_state.get('latest_risk_score')}",
+                    f"风险原因:{risk_state.get('latest_reason')}",
+                    f"开放商机:{opportunity_state.get('open_count')}，最近阶段:{opportunity_state.get('latest_stage')}",
+                    f"最近跟进:{follow_up_state.get('latest_follow_up_type')}，情绪:{follow_up_state.get('latest_sentiment')}，下一步:{follow_up_state.get('latest_next_action')}",
+                    f"待审批:{approval_state.get('pending_count')}，执行中任务:{task_state.get('active_count')}",
+                ]
+            ),
+        ),
+        _context_section(
+            section_type="long_term_preference",
+            title="长期偏好",
+            priority=30,
+            source_refs=["crm_follow_up_record", "customer_memory"],
+            content=_join_non_empty(
+                [
+                    f"预算:{preference_state.get('budget_range', {}).get('min')}-{preference_state.get('budget_range', {}).get('max')}",
+                    f"决策人:{preference_state.get('decision_maker_status')}",
+                    f"高频沟通:{preference_state.get('preferred_follow_up_type')}",
+                    f"反馈样本:{' / '.join(preference_state.get('feedback_samples') or [])}",
+                    f"行动样本:{' / '.join(preference_state.get('next_action_samples') or [])}",
+                ]
+            ),
+        ),
+        _context_section(
+            section_type="behavior_history",
+            title="行为历史",
+            priority=40,
+            source_refs=["crm_follow_up_record", "crm_deal", "customer_risk_snapshot", "sales_task"],
+            content=_join_non_empty(
+                [
+                    f"跟进:{behavior_state.get('follow_up_count')}，商机:{behavior_state.get('deal_count')}，风险快照:{behavior_state.get('risk_snapshot_count')}",
+                    f"风险轨迹:{behavior_state.get('risk_level_history')}",
+                    f"任务结果:{behavior_state.get('task_result_history')}",
+                ]
+            ),
+        ),
+        _context_section(
+            section_type="compiled_memory",
+            title="已编译记忆",
+            priority=50,
+            source_refs=["customer_memory"],
+            content=_join_non_empty(
+                [
+                    f"memory_id:{memory_state.get('memory_id')}",
+                    f"last_compiled_at:{memory_state.get('last_compiled_at')}",
+                    memory_state.get("summary_text") or "",
+                ]
+            ),
+        ),
+        _context_section(
+            section_type="recommended_usage",
+            title="使用建议",
+            priority=60,
+            source_refs=["memory_runtime"],
+            content=_join_non_empty(long_term.get("recommended_usage") or []),
+        ),
+    ]
+    packed_sections, compressed_context, overflow = _pack_context_sections(sections, max_chars=char_budget)
+
+    return {
+        "source_type": "runtime_context_packet",
+        "packet_id": f"context_packet:{customer_id}",
+        "customer_id": customer_id,
+        "generated_at": datetime.now().isoformat(),
+        "budget": {
+            "max_chars": char_budget,
+            "used_chars": len(compressed_context),
+            "overflow": overflow,
+        },
+        "sections": packed_sections,
+        "compressed_context": compressed_context,
+        "raw_refs": {
+            "working_memory_id": working["memory_id"],
+            "long_term_memory_id": long_term["memory_id"],
+            "customer_memory_id": memory_state.get("memory_id"),
+            "knowledge_citation_count": 0,
         },
     }
