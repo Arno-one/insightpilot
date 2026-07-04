@@ -233,6 +233,12 @@ def _row_to_rag_result(row) -> dict:
     return item
 
 
+def _row_to_tool_result(row) -> dict:
+    item = dict(row)
+    item["metadata_json"] = _loads(item.get("metadata_json")) or {}
+    return item
+
+
 def create_nl2sql_evaluation_result(
     db: Session,
     *,
@@ -486,4 +492,180 @@ def summarize_rag_evaluation(db: Session, *, tenant_id: str, dataset_id: str | N
             {**dict(item), "metadata_json": _loads(item.get("metadata_json")) or {}}
             for item in latest_misses
         ],
+    }
+
+
+def create_tool_evaluation_result(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    case_id: str,
+    tool_name: str,
+    status: str,
+    run_id: str | None = None,
+    step_id: str | None = None,
+    expected_status: str = "success",
+    failure_reason_category: str | None = None,
+    failure_reason: str | None = None,
+    elapsed_ms: int = 0,
+    metadata_json: dict | None = None,
+) -> dict:
+    case = get_case(db, tenant_id=tenant_id, case_id=case_id)
+    if case["target_type"] != "tool":
+        raise ValueError("评测样本不是 Tool 类型")
+    result_id = new_id("tooleval")
+    db.execute(
+        text(
+            """
+            INSERT INTO tool_evaluation_result (
+              tenant_id, result_id, dataset_id, case_id, tool_name, run_id, step_id,
+              status, expected_status, failure_reason_category, failure_reason,
+              elapsed_ms, metadata_json, created_by_user_id
+            )
+            VALUES (
+              :tenant_id, :result_id, :dataset_id, :case_id, :tool_name, :run_id, :step_id,
+              :status, :expected_status, :failure_reason_category, :failure_reason,
+              :elapsed_ms, :metadata_json, :created_by_user_id
+            )
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "result_id": result_id,
+            "dataset_id": case["dataset_id"],
+            "case_id": case_id,
+            "tool_name": tool_name,
+            "run_id": run_id,
+            "step_id": step_id,
+            "status": status,
+            "expected_status": expected_status,
+            "failure_reason_category": failure_reason_category,
+            "failure_reason": failure_reason,
+            "elapsed_ms": elapsed_ms,
+            "metadata_json": _dumps(metadata_json),
+            "created_by_user_id": user_id,
+        },
+    )
+    db.commit()
+    return get_tool_evaluation_result(db, tenant_id=tenant_id, result_id=result_id)
+
+
+def get_tool_evaluation_result(db: Session, *, tenant_id: str, result_id: str) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT result_id, tenant_id, dataset_id, case_id, tool_name, run_id, step_id,
+                   status, expected_status, failure_reason_category, failure_reason,
+                   elapsed_ms, metadata_json, created_by_user_id, created_at
+            FROM tool_evaluation_result
+            WHERE tenant_id = :tenant_id AND result_id = :result_id
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "result_id": result_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError("Tool 评测结果不存在")
+    return _row_to_tool_result(row)
+
+
+def summarize_tool_evaluation(
+    db: Session,
+    *,
+    tenant_id: str,
+    dataset_id: str | None = None,
+    tool_name: str | None = None,
+) -> dict:
+    filters = ["tenant_id = :tenant_id"]
+    params = {"tenant_id": tenant_id, "dataset_id": dataset_id, "tool_name": tool_name}
+    if dataset_id:
+        filters.append("dataset_id = :dataset_id")
+    if tool_name:
+        filters.append("tool_name = :tool_name")
+    where_clause = " AND ".join(filters)
+    row = db.execute(
+        text(
+            f"""
+            SELECT COUNT(*) AS total_count,
+                   COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+                   COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+                   COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped_count,
+                   COALESCE(AVG(elapsed_ms), 0) AS avg_elapsed_ms
+            FROM tool_evaluation_result
+            WHERE {where_clause}
+            """
+        ),
+        params,
+    ).mappings().first()
+    by_tool = db.execute(
+        text(
+            f"""
+            SELECT tool_name,
+                   COUNT(*) AS total_count,
+                   COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+                   COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_count,
+                   COALESCE(AVG(elapsed_ms), 0) AS avg_elapsed_ms
+            FROM tool_evaluation_result
+            WHERE {where_clause}
+            GROUP BY tool_name
+            ORDER BY failed_count DESC, total_count DESC, tool_name ASC
+            LIMIT 20
+            """
+        ),
+        params,
+    ).mappings().all()
+    failure_reasons = db.execute(
+        text(
+            f"""
+            SELECT COALESCE(failure_reason_category, 'uncategorized') AS category,
+                   COUNT(*) AS count
+            FROM tool_evaluation_result
+            WHERE {where_clause}
+              AND status = 'failed'
+            GROUP BY COALESCE(failure_reason_category, 'uncategorized')
+            ORDER BY count DESC, category ASC
+            LIMIT 20
+            """
+        ),
+        params,
+    ).mappings().all()
+    latest_failures = db.execute(
+        text(
+            f"""
+            SELECT result_id, case_id, tool_name, run_id, step_id,
+                   failure_reason_category, failure_reason, created_at
+            FROM tool_evaluation_result
+            WHERE {where_clause}
+              AND status = 'failed'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 5
+            """
+        ),
+        params,
+    ).mappings().all()
+    total_count = int(row["total_count"] or 0)
+    success_count = int(row["success_count"] or 0)
+    failed_count = int(row["failed_count"] or 0)
+    return {
+        "dataset_id": dataset_id,
+        "tool_name": tool_name,
+        "total_count": total_count,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "skipped_count": int(row["skipped_count"] or 0),
+        "success_rate": round(success_count / total_count, 4) if total_count else 0,
+        "failure_rate": round(failed_count / total_count, 4) if total_count else 0,
+        "avg_elapsed_ms": round(float(row["avg_elapsed_ms"] or 0), 2),
+        "by_tool": [
+            {
+                **dict(item),
+                "success_rate": round(int(item["success_count"] or 0) / int(item["total_count"] or 1), 4),
+                "failure_rate": round(int(item["failed_count"] or 0) / int(item["total_count"] or 1), 4),
+                "avg_elapsed_ms": round(float(item["avg_elapsed_ms"] or 0), 2),
+            }
+            for item in by_tool
+        ],
+        "failure_reason_distribution": [dict(item) for item in failure_reasons],
+        "latest_failures": [dict(item) for item in latest_failures],
     }

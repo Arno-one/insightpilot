@@ -9,6 +9,7 @@ from app.modules.evaluation.schemas import (
     EvaluationDatasetCreateRequest,
     NL2SQLEvaluationResultCreateRequest,
     RAGEvaluationResultCreateRequest,
+    ToolEvaluationResultCreateRequest,
 )
 from app.shared.response import success
 
@@ -162,4 +163,47 @@ def get_rag_evaluation_summary(
     db: Session = Depends(get_db),
 ):
     summary = service.summarize_rag_evaluation(db, tenant_id=current_user["tenant_id"], dataset_id=dataset_id)
+    return success(summary, "查询成功", total=summary["total_count"])
+
+
+@router.post("/tool/results")
+def create_tool_evaluation_result(
+    data: ToolEvaluationResultCreateRequest,
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.create_tool_evaluation_result(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            case_id=data.case_id,
+            tool_name=data.tool_name,
+            run_id=data.run_id,
+            step_id=data.step_id,
+            status=data.status,
+            expected_status=data.expected_status,
+            failure_reason_category=data.failure_reason_category,
+            failure_reason=data.failure_reason,
+            elapsed_ms=data.elapsed_ms,
+            metadata_json=data.metadata_json,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "创建成功")
+
+
+@router.get("/tool/summary")
+def get_tool_evaluation_summary(
+    dataset_id: str | None = None,
+    tool_name: str | None = None,
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    summary = service.summarize_tool_evaluation(
+        db,
+        tenant_id=current_user["tenant_id"],
+        dataset_id=dataset_id,
+        tool_name=tool_name,
+    )
     return success(summary, "查询成功", total=summary["total_count"])

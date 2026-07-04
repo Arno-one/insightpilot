@@ -50,3 +50,16 @@ class RAGEvaluationResultCreateRequest(BaseModel):
     rerank_ms: int = Field(0, ge=0)
     elapsed_ms: int = Field(0, ge=0)
     metadata_json: dict | None = None
+
+
+class ToolEvaluationResultCreateRequest(BaseModel):
+    case_id: str = Field(..., min_length=1, max_length=64)
+    tool_name: str = Field(..., min_length=1, max_length=120)
+    run_id: str | None = Field(None, max_length=64)
+    step_id: str | None = Field(None, max_length=64)
+    status: Literal["success", "failed", "skipped"]
+    expected_status: Literal["success", "failed", "skipped"] = "success"
+    failure_reason_category: str | None = Field(None, max_length=80)
+    failure_reason: str | None = Field(None, max_length=4000)
+    elapsed_ms: int = Field(0, ge=0)
+    metadata_json: dict | None = None
