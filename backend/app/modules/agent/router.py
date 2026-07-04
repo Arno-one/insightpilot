@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
-from app.modules.agent import chat_session_service, conversation_memory_service, intent_router, memory_service
+from app.core.database import get_db, get_readonly_db
+from app.modules.agent import chat_session_service, conversation_memory_service, intent_router, memory_service, nl2sql_tool
 from app.modules.agent.schemas import (
     AgentChatIntentRouteRequest,
     AgentChatMessageCreateRequest,
@@ -473,6 +473,7 @@ def append_agent_chat_user_message(
     body: AgentChatMessageCreateRequest,
     current_user: dict = Depends(require_permission("crm:customer:read:self")),
     db: Session = Depends(get_db),
+    readonly_db: Session = Depends(get_readonly_db),
 ):
     """统一入口写入用户消息；Agent 回复会在后续 Runtime 接入时由服务层写入。"""
     if body.role != "user":
@@ -504,7 +505,39 @@ def append_agent_chat_user_message(
         "reason": "当前意图暂未接入统一运行时",
     }
 
-    if resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
+    if resolved_intent == intent_router.INTENT_DATA_QUERY:
+        nl2sql_result = nl2sql_tool.run_nl2sql_tool(
+            db,
+            readonly_db,
+            current_user,
+            question=body.content,
+        )
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=nl2sql_result["reply"],
+            intent=resolved_intent,
+            tool_name="nl2sql_tool",
+            metadata_json={
+                "runtime_handler": "nl2sql_tool",
+                "query_id": nl2sql_result["query_id"],
+                "nl2sql_session_id": nl2sql_result["nl2sql_session_id"],
+                "is_cached": nl2sql_result["is_cached"],
+                "row_count": nl2sql_result["row_count"],
+                "error": nl2sql_result["error"],
+                "sql": nl2sql_result["nl2sql"].get("sql"),
+            },
+        )
+        runtime_result = {
+            "handled": True,
+            "handler": "nl2sql_tool",
+            "reply": nl2sql_result["reply"],
+            "nl2sql": nl2sql_result["nl2sql"],
+        }
+    elif resolved_intent == intent_router.INTENT_RISK_ANALYSIS and current_session.get("related_customer_id"):
         risk_result = _run_risk_agent_chat_reply(
             db,
             current_user,
