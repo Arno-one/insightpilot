@@ -33,6 +33,88 @@ def _loads_json(value: Any) -> dict[str, Any]:
     return json.loads(value)
 
 
+def _insert_runtime_plan(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    run_id: str,
+    step_id: str,
+    handler: str,
+    status: str,
+    input_payload: dict[str, Any],
+    output_payload: dict[str, Any],
+    error_message: str | None = None,
+) -> dict[str, str]:
+    """为当前单步 Runtime 生成可演进的执行计划，后续多步编排直接复用同一结构。"""
+    plan_id = new_id("plan")
+    plan_step_id = new_id("pstep")
+    now = datetime.now()
+    question = str(input_payload.get("question") or "")[:1000]
+    output_summary = error_message or output_payload.get("handler") or handler
+
+    db.execute(
+        text(
+            """
+            INSERT INTO agent_run_plan (
+              tenant_id, plan_id, run_id, user_id, plan_type, plan_title, objective_summary,
+              status, source_intent, planned_at, started_at, finished_at, metadata_json
+            )
+            VALUES (
+              :tenant_id, :plan_id, :run_id, :user_id, 'single_tool',
+              '统一对话工具运行计划', :objective_summary, :status, :source_intent,
+              :planned_at, :started_at, :finished_at, :metadata_json
+            )
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "plan_id": plan_id,
+            "run_id": run_id,
+            "user_id": user_id,
+            "objective_summary": question,
+            "status": status,
+            "source_intent": (input_payload.get("intent_route") or {}).get("intent"),
+            "planned_at": now,
+            "started_at": now,
+            "finished_at": now,
+            "metadata_json": _dumps({"runtime_handler": handler, "runtime_version": "agent_chat_runtime_v1"}),
+        },
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO agent_run_plan_step (
+              tenant_id, plan_step_id, plan_id, run_id, step_code, step_order, step_title,
+              step_type, tool_name, depends_on_json, status, input_summary, output_summary,
+              linked_step_id, error_message, metadata_json
+            )
+            VALUES (
+              :tenant_id, :plan_step_id, :plan_id, :run_id, 'agent_chat_tool', 1,
+              :step_title, 'tool_call', :tool_name, :depends_on_json, :status,
+              :input_summary, :output_summary, :linked_step_id, :error_message, :metadata_json
+            )
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "plan_step_id": plan_step_id,
+            "plan_id": plan_id,
+            "run_id": run_id,
+            "step_title": f"调用 {handler} 处理统一对话请求"[:120],
+            "tool_name": str(handler)[:80],
+            "depends_on_json": _dumps([]),
+            "status": status,
+            "input_summary": question,
+            "output_summary": str(output_summary or "")[:1000],
+            "linked_step_id": step_id,
+            "error_message": error_message[:1000] if error_message else None,
+            "metadata_json": _dumps({"source": "agent_chat_runtime_trace", "linked_step_id": step_id}),
+        },
+    )
+    return {"plan_id": plan_id, "plan_step_id": plan_step_id}
+
+
 def record_successful_runtime_trace(
     db: Session,
     *,
@@ -111,11 +193,24 @@ def record_successful_runtime_trace(
             "finished_at": now,
         },
     )
+    plan_result = _insert_runtime_plan(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        run_id=run_id,
+        step_id=step_id,
+        handler=str(handler),
+        status="success",
+        input_payload=input_payload,
+        output_payload=output_payload,
+    )
 
     metadata = {
         **_loads_json(assistant_message.get("metadata_json")),
         "runtime_run_id": run_id,
         "runtime_step_id": step_id,
+        "runtime_plan_id": plan_result["plan_id"],
+        "runtime_plan_step_id": plan_result["plan_step_id"],
     }
     db.execute(
         text(
@@ -137,7 +232,7 @@ def record_successful_runtime_trace(
     assistant_message["run_id"] = run_id
     assistant_message["metadata_json"] = metadata
     db.commit()
-    return {"run_id": run_id, "step_id": step_id}
+    return {"run_id": run_id, "step_id": step_id, **plan_result}
 
 
 def record_failed_runtime_trace(
@@ -221,11 +316,25 @@ def record_failed_runtime_trace(
             "finished_at": now,
         },
     )
+    plan_result = _insert_runtime_plan(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        run_id=run_id,
+        step_id=step_id,
+        handler=handler,
+        status="failed",
+        input_payload=input_payload,
+        output_payload=output_payload,
+        error_message=error_message,
+    )
 
     metadata = {
         **_loads_json(assistant_message.get("metadata_json")),
         "runtime_run_id": run_id,
         "runtime_step_id": step_id,
+        "runtime_plan_id": plan_result["plan_id"],
+        "runtime_plan_step_id": plan_result["plan_step_id"],
         "runtime_status": "failed",
         "runtime_error": error_message,
         "recovery_plan": recovery_plan or [],
@@ -250,4 +359,4 @@ def record_failed_runtime_trace(
     assistant_message["run_id"] = run_id
     assistant_message["metadata_json"] = metadata
     db.commit()
-    return {"run_id": run_id, "step_id": step_id}
+    return {"run_id": run_id, "step_id": step_id, **plan_result}

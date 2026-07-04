@@ -113,6 +113,53 @@ def _load_action_run_bundles(db: Session, tenant_id: str, approval_ids: list[str
     return items
 
 
+def _load_agent_run_plans(db: Session, tenant_id: str, run_id: str) -> list[dict]:
+    """加载 Agent Run 关联的执行计划，供 Trace 详情页和后续编排视图复用。"""
+    plan_rows = db.execute(
+        text(
+            """
+            SELECT plan_id, run_id, user_id, plan_type, plan_title, objective_summary,
+                   status, source_intent, planned_at, started_at, finished_at,
+                   metadata_json, created_at, updated_at
+            FROM agent_run_plan
+            WHERE tenant_id = :tenant_id AND run_id = :run_id
+            ORDER BY planned_at ASC, id ASC
+            """
+        ),
+        {"tenant_id": tenant_id, "run_id": run_id},
+    ).mappings().all()
+    if not plan_rows:
+        return []
+
+    plans: list[dict] = []
+    for plan_row in plan_rows:
+        plan = dict(plan_row)
+        plan["metadata_json"] = _loads_json(plan.get("metadata_json"))
+        step_rows = db.execute(
+            text(
+                """
+                SELECT plan_step_id, plan_id, run_id, step_code, step_order, step_title,
+                       step_type, tool_name, depends_on_json, status, input_summary,
+                       output_summary, linked_step_id, error_message, metadata_json,
+                       created_at, updated_at
+                FROM agent_run_plan_step
+                WHERE tenant_id = :tenant_id AND plan_id = :plan_id
+                ORDER BY step_order ASC, id ASC
+                """
+            ),
+            {"tenant_id": tenant_id, "plan_id": plan["plan_id"]},
+        ).mappings().all()
+        steps: list[dict] = []
+        for step_row in step_rows:
+            step = dict(step_row)
+            # 中文注释：依赖关系用 JSON 数组保存，便于后续 DAG 编排直接扩展。
+            step["depends_on_json"] = _loads_json(step.get("depends_on_json"))
+            step["metadata_json"] = _loads_json(step.get("metadata_json"))
+            steps.append(step)
+        plans.append({**plan, "steps": steps})
+    return plans
+
+
 def _collect_action_approval_ids(run_output: object) -> list[str]:
     """中文注释：优先从 Agent Run 输出里提取审批单，减少详情页回查数据库的次数。"""
     if not isinstance(run_output, dict):
@@ -548,6 +595,8 @@ def _append_failed_runtime_trace_reply(
         "reply": reply,
         "run_id": trace_result["run_id"],
         "step_id": trace_result["step_id"],
+        "plan_id": trace_result["plan_id"],
+        "plan_step_id": trace_result["plan_step_id"],
     }
 
 
@@ -728,10 +777,12 @@ def get_agent_run_detail(
         current_user["tenant_id"],
         [approval_id for approval_id in dict.fromkeys(approval_ids) if approval_id],
     )
+    plans = _load_agent_run_plans(db, current_user["tenant_id"], run_id)
 
     return success(
         {
             "run": run_data,
+            "plans": plans,
             "steps": steps,
             "rag_traces": rag_traces,
             "action_runs": action_runs,
@@ -1242,6 +1293,8 @@ def append_agent_chat_user_message(
             **runtime_result,
             "run_id": trace_result["run_id"],
             "step_id": trace_result["step_id"],
+            "plan_id": trace_result["plan_id"],
+            "plan_step_id": trace_result["plan_step_id"],
         }
 
     session = chat_session_service.get_chat_session(

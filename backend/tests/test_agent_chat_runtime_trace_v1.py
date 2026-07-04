@@ -18,6 +18,14 @@ def _cleanup_agent_runtime_trace(tenant_id: str, run_id: str | None):
         return
     with SessionLocal() as db:
         db.execute(
+            text("DELETE FROM agent_run_plan_step WHERE tenant_id = :tenant_id AND run_id = :run_id"),
+            {"tenant_id": tenant_id, "run_id": run_id},
+        )
+        db.execute(
+            text("DELETE FROM agent_run_plan WHERE tenant_id = :tenant_id AND run_id = :run_id"),
+            {"tenant_id": tenant_id, "run_id": run_id},
+        )
+        db.execute(
             text("DELETE FROM agent_step WHERE tenant_id = :tenant_id AND run_id = :run_id"),
             {"tenant_id": tenant_id, "run_id": run_id},
         )
@@ -28,8 +36,74 @@ def _cleanup_agent_runtime_trace(tenant_id: str, run_id: str | None):
         db.commit()
 
 
+def _ensure_agent_runtime_plan_tables_exist():
+    with SessionLocal() as db:
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS agent_run_plan (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  plan_id VARCHAR(64) NOT NULL,
+                  run_id VARCHAR(64) NOT NULL,
+                  user_id VARCHAR(64) NOT NULL,
+                  plan_type VARCHAR(50) NOT NULL DEFAULT 'single_tool',
+                  plan_title VARCHAR(120) NOT NULL,
+                  objective_summary TEXT NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'created',
+                  source_intent VARCHAR(50) NULL,
+                  planned_at DATETIME NOT NULL,
+                  started_at DATETIME NULL,
+                  finished_at DATETIME NULL,
+                  metadata_json JSON NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_plan_id (plan_id),
+                  KEY idx_tenant_run (tenant_id, run_id),
+                  KEY idx_tenant_user_planned (tenant_id, user_id, planned_at),
+                  KEY idx_tenant_status_planned (tenant_id, status, planned_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS agent_run_plan_step (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  plan_step_id VARCHAR(64) NOT NULL,
+                  plan_id VARCHAR(64) NOT NULL,
+                  run_id VARCHAR(64) NOT NULL,
+                  step_code VARCHAR(80) NOT NULL,
+                  step_order INT NOT NULL,
+                  step_title VARCHAR(120) NOT NULL,
+                  step_type VARCHAR(50) NOT NULL DEFAULT 'tool_call',
+                  tool_name VARCHAR(80) NULL,
+                  depends_on_json JSON NULL,
+                  status VARCHAR(30) NOT NULL DEFAULT 'created',
+                  input_summary TEXT NULL,
+                  output_summary TEXT NULL,
+                  linked_step_id VARCHAR(64) NULL,
+                  error_message TEXT NULL,
+                  metadata_json JSON NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_plan_step_id (plan_step_id),
+                  KEY idx_tenant_plan_order (tenant_id, plan_id, step_order),
+                  KEY idx_tenant_run (tenant_id, run_id),
+                  KEY idx_tenant_status (tenant_id, status),
+                  KEY idx_linked_step_id (linked_step_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.commit()
+
+
 def test_unified_agent_chat_runtime_writes_agent_trace(monkeypatch):
     _ensure_agent_chat_tables_exist()
+    _ensure_agent_runtime_plan_tables_exist()
     client = TestClient(app)
     headers, tenant_id, user_id = _build_headers(client)
     customer_id, risk_snapshot_id = _create_risk_chat_customer_fixture(tenant_id, user_id)
@@ -94,8 +168,11 @@ def test_unified_agent_chat_runtime_writes_agent_trace(monkeypatch):
         run_id = data["assistant_message"]["run_id"]
 
         assert data["runtime"]["run_id"] == run_id
+        assert data["runtime"]["plan_id"].startswith("plan_")
+        assert data["runtime"]["plan_step_id"].startswith("pstep_")
         assert data["assistant_message"]["metadata_json"]["runtime_run_id"] == run_id
         assert data["assistant_message"]["metadata_json"]["runtime_step_id"].startswith("step_")
+        assert data["assistant_message"]["metadata_json"]["runtime_plan_id"] == data["runtime"]["plan_id"]
 
         detail_response = client.get(f"/api/agent/runs/{run_id}", headers=headers)
         assert detail_response.status_code == 200
@@ -106,6 +183,10 @@ def test_unified_agent_chat_runtime_writes_agent_trace(monkeypatch):
         assert detail["run"]["status"] == "success"
         assert detail["steps"][0]["node_name"] == "agent_chat_tool"
         assert detail["steps"][0]["tool_name"] == "followup.plan_strategy"
+        assert detail["plans"][0]["plan_id"] == data["runtime"]["plan_id"]
+        assert detail["plans"][0]["status"] == "success"
+        assert detail["plans"][0]["steps"][0]["linked_step_id"] == data["runtime"]["step_id"]
+        assert detail["plans"][0]["steps"][0]["depends_on_json"] == []
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
@@ -114,6 +195,7 @@ def test_unified_agent_chat_runtime_writes_agent_trace(monkeypatch):
 
 def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
     _ensure_agent_chat_tables_exist()
+    _ensure_agent_runtime_plan_tables_exist()
     client = TestClient(app)
     headers, tenant_id, user_id = _build_headers(client)
     customer_id, risk_snapshot_id = _create_risk_chat_customer_fixture(tenant_id, user_id)
@@ -151,6 +233,8 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
 
         assert data["runtime"]["status"] == "failed"
         assert data["runtime"]["run_id"] == run_id
+        assert data["runtime"]["plan_id"].startswith("plan_")
+        assert data["runtime"]["plan_step_id"].startswith("pstep_")
         assert "策略工具模拟失败" in data["runtime"]["error"]
         assert data["runtime"]["recovery_plan"][0]["action"] == "inspect_trace"
         assert data["assistant_message"]["metadata_json"]["runtime_status"] == "failed"
@@ -166,6 +250,9 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         assert detail["run"]["output_json"]["recovery_plan"][0]["action"] == "inspect_trace"
         assert detail["steps"][0]["status"] == "failed"
         assert detail["steps"][0]["tool_name"] == "followup.plan_strategy"
+        assert detail["plans"][0]["status"] == "failed"
+        assert detail["plans"][0]["steps"][0]["status"] == "failed"
+        assert "策略工具模拟失败" in detail["plans"][0]["steps"][0]["error_message"]
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
