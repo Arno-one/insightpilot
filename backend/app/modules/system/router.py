@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.auth.dependencies import require_permission
 from app.modules.system.schemas import UpdateRolePermissionsRequest, UpdateUserRolesRequest
+from app.shared.audit_policy import summarize_audit_policy
 from app.shared.response import success
 
 router = APIRouter()
@@ -250,6 +251,16 @@ def get_team_model(
         "查询成功",
         total=len(users),
     )
+
+
+@router.get("/audit-policy")
+def get_audit_policy(
+    current_user: dict = Depends(require_permission(SYSTEM_RBAC_PERMISSION)),
+):
+    """中文注释：只读输出平台审计策略，后续可替换为数据库配置。"""
+    _ = current_user
+    policy = summarize_audit_policy()
+    return success(policy, "查询成功", total=policy["rule_count"])
 
 
 @router.get("/access-control")
