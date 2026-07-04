@@ -454,8 +454,9 @@ async function fetchAgentRunDetail(runId: string) {
 }
 
 export default function AgentTracePage() {
+  const initialRunId = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("runId") || "";
   const [items, setItems] = useState<AgentRun[]>([]);
-  const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedRunId, setSelectedRunId] = useState(initialRunId);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -474,7 +475,7 @@ export default function AgentTracePage() {
           return;
         }
         setItems(data);
-        setSelectedRunId((current) => current || data[0]?.run_id || "");
+        setSelectedRunId((current) => current || initialRunId || data[0]?.run_id || "");
       } catch (exc) {
         if (!cancelled) {
           setError(exc instanceof Error ? exc.message : "Agent 执行记录加载失败。");

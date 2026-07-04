@@ -34,6 +34,7 @@ const PRIORITY_META: Record<string, Meta> = {
 };
 
 const RUN_TYPE_LABELS: Record<string, string> = {
+  agent_chat_runtime: "统一对话",
   risk_analysis: "风险扫描",
   risk_scan: "风险扫描",
   business_report: "经营日报"

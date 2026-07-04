@@ -42,6 +42,7 @@ type AgentChatMessage = {
   content: string;
   intent: string | null;
   tool_name: string | null;
+  run_id: string | null;
   metadata_json: Record<string, unknown>;
   created_at: string;
 };
@@ -56,6 +57,8 @@ type RuntimeResult = {
   handler: string | null;
   reason?: string;
   reply?: string;
+  run_id?: string;
+  step_id?: string;
 };
 
 type SendMessageResult = {
@@ -139,6 +142,26 @@ function getNL2SQLMeta(item: AgentChatMessage): NL2SQLMessageMeta | null {
     isCached: getBooleanMeta(metadata, "is_cached"),
     error: getStringMeta(metadata, "error"),
   };
+}
+
+function shortRunId(runId: string) {
+  return runId.length > 14 ? `${runId.slice(0, 10)}...${runId.slice(-4)}` : runId;
+}
+
+function getMessageRunId(item: AgentChatMessage) {
+  return item.run_id || getStringMeta(item.metadata_json || {}, "runtime_run_id");
+}
+
+function MessageTraceLink({ item }: { item: AgentChatMessage }) {
+  const runId = getMessageRunId(item);
+  if (!runId) {
+    return null;
+  }
+  return (
+    <Link className={styles.traceLink} href={`/agent-trace?runId=${encodeURIComponent(runId)}`}>
+      Trace {shortRunId(runId)}
+    </Link>
+  );
 }
 
 function MessageBody({ item }: { item: AgentChatMessage }) {
@@ -411,6 +434,7 @@ function AgentChatContent() {
                       <span className={`pill ${item.role === "assistant" ? "tone-success" : "tone-info"}`}>{roleLabel(item.role)}</span>
                       <span className="meta-chip">{intentLabel(item.intent)}</span>
                       <span className="meta-chip">{formatDateTime(item.created_at)}</span>
+                      <MessageTraceLink item={item} />
                     </div>
                     <MessageBody item={item} />
                   </div>
@@ -468,6 +492,11 @@ function AgentChatContent() {
                       : runtime.reason || "当前能力尚未接入运行时。"
                     : "发送消息后这里会展示路由和运行结果。"}
                 </p>
+                {runtime?.run_id ? (
+                  <Link className={styles.runtimeTraceLink} href={`/agent-trace?runId=${encodeURIComponent(runtime.run_id)}`}>
+                    查看本次 Trace
+                  </Link>
+                ) : null}
               </div>
               <div className="summary-item">
                 <strong>能力边界</strong>
