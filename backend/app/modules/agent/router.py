@@ -234,6 +234,37 @@ def _attach_recovery_event_summaries(db: Session, current_user: dict, sessions: 
     return enriched
 
 
+def _list_recovery_event_records(db: Session, current_user: dict, session_id: str, limit: int = 100) -> list[dict]:
+    rows = db.execute(
+        text(
+            """
+            SELECT message_id, session_id, content, run_id, metadata_json, created_at
+            FROM agent_chat_message
+            WHERE tenant_id = :tenant_id
+              AND user_id = :user_id
+              AND session_id = :session_id
+              AND tool_name = 'agent_chat.recovery_event'
+            ORDER BY created_at ASC, id ASC
+            LIMIT :limit
+            """
+        ),
+        {
+            "tenant_id": current_user["tenant_id"],
+            "user_id": current_user["user_id"],
+            "session_id": session_id,
+            "limit": max(1, min(limit, 500)),
+        },
+    ).mappings().all()
+    records: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        metadata = _loads_json(item.get("metadata_json"))
+        item["metadata_json"] = metadata
+        item["recovery_event"] = metadata.get("recovery_event") if isinstance(metadata, dict) else None
+        records.append(item)
+    return records
+
+
 def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
     """从统一会话中提取最近一次数据查询上下文，支持下一轮继续追问。"""
     for index in range(len(messages) - 1, -1, -1):
@@ -732,6 +763,19 @@ def get_agent_chat_session_detail(
         "查询成功",
         total=len(messages),
     )
+
+
+@router.get("/chat/sessions/{session_id}/recovery-events")
+def list_agent_chat_recovery_events(
+    session_id: str,
+    limit: int = 100,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """查询单个统一 Agent 对话会话下的恢复事件历史。"""
+    _load_chat_session_or_404(db, current_user, session_id)
+    records = _list_recovery_event_records(db, current_user, session_id, limit=limit)
+    return success(records, "查询成功", total=len(records))
 
 
 @router.post("/chat/intent")

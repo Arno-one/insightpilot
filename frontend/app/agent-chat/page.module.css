@@ -323,6 +323,57 @@
   gap: 8px;
 }
 
+.drawerHistory {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.drawerHistoryHeader {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drawerHistoryHeader strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.drawerHistoryHeader span,
+.drawerHistoryItem span,
+.drawerEmpty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.drawerHistoryItem {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 200, 87, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(255, 200, 87, 0.06);
+}
+
+.drawerHistoryItem strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.drawerHistoryItem p,
+.drawerEmpty {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.drawerHistoryItem p {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .recoveryPlan {
   display: grid;
   gap: 8px;

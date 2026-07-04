@@ -141,6 +141,15 @@ type RecoveryEventDetail = {
   content?: string;
 };
 
+type RecoveryEventRecord = {
+  message_id: string;
+  session_id: string;
+  content: string;
+  run_id: string | null;
+  recovery_event: RecoveryEvent | null;
+  created_at: string;
+};
+
 type RecoveryEventSummary = {
   total: number;
   failedCount: number;
@@ -373,7 +382,17 @@ function RecoveryEventMessage({
   );
 }
 
-function RecoveryEventDrawer({ detail, onClose }: { detail: RecoveryEventDetail | null; onClose: () => void }) {
+function RecoveryEventDrawer({
+  detail,
+  records,
+  loading,
+  onClose,
+}: {
+  detail: RecoveryEventDetail | null;
+  records: RecoveryEventRecord[];
+  loading: boolean;
+  onClose: () => void;
+}) {
   if (!detail) {
     return null;
   }
@@ -431,6 +450,26 @@ function RecoveryEventDrawer({ detail, onClose }: { detail: RecoveryEventDetail 
               查看新 Trace
             </Link>
           ) : null}
+        </div>
+        <div className={styles.drawerHistory}>
+          <div className={styles.drawerHistoryHeader}>
+            <strong>同会话恢复历史</strong>
+            <span>{loading ? "加载中" : `${records.length} 条`}</span>
+          </div>
+          {records.length ? (
+            records.map((record) => {
+              const recordEvent = record.recovery_event || {};
+              return (
+                <div className={styles.drawerHistoryItem} key={record.message_id}>
+                  <strong>{recordEvent.title || recordEvent.action || "恢复动作"}</strong>
+                  <span>{recoveryEventStatusLabel(recordEvent.status)}</span>
+                  <p>{recordEvent.error || record.content}</p>
+                </div>
+              );
+            })
+          ) : (
+            <p className={styles.drawerEmpty}>{loading ? "正在加载恢复事件历史。" : "当前会话暂无更多恢复事件。"}</p>
+          )}
         </div>
       </aside>
     </div>
@@ -587,6 +626,8 @@ function AgentChatContent() {
   const [runtime, setRuntime] = useState<RuntimeResult | null>(null);
   const [recoveryAction, setRecoveryAction] = useState<RecoveryActionStatus | null>(null);
   const [recoveryEventDetail, setRecoveryEventDetail] = useState<RecoveryEventDetail | null>(null);
+  const [recoveryEventRecords, setRecoveryEventRecords] = useState<RecoveryEventRecord[]>([]);
+  const [recoveryEventsLoading, setRecoveryEventsLoading] = useState(false);
   const [serverRecoveryEventSummary, setServerRecoveryEventSummary] = useState<RecoveryEventSummary | null>(null);
 
   const selectedCustomer = useMemo(
@@ -687,6 +728,24 @@ function AgentChatContent() {
     } catch (exc) {
       setMessage(exc instanceof Error ? `恢复动作已执行，但事件记录失败：${exc.message}` : "恢复动作已执行，但事件记录失败。");
       return null;
+    }
+  }
+
+  async function openRecoveryEventDetail(detail: RecoveryEventDetail) {
+    setRecoveryEventDetail(detail);
+    if (!activeSessionId) {
+      setRecoveryEventRecords([]);
+      return;
+    }
+    setRecoveryEventsLoading(true);
+    try {
+      const response = await apiFetch<RecoveryEventRecord[]>(`/api/agent/chat/sessions/${activeSessionId}/recovery-events?limit=100`);
+      setRecoveryEventRecords(response.data);
+    } catch (exc) {
+      setMessage(exc instanceof Error ? `恢复事件历史加载失败：${exc.message}` : "恢复事件历史加载失败。");
+      setRecoveryEventRecords([]);
+    } finally {
+      setRecoveryEventsLoading(false);
     }
   }
 
@@ -916,7 +975,7 @@ function AgentChatContent() {
                         event={recoveryEvent}
                         item={item}
                         key={item.message_id}
-                        onOpenDetail={setRecoveryEventDetail}
+                        onOpenDetail={openRecoveryEventDetail}
                       />
                     );
                   }
@@ -1055,7 +1114,7 @@ function AgentChatContent() {
                       <button
                         className={styles.inlineDetailButton}
                         type="button"
-                        onClick={() => setRecoveryEventDetail({ event: recoveryEventSummary.lastEvent, source: "运行上下文恢复摘要" })}
+                        onClick={() => openRecoveryEventDetail({ event: recoveryEventSummary.lastEvent, source: "运行上下文恢复摘要" })}
                       >
                         详情
                       </button>
@@ -1076,7 +1135,12 @@ function AgentChatContent() {
           </aside>
         </section>
       )}
-      <RecoveryEventDrawer detail={recoveryEventDetail} onClose={() => setRecoveryEventDetail(null)} />
+      <RecoveryEventDrawer
+        detail={recoveryEventDetail}
+        records={recoveryEventRecords}
+        loading={recoveryEventsLoading}
+        onClose={() => setRecoveryEventDetail(null)}
+      />
     </AppShell>
   );
 }
