@@ -58,3 +58,13 @@ def get_customer_working_memory(
 ):
     data = service.load_customer_working_memory(db, current_user, customer_id=customer_id)
     return success(data, "查询成功")
+
+
+@router.get("/customers/{customer_id}/long-term")
+def get_customer_long_term_memory(
+    customer_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.load_customer_long_term_memory(db, current_user, customer_id=customer_id)
+    return success(data, "查询成功")

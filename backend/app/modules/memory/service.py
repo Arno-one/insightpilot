@@ -393,6 +393,50 @@ def _build_recommended_focus(
     return focus[:5]
 
 
+def _top_values(items: list[dict[str, Any]], key: str, *, limit: int = 3) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = item.get(key)
+        if value in (None, ""):
+            continue
+        counts[str(value)] = counts.get(str(value), 0) + 1
+    return [
+        {"value": value, "count": count}
+        for value, count in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:limit]
+    ]
+
+
+def _last_text_samples(items: list[dict[str, Any]], key: str, *, limit: int = 3) -> list[str]:
+    samples: list[str] = []
+    for item in items:
+        value = item.get(key)
+        if value:
+            samples.append(str(value))
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def _build_long_term_usage_hints(
+    *,
+    preference_state: dict[str, Any],
+    behavior_state: dict[str, Any],
+    long_term_profile: dict[str, Any],
+) -> list[str]:
+    hints: list[str] = []
+    if preference_state.get("preferred_follow_up_type"):
+        hints.append(f"优先使用客户历史高频沟通方式：{preference_state['preferred_follow_up_type']}")
+    if long_term_profile.get("competitor_involved"):
+        hints.append("回复和行动建议需要保留竞品对比、差异化价值与异议处理上下文")
+    if behavior_state.get("risk_level_history"):
+        hints.append("生成建议前先参考历史风险变化，避免只看最近一次快照")
+    if behavior_state.get("task_result_history"):
+        hints.append("创建新任务前先检查历史任务结果，避免重复安排无效动作")
+    if not hints:
+        hints.append("长期记忆样本较少，Agent 应降低确定性表达并优先补充事实")
+    return hints[:5]
+
+
 def load_customer_working_memory(
     db: Session,
     current_user: dict[str, Any],
@@ -512,5 +556,156 @@ def load_customer_working_memory(
             "follow_up_count": len(follow_ups),
             "approval_count": len(approvals),
             "task_count": len(tasks),
+        },
+    }
+
+
+def load_customer_long_term_memory(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    customer_id: str,
+) -> dict[str, Any]:
+    bundle = crm_service.load_customer_detail_bundle(db, current_user, customer_id)
+    customer = bundle["customer"]
+    risks = list(bundle.get("risk_snapshots") or [])
+    deals = list(bundle.get("deals") or [])
+    follow_ups = list(bundle.get("follow_ups") or [])
+    approvals = list(bundle.get("approvals") or [])
+    tasks = list(bundle.get("tasks") or [])
+    report_refs = list(bundle.get("report_refs") or [])
+    latest_memory = _load_latest_customer_memory(
+        db,
+        tenant_id=current_user["tenant_id"],
+        customer_id=customer_id,
+    )
+    summary_json = latest_memory.get("summary_json") or {}
+    memory_profile = summary_json.get("profile") or {}
+    profile_tags = summary_json.get("profile_tags") or {}
+
+    preferred_follow_up_types = _top_values(follow_ups, "follow_up_type")
+    preferred_follow_up_type = preferred_follow_up_types[0]["value"] if preferred_follow_up_types else None
+    sentiment_history = [
+        {
+            "follow_up_id": item.get("follow_up_id"),
+            "sentiment": item.get("sentiment"),
+            "occurred_at": _iso(item.get("occurred_at")),
+        }
+        for item in follow_ups
+        if item.get("sentiment")
+    ]
+    deal_stage_history = [
+        {
+            "deal_id": item.get("deal_id"),
+            "deal_name": item.get("deal_name"),
+            "stage": item.get("stage"),
+            "close_result": item.get("close_result"),
+            "updated_at": _iso(item.get("updated_at")),
+        }
+        for item in deals
+    ]
+    risk_level_history = [
+        {
+            "risk_snapshot_id": item.get("risk_snapshot_id"),
+            "risk_level": item.get("risk_level"),
+            "risk_score": item.get("risk_score"),
+            "created_at": _iso(item.get("created_at")),
+        }
+        for item in risks
+    ]
+    task_result_history = [
+        {
+            "task_id": item.get("task_id"),
+            "title": item.get("title"),
+            "status": item.get("status"),
+            "result_note": item.get("result_note"),
+            "completed_at": _iso(item.get("completed_at")),
+        }
+        for item in tasks
+        if item.get("result_note") or item.get("completed_at") or item.get("status") == "completed"
+    ]
+
+    preference_state = {
+        "industry": customer.get("industry") or memory_profile.get("industry"),
+        "region": customer.get("region") or memory_profile.get("region"),
+        "source": customer.get("source"),
+        "company_size": customer.get("company_size"),
+        "budget_range": {
+            "min": customer.get("budget_min"),
+            "max": customer.get("budget_max"),
+        },
+        "expected_purchase_at": _iso(customer.get("expected_purchase_at")),
+        "decision_maker_status": customer.get("decision_maker_status"),
+        "preferred_follow_up_type": preferred_follow_up_type,
+        "preferred_follow_up_types": preferred_follow_up_types,
+        # 中文注释：保留最近客户原话/反馈样本，方便 Agent 判断长期偏好时有证据可引用。
+        "feedback_samples": _last_text_samples(follow_ups, "customer_feedback"),
+        "next_action_samples": _last_text_samples(follow_ups, "next_action"),
+    }
+    behavior_state = {
+        "follow_up_count": len(follow_ups),
+        "deal_count": len(deals),
+        "risk_snapshot_count": len(risks),
+        "approval_count": len(approvals),
+        "task_count": len(tasks),
+        "report_ref_count": len(report_refs),
+        "sentiment_history": sentiment_history[:5],
+        "deal_stage_history": deal_stage_history[:5],
+        "risk_level_history": risk_level_history[:5],
+        "task_result_history": task_result_history[:5],
+    }
+    long_term_profile = {
+        "customer_id": customer["customer_id"],
+        "customer_name": customer["customer_name"],
+        "owner_user_id": customer["owner_user_id"],
+        "owner_user_name": customer.get("owner_user_name"),
+        "lifecycle_stage": customer.get("lifecycle_stage") or memory_profile.get("lifecycle_stage"),
+        "intent_level": customer.get("intent_level") or memory_profile.get("intent_level"),
+        "customer_level": customer.get("customer_level") or memory_profile.get("customer_level"),
+        "competitor_involved": bool(customer.get("competitor_involved") or memory_profile.get("competitor_involved")),
+        "last_sentiment": customer.get("last_sentiment") or memory_profile.get("last_sentiment"),
+        "last_follow_up_at": _iso(customer.get("last_follow_up_at") or memory_profile.get("last_follow_up_at")),
+        "next_follow_up_at": _iso(customer.get("next_follow_up_at") or memory_profile.get("next_follow_up_at")),
+        "lost_reason": customer.get("lost_reason"),
+        "remark": customer.get("remark"),
+        "profile_tags": profile_tags,
+        "stable_traits": [str(value) for value in profile_tags.values() if value],
+    }
+    memory_state = {
+        "memory_id": latest_memory.get("memory_id"),
+        "summary_text": latest_memory.get("summary_text") or "",
+        "summary_json": summary_json,
+        "source_run_id": latest_memory.get("source_run_id"),
+        "last_compiled_at": _iso(latest_memory.get("last_compiled_at")),
+    }
+    memory_quality = {
+        "has_compiled_memory": bool(latest_memory),
+        "profile_tag_count": len(profile_tags),
+        "behavior_sample_count": len(follow_ups) + len(deals) + len(risks) + len(tasks),
+        "has_feedback_samples": bool(preference_state["feedback_samples"]),
+    }
+
+    return {
+        "source_type": "customer_long_term_memory",
+        "memory_id": f"customer_long_term:{customer_id}",
+        "customer_id": customer_id,
+        "generated_at": datetime.now().isoformat(),
+        "long_term_profile": long_term_profile,
+        "preference_state": preference_state,
+        "behavior_state": behavior_state,
+        "memory_state": memory_state,
+        "memory_quality": memory_quality,
+        "recommended_usage": _build_long_term_usage_hints(
+            preference_state=preference_state,
+            behavior_state=behavior_state,
+            long_term_profile=long_term_profile,
+        ),
+        "raw_refs": {
+            "risk_snapshot_count": len(risks),
+            "deal_count": len(deals),
+            "follow_up_count": len(follow_ups),
+            "approval_count": len(approvals),
+            "task_count": len(tasks),
+            "report_ref_count": len(report_refs),
         },
     }
