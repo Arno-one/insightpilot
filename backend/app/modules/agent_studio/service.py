@@ -387,13 +387,107 @@ def validate_agent_tool_policy(
     }
 
 
+def validate_agent_runtime_config(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str | None = None,
+    agent_code: str | None = None,
+) -> dict[str, Any]:
+    manifest = build_agent_manifest(db, current_user, definition_id=definition_id, agent_code=agent_code)
+    runtime = manifest["runtime"]
+    runtime_type = runtime.get("runtime_type")
+    entrypoint = runtime.get("entrypoint")
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    if runtime_type not in {"chat", "workflow", "tool_agent"}:
+        errors.append(
+            {
+                "code": "runtime_type_invalid",
+                "runtime_type": runtime_type,
+                "message": "Runtime 类型不在平台支持范围内",
+            }
+        )
+
+    if runtime_type in {"workflow", "tool_agent"} and not str(entrypoint or "").strip():
+        errors.append(
+            {
+                "code": "runtime_entrypoint_missing",
+                "runtime_type": runtime_type,
+                "message": "workflow/tool_agent 类型必须配置 entrypoint",
+            }
+        )
+
+    if entrypoint is not None and not isinstance(entrypoint, str):
+        errors.append(
+            {
+                "code": "runtime_entrypoint_invalid",
+                "message": "entrypoint 必须是字符串",
+            }
+        )
+
+    if runtime_type == "chat" and not str(entrypoint or "").strip():
+        warnings.append(
+            {
+                "code": "chat_entrypoint_empty",
+                "message": "chat 类型未配置 entrypoint，将由默认对话 Runtime 承接",
+            }
+        )
+
+    # 中文注释：Runtime Config 校验先覆盖能否执行的关键入口，后续再扩展参数 schema 校验。
+    return {
+        "validation_version": "agent_runtime_config_validation_v1",
+        "valid": not errors,
+        "definition": manifest["definition"],
+        "summary": {
+            "runtime_type": runtime_type,
+            "has_entrypoint": bool(str(entrypoint or "").strip()),
+            "warning_count": len(warnings),
+            "error_count": len(errors),
+        },
+        "errors": errors,
+        "warnings": warnings,
+        "runtime": runtime,
+    }
+
+
+def validate_agent_publish_readiness(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str,
+) -> dict[str, Any]:
+    tool_validation = validate_agent_tool_policy(db, current_user, definition_id=definition_id)
+    runtime_validation = validate_agent_runtime_config(db, current_user, definition_id=definition_id)
+    errors = [*tool_validation["errors"], *runtime_validation["errors"]]
+    warnings = [*tool_validation["warnings"], *runtime_validation["warnings"]]
+    return {
+        "validation_version": "agent_publish_readiness_v1",
+        "valid": not errors,
+        "definition": tool_validation["definition"],
+        "summary": {
+            "tool_error_count": tool_validation["summary"]["error_count"],
+            "runtime_error_count": runtime_validation["summary"]["error_count"],
+            "warning_count": len(warnings),
+            "error_count": len(errors),
+        },
+        "errors": errors,
+        "warnings": warnings,
+        "checks": {
+            "tool_policy": tool_validation,
+            "runtime_config": runtime_validation,
+        },
+    }
+
+
 def publish_agent_definition(
     db: Session,
     current_user: dict[str, Any],
     *,
     definition_id: str,
 ) -> dict[str, Any]:
-    validation = validate_agent_tool_policy(db, current_user, definition_id=definition_id)
+    validation = validate_agent_publish_readiness(db, current_user, definition_id=definition_id)
     if not validation["valid"]:
         return {
             "published": False,
