@@ -5,6 +5,7 @@ from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.modules.llm.usage import estimate_llm_cost, extract_token_usage, record_llm_call
 from app.modules.nl2sql import dao
 from app.modules.nl2sql.prompt_builder import build_messages
 from app.modules.nl2sql.schema_context import build_schema_text, get_tables_with_column
@@ -77,21 +78,53 @@ def create_query_audit(db: Session, current_user: dict, *, session_id: str, ques
     )
 
 
-def generate_sql(question: str, schema_text: str | None = None) -> tuple[str, int]:
+def generate_sql(
+    question: str,
+    schema_text: str | None = None,
+    *,
+    tenant_id: str = "system",
+    user_id: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> tuple[str, int]:
     """使用原生 OpenAI SDK 调 DeepSeek，保持 NL2SQL 与 Agent Runtime 的 LLM 路径隔离。"""
     if not settings.deepseek_api_key:
         return "UNSUPPORTED", 0
 
     started = time.perf_counter()
+    status = "success"
+    error_message = None
     client = OpenAI(api_key=settings.deepseek_api_key, base_url=settings.deepseek_base_url)
-    response = client.chat.completions.create(
-        model=settings.nl2sql_model,
-        max_tokens=500,
-        temperature=0,
-        messages=build_messages(question, schema_text=schema_text),
-    )
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
-    return response.choices[0].message.content or "UNSUPPORTED", elapsed_ms
+    try:
+        response = client.chat.completions.create(
+            model=settings.nl2sql_model,
+            max_tokens=500,
+            temperature=0,
+            messages=build_messages(question, schema_text=schema_text),
+        )
+        usage = extract_token_usage(response)
+        return response.choices[0].message.content or "UNSUPPORTED", int((time.perf_counter() - started) * 1000)
+    except Exception as exc:
+        status = "failed"
+        error_message = str(exc)[:1000]
+        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        raise
+    finally:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        record_llm_call(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source="nl2sql.generate_sql",
+            model=settings.nl2sql_model,
+            status=status,
+            latency_ms=elapsed_ms,
+            estimated_cost=estimate_llm_cost(
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+            ),
+            error_message=error_message,
+            metadata_json=metadata_json,
+            **usage,
+        )
 
 
 def _empty_result() -> dict[str, Any]:
@@ -191,7 +224,19 @@ def query(db_rw: Session, db_readonly: Session, current_user: dict, *, question:
         }
 
     schema_text = build_schema_text()
-    raw_sql, llm_cost_ms = generate_sql(question, schema_text=schema_text)
+    try:
+        raw_sql, llm_cost_ms = generate_sql(
+            question,
+            schema_text=schema_text,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            metadata_json={"session_id": session["session_id"], "query_id": audit["query_id"]},
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+        # 中文注释：兼容旧测试替身或外部扩展仍使用 V1 的 generate_sql(question, schema_text) 签名。
+        raw_sql, llm_cost_ms = generate_sql(question, schema_text=schema_text)
     sql = format_sql(raw_sql)
     valid, error = validate_sql(sql)
     if valid:

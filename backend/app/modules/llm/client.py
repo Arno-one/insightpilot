@@ -1,10 +1,12 @@
 import json
 import logging
+import time
 from typing import Type
 
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
+from app.modules.llm.usage import estimate_llm_cost, extract_token_usage, record_llm_call
 
 logger = logging.getLogger(__name__)
 
@@ -123,18 +125,31 @@ def _strip_code_fence(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def structured_complete(system_prompt: str, user_message: str, schema: Type[BaseModel]) -> BaseModel | None:
+def structured_complete(
+    system_prompt: str,
+    user_message: str,
+    schema: Type[BaseModel],
+    *,
+    tenant_id: str = "system",
+    user_id: str | None = None,
+    source: str | None = None,
+    metadata_json: dict | None = None,
+) -> BaseModel | None:
     """调用 DeepSeek 并校验结构化 JSON；失败返回 None，由业务层降级处理。"""
     if not settings.deepseek_api_key:
         logger.warning("未配置 DEEPSEEK_API_KEY，跳过 LLM 调用")
         return None
 
+    model_name = "deepseek-chat"
+    started = time.perf_counter()
+    log_source = source or schema.__name__
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     try:
         from openai import OpenAI
 
         client = OpenAI(api_key=settings.deepseek_api_key, base_url=settings.deepseek_base_url)
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model=model_name,
             temperature=0.2,
             messages=[
                 {
@@ -148,10 +163,44 @@ def structured_complete(system_prompt: str, user_message: str, schema: Type[Base
                 {"role": "user", "content": user_message},
             ],
         )
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        usage = extract_token_usage(response)
         raw = response.choices[0].message.content or ""
         data = json.loads(_strip_code_fence(raw))
-        return schema.model_validate(data)
+        parsed = schema.model_validate(data)
+        estimated_cost = estimate_llm_cost(
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+        )
+        record_llm_call(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source=log_source,
+            model=model_name,
+            status="success",
+            latency_ms=elapsed_ms,
+            estimated_cost=estimated_cost,
+            metadata_json=metadata_json,
+            **usage,
+        )
+        return parsed
     except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        record_llm_call(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            source=log_source,
+            model=model_name,
+            status="failed",
+            latency_ms=elapsed_ms,
+            estimated_cost=estimate_llm_cost(
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+            ),
+            error_message=str(exc)[:1000],
+            metadata_json=metadata_json,
+            **usage,
+        )
         logger.warning("LLM 结构化调用失败，自动降级: %s", exc)
         return None
 

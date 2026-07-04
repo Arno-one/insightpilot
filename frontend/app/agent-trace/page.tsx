@@ -146,6 +146,35 @@ type ToolFailureMetrics = {
   tools: ToolFailureMetric[];
 };
 
+type LlmUsageGroup = {
+  source: string;
+  model: string;
+  provider: string;
+  call_count: number;
+  failed_count: number;
+  total_tokens: number;
+  avg_latency_ms: number;
+  estimated_cost: number;
+};
+
+type LlmUsageMetrics = {
+  sample_size: number;
+  call_count: number;
+  failed_count: number;
+  total_tokens: number;
+  avg_latency_ms: number;
+  estimated_cost: number;
+  currency: string;
+  latest_failed_call: {
+    call_id: string;
+    source: string;
+    model: string;
+    error_message: string | null;
+    created_at: string | null;
+  } | null;
+  groups: LlmUsageGroup[];
+};
+
 type RunDetail = {
   run: AgentRun & {
     input_json: unknown;
@@ -593,6 +622,11 @@ async function fetchToolFailureMetrics() {
   return response.data;
 }
 
+async function fetchLlmUsageMetrics() {
+  const response = await apiFetch<LlmUsageMetrics>("/api/agent/llm-metrics/usage?limit=1000");
+  return response.data;
+}
+
 export default function AgentTracePage() {
   const initialRunId = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("runId") || "";
   const [items, setItems] = useState<AgentRun[]>([]);
@@ -601,6 +635,7 @@ export default function AgentTracePage() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [toolMetrics, setToolMetrics] = useState<ToolFailureMetrics | null>(null);
+  const [llmMetrics, setLlmMetrics] = useState<LlmUsageMetrics | null>(null);
   const [error, setError] = useState("");
   const [runFilter, setRunFilter] = useState<RunFilter>("all");
   const [retryingActionRunId, setRetryingActionRunId] = useState("");
@@ -618,13 +653,15 @@ export default function AgentTracePage() {
         setItems(data);
         setSelectedRunId((current) => current || initialRunId || data[0]?.run_id || "");
         try {
-          const metrics = await fetchToolFailureMetrics();
+          const [metrics, llmUsage] = await Promise.all([fetchToolFailureMetrics(), fetchLlmUsageMetrics()]);
           if (!cancelled) {
             setToolMetrics(metrics);
+            setLlmMetrics(llmUsage);
           }
         } catch {
           if (!cancelled) {
             setToolMetrics(null);
+            setLlmMetrics(null);
           }
         }
       } catch (exc) {
@@ -738,6 +775,16 @@ export default function AgentTracePage() {
       topFailedTools: failedTools.slice(0, 5),
     };
   }, [toolMetrics]);
+
+  const llmMetricsOverview = useMemo(() => {
+    const groups = llmMetrics?.groups || [];
+    return {
+      topGroups: groups.slice(0, 5),
+      failureRate: llmMetrics?.call_count ? (llmMetrics.failed_count || 0) / llmMetrics.call_count : 0,
+      avgTokensPerCall: llmMetrics?.call_count ? Math.round((llmMetrics.total_tokens || 0) / llmMetrics.call_count) : 0,
+      currency: llmMetrics?.currency || "USD",
+    };
+  }, [llmMetrics]);
 
   const approvalSummary = useMemo(() => {
     if (!detail) {
@@ -881,6 +928,62 @@ export default function AgentTracePage() {
                         {formatDateTime(item.latest_failed_step.created_at)}
                       </p>
                     ) : null}
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="metric-grid">
+            <article className="metric-card">
+              <strong className="metric-value">{llmMetrics?.call_count || 0}</strong>
+              <span className="metric-label">LLM 调用</span>
+              <p className="metric-detail">基于最近 {llmMetrics?.sample_size || 0} 条模型调用日志聚合。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">{(llmMetrics?.total_tokens || 0).toLocaleString()}</strong>
+              <span className="metric-label">Token 总量</span>
+              <p className="metric-detail">单次平均约 {llmMetricsOverview.avgTokensPerCall.toLocaleString()} tokens。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">{formatDuration(llmMetrics?.avg_latency_ms || 0)}</strong>
+              <span className="metric-label">LLM 平均延迟</span>
+              <p className="metric-detail">失败率 {(llmMetricsOverview.failureRate * 100).toFixed(1)}%。</p>
+            </article>
+            <article className="metric-card">
+              <strong className="metric-value">
+                {(llmMetrics?.estimated_cost || 0).toFixed(6)} {llmMetricsOverview.currency}
+              </strong>
+              <span className="metric-label">预估成本</span>
+              <p className="metric-detail">V1 已预留价格口径，当前按默认单价计算。</p>
+            </article>
+          </section>
+
+          {llmMetricsOverview.topGroups.length ? (
+            <section className="command-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">LLM Usage</p>
+                  <h2>模型调用来源</h2>
+                </div>
+                <span className="meta-chip">失败 {llmMetrics?.failed_count || 0} 次</span>
+              </div>
+              <div className={styles.toolMetricGrid}>
+                {llmMetricsOverview.topGroups.map((item) => (
+                  <article className={styles.toolMetricCard} key={`${item.source}-${item.model}`}>
+                    <div className={styles.toolMetricHeader}>
+                      <strong className={styles.wrapText}>{item.source}</strong>
+                      <span className="pill">{item.model}</span>
+                    </div>
+                    <div className="meta-row">
+                      <span className="meta-chip">调用 {item.call_count}</span>
+                      <span className="meta-chip">失败 {item.failed_count}</span>
+                      <span className="meta-chip">Token {item.total_tokens.toLocaleString()}</span>
+                      <span className="meta-chip">均延迟 {formatDuration(item.avg_latency_ms)}</span>
+                    </div>
+                    <p className={`panel-copy ${styles.wrapText}`}>
+                      预估成本 {item.estimated_cost.toFixed(6)} {llmMetricsOverview.currency}
+                    </p>
                   </article>
                 ))}
               </div>

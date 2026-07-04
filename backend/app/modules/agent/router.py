@@ -414,6 +414,91 @@ def _build_tool_failure_metrics(db: Session, tenant_id: str, limit: int = 1000) 
     }
 
 
+def _build_llm_usage_metrics(db: Session, tenant_id: str, limit: int = 1000) -> dict:
+    """中文注释：基于 llm_call_log 聚合 LLM token、耗时和成本，先服务 Observability V1。"""
+    safe_limit = max(1, min(int(limit or 1000), 5000))
+    rows = db.execute(
+        text(
+            """
+            SELECT call_id, user_id, source, provider, model, status, prompt_tokens,
+                   completion_tokens, total_tokens, latency_ms, estimated_cost,
+                   currency, error_message, created_at
+            FROM llm_call_log
+            WHERE tenant_id = :tenant_id
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        {"tenant_id": tenant_id, "limit": safe_limit},
+    ).mappings().all()
+
+    total_tokens = 0
+    total_latency_ms = 0
+    failed_count = 0
+    total_estimated_cost = 0.0
+    latest_failed_call = None
+    groups_by_key: dict[tuple[str, str], dict] = {}
+
+    for row in rows:
+        token_count = int(row["total_tokens"] or 0)
+        latency_ms = int(row["latency_ms"] or 0)
+        estimated_cost = float(row["estimated_cost"] or 0)
+        total_tokens += token_count
+        total_latency_ms += latency_ms
+        total_estimated_cost += estimated_cost
+        if row["status"] == "failed":
+            failed_count += 1
+            if latest_failed_call is None:
+                latest_failed_call = {
+                    "call_id": row["call_id"],
+                    "source": row["source"],
+                    "model": row["model"],
+                    "error_message": row["error_message"],
+                    "created_at": row["created_at"],
+                }
+
+        group_key = (row["source"], row["model"])
+        group = groups_by_key.setdefault(
+            group_key,
+            {
+                "source": row["source"],
+                "model": row["model"],
+                "provider": row["provider"],
+                "call_count": 0,
+                "failed_count": 0,
+                "total_tokens": 0,
+                "avg_latency_ms": 0,
+                "estimated_cost": 0.0,
+                "_latency_sum": 0,
+            },
+        )
+        group["call_count"] += 1
+        group["failed_count"] += 1 if row["status"] == "failed" else 0
+        group["total_tokens"] += token_count
+        group["_latency_sum"] += latency_ms
+        group["estimated_cost"] += estimated_cost
+
+    groups: list[dict] = []
+    for group in groups_by_key.values():
+        latency_sum = group.pop("_latency_sum")
+        group["avg_latency_ms"] = round(latency_sum / group["call_count"], 2) if group["call_count"] else 0
+        group["estimated_cost"] = round(group["estimated_cost"], 6)
+        groups.append(group)
+
+    groups.sort(key=lambda item: (item["total_tokens"], item["call_count"]), reverse=True)
+    return {
+        "sample_size": len(rows),
+        "call_count": len(rows),
+        "failed_count": failed_count,
+        "total_tokens": total_tokens,
+        "avg_latency_ms": round(total_latency_ms / len(rows), 2) if rows else 0,
+        "estimated_cost": round(total_estimated_cost, 6),
+        "currency": rows[0]["currency"] if rows else "USD",
+        "latest_failed_call": latest_failed_call,
+        "groups": groups,
+    }
+
+
 def _collect_action_approval_ids(run_output: object) -> list[str]:
     """中文注释：优先从 Agent Run 输出里提取审批单，减少详情页回查数据库的次数。"""
     if not isinstance(run_output, dict):
@@ -943,6 +1028,17 @@ def get_agent_tool_failure_metrics(
     """查询工具失败率、成功数和平均耗时，供 Observability 指标卡使用。"""
     metrics = _build_tool_failure_metrics(db, current_user["tenant_id"], limit=limit)
     return success(metrics, "查询成功", total=metrics["tool_count"])
+
+
+@router.get("/llm-metrics/usage")
+def get_agent_llm_usage_metrics(
+    limit: int = 1000,
+    current_user: dict = Depends(require_permission("agent:log:read")),
+    db: Session = Depends(get_db),
+):
+    """查询 LLM token、模型、耗时和预估成本，供 Observability 指标卡使用。"""
+    metrics = _build_llm_usage_metrics(db, current_user["tenant_id"], limit=limit)
+    return success(metrics, "查询成功", total=metrics["call_count"])
 
 
 @router.get("/runs/{run_id}")
