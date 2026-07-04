@@ -252,3 +252,17 @@ def publish_agent_definition(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     message = "Agent Definition 已发布" if item["published"] else "Agent Definition 发布被门禁阻断"
     return success(item, message)
+
+
+@router.post("/definitions/{definition_id}/rollback")
+def rollback_agent_definition(
+    definition_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.rollback_agent_definition(db, current_user, definition_id=definition_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    message = "Agent Definition 已回滚发布" if item["rolled_back"] else "Agent Definition 回滚被门禁阻断"
+    return success(item, message)

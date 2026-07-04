@@ -615,6 +615,49 @@ def publish_agent_definition(
     }
 
 
+def rollback_agent_definition(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str,
+) -> dict[str, Any]:
+    validation = validate_agent_publish_readiness(db, current_user, definition_id=definition_id)
+    if not validation["valid"]:
+        audit = create_agent_publish_audit(
+            db,
+            current_user,
+            definition=validation["definition"],
+            published=False,
+            validation=validation,
+            message="Agent Definition 回滚被门禁阻断",
+        )
+        return {
+            "rolled_back": False,
+            "definition": validation["definition"],
+            "validation": validation,
+            "publish_audit": audit,
+            "message": "Agent Definition 回滚被门禁阻断",
+        }
+
+    # 中文注释：回滚本质是把历史版本重新发布为 active，仍复用单 active 版本约束。
+    rolled_back = update_agent_definition_status(db, current_user, definition_id=definition_id, status="active")
+    audit = create_agent_publish_audit(
+        db,
+        current_user,
+        definition=rolled_back,
+        published=True,
+        validation=validation,
+        message="Agent Definition 已回滚发布",
+    )
+    return {
+        "rolled_back": True,
+        "definition": rolled_back,
+        "validation": validation,
+        "publish_audit": audit,
+        "message": "Agent Definition 已回滚发布",
+    }
+
+
 def create_agent_publish_audit(
     db: Session,
     current_user: dict[str, Any],
