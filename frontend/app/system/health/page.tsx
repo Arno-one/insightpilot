@@ -344,6 +344,54 @@ export default function SystemHealthPage() {
               </div>
             </div>
 
+            <div className="health-section-overview">
+              <button
+                className={`health-section-card ${activeTab === "hardening" ? "is-active" : ""} ${statusTone(data.hardening.overall_status)}`}
+                onClick={() => setActiveTab("hardening")}
+                type="button"
+              >
+                <span>硬化报告</span>
+                <strong>{formatStatus(data.hardening.overall_status)}</strong>
+                <small>{data.hardening.control_count} 项控制</small>
+              </button>
+              <button
+                className={`health-section-card ${activeTab === "deployment" ? "is-active" : ""} ${data.readiness.blocking_count ? "tone-danger" : data.readiness.warning_count ? "tone-warning" : "tone-success"}`}
+                onClick={() => setActiveTab("deployment")}
+                type="button"
+              >
+                <span>部署就绪</span>
+                <strong>{data.readiness.blocking_count} 阻断 / {data.readiness.warning_count} 提醒</strong>
+                <small>{data.readiness.readiness_version}</small>
+              </button>
+              <button
+                className={`health-section-card ${activeTab === "backup" ? "is-active" : ""} ${data.backup.check_counts.fail ? "tone-danger" : data.backup.check_counts.warn ? "tone-warning" : "tone-success"}`}
+                onClick={() => setActiveTab("backup")}
+                type="button"
+              >
+                <span>备份恢复</span>
+                <strong>{data.backup.domain_count} 域 / {data.backup.table_count} 表</strong>
+                <small>{data.backup.plan_version}</small>
+              </button>
+              <button
+                className={`health-section-card ${activeTab === "release" ? "is-active" : ""} ${data.releaseGate.can_release_to_production ? "tone-success" : data.releaseGate.can_release_to_pilot ? "tone-warning" : "tone-danger"}`}
+                onClick={() => setActiveTab("release")}
+                type="button"
+              >
+                <span>发布门禁</span>
+                <strong>{data.releaseGate.release_decision}</strong>
+                <small>{data.releaseGate.severity_counts.blocker || 0} blocker</small>
+              </button>
+              <button
+                className={`health-section-card ${activeTab === "smoke" ? "is-active" : ""} tone-info`}
+                onClick={() => setActiveTab("smoke")}
+                type="button"
+              >
+                <span>冒烟计划</span>
+                <strong>{data.smokePlan.step_count} 项</strong>
+                <small>P0 {data.smokePlan.priority_counts.p0 || 0} / P1 {data.smokePlan.priority_counts.p1 || 0}</small>
+              </button>
+            </div>
+
             {activeTab === "hardening" ? (
               <div className="health-control-grid">
                 {data.hardening.controls.map((control) => (
