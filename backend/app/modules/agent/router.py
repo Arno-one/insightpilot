@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db, get_readonly_db
 from app.modules.agent import (
     chat_session_service,
+    chat_runtime_trace_service,
     conversation_memory_service,
     customer_profile_tool,
     data_analyst_tool,
@@ -907,6 +908,23 @@ def append_agent_chat_user_message(
             "handled": False,
             "handler": "risk_agent",
             "reason": "风险分析需要会话先关联客户",
+        }
+
+    if assistant_message and runtime_result.get("handled"):
+        trace_result = chat_runtime_trace_service.record_successful_runtime_trace(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            user_message=message,
+            assistant_message=assistant_message,
+            intent_route=route_result.model_dump(),
+            runtime_result=runtime_result,
+        )
+        runtime_result = {
+            **runtime_result,
+            "run_id": trace_result["run_id"],
+            "step_id": trace_result["step_id"],
         }
 
     session = chat_session_service.get_chat_session(
