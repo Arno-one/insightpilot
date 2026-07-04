@@ -170,3 +170,55 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
         _cleanup_risk_chat_customer_fixture(tenant_id, customer_id, risk_snapshot_id)
+
+
+def test_agent_chat_recovery_event_is_persisted_as_system_message():
+    _ensure_agent_chat_tables_exist()
+    client = TestClient(app)
+    headers, tenant_id, _user_id = _build_headers(client)
+    session_ids: list[str] = []
+
+    try:
+        create_response = client.post(
+            "/api/agent/chat/sessions",
+            headers=headers,
+            json={
+                "agent_scope": "general",
+                "intent": "unknown",
+                "title": "recovery event test",
+            },
+        )
+        assert create_response.status_code == 200
+        session_id = create_response.json()["data"]["session_id"]
+        session_ids.append(session_id)
+
+        event_response = client.post(
+            f"/api/agent/chat/sessions/{session_id}/recovery-events",
+            headers=headers,
+            json={
+                "action": "retry",
+                "title": "Retry failed runtime",
+                "status": "succeeded",
+                "source_run_id": "run_failed_demo",
+                "new_run_id": "run_retry_demo",
+                "metadata_json": {"from_test": True},
+            },
+        )
+        assert event_response.status_code == 200
+        event_message = event_response.json()["data"]
+
+        assert event_message["role"] == "system"
+        assert event_message["tool_name"] == "agent_chat.recovery_event"
+        assert event_message["run_id"] == "run_retry_demo"
+        assert event_message["metadata_json"]["runtime_handler"] == "agent_chat.recovery_event"
+        assert event_message["metadata_json"]["recovery_event"]["status"] == "succeeded"
+        assert event_message["metadata_json"]["recovery_event"]["source_run_id"] == "run_failed_demo"
+        assert event_message["metadata_json"]["from_test"] is True
+
+        detail_response = client.get(f"/api/agent/chat/sessions/{session_id}", headers=headers)
+        assert detail_response.status_code == 200
+        messages = detail_response.json()["data"]["messages"]
+        assert messages[-1]["message_id"] == event_message["message_id"]
+        assert messages[-1]["metadata_json"]["recovery_event"]["new_run_id"] == "run_retry_demo"
+    finally:
+        _cleanup_agent_chat_sessions(tenant_id, session_ids)

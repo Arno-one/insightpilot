@@ -114,6 +114,16 @@ type SendMessageOutcome = {
   error: string | null;
 };
 
+type RecoveryActionEventPayload = {
+  action: string;
+  title?: string;
+  status: RecoveryActionStatus["status"];
+  source_run_id?: string;
+  new_run_id?: string;
+  error?: string;
+  metadata_json?: Record<string, unknown>;
+};
+
 function intentLabel(intent: string | null | undefined) {
   const labels: Record<string, string> = {
     risk_analysis: "风险分析",
@@ -371,12 +381,14 @@ function AgentChatContent() {
     [activeSessionId, sessions]
   );
 
-  async function loadSessionDetail(sessionId: string) {
+  async function loadSessionDetail(sessionId: string, options?: { preserveRecoveryAction?: boolean }) {
     const response = await apiFetch<AgentChatDetail>(`/api/agent/chat/sessions/${sessionId}`);
     setActiveSessionId(sessionId);
     setMessages(response.data.messages);
     setRuntime(null);
-    setRecoveryAction(null);
+    if (!options?.preserveRecoveryAction) {
+      setRecoveryAction(null);
+    }
   }
 
   async function loadInitialData() {
@@ -435,6 +447,22 @@ function AgentChatContent() {
     return response.data;
   }
 
+  async function recordRecoveryEvent(payload: RecoveryActionEventPayload) {
+    if (!activeSessionId) {
+      return null;
+    }
+    try {
+      const response = await apiFetch<AgentChatMessage>(`/api/agent/chat/sessions/${activeSessionId}/recovery-events`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      return response.data;
+    } catch (exc) {
+      setMessage(exc instanceof Error ? `恢复动作已执行，但事件记录失败：${exc.message}` : "恢复动作已执行，但事件记录失败。");
+      return null;
+    }
+  }
+
   async function sendMessage(nextContent?: string): Promise<SendMessageOutcome | null> {
     const content = (nextContent ?? draft).trim();
     if (!content) {
@@ -479,15 +507,39 @@ function AgentChatContent() {
       status: "running",
       sourceRunId,
     });
+    await recordRecoveryEvent({
+      action: item.action || "retry",
+      title: item.title || "重新发送",
+      status: "running",
+      source_run_id: sourceRunId || undefined,
+      metadata_json: {
+        trigger: "retry_start",
+      },
+    });
     const outcome = await sendMessage(content);
-    setRecoveryAction({
+    const nextStatus: RecoveryActionStatus = {
       action: "retry",
       title: item.title || "重新发送",
       status: outcome?.data ? "succeeded" : "failed",
       sourceRunId,
       newRunId: outcome?.data?.runtime.run_id,
       error: outcome?.error || undefined,
+    };
+    setRecoveryAction(nextStatus);
+    await recordRecoveryEvent({
+      action: item.action || "retry",
+      title: item.title || "重新发送",
+      status: nextStatus.status,
+      source_run_id: sourceRunId || undefined,
+      new_run_id: nextStatus.newRunId,
+      error: nextStatus.error,
+      metadata_json: {
+        trigger: "retry_finish",
+      },
     });
+    if (activeSessionId) {
+      await loadSessionDetail(activeSessionId, { preserveRecoveryAction: true });
+    }
   }
 
   function recordTraceInspection(item: RecoveryPlanItem, runId: string) {
@@ -496,6 +548,15 @@ function AgentChatContent() {
       title: item.title || "查看 Trace",
       status: "opened",
       sourceRunId: runId,
+    });
+    void recordRecoveryEvent({
+      action: item.action || "inspect_trace",
+      title: item.title || "查看 Trace",
+      status: "opened",
+      source_run_id: runId,
+      metadata_json: {
+        trigger: "inspect_trace",
+      },
     });
   }
 

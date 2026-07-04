@@ -22,6 +22,7 @@ from app.modules.agent import (
 from app.modules.agent.schemas import (
     AgentChatIntentRouteRequest,
     AgentChatMessageCreateRequest,
+    AgentChatRecoveryActionEventRequest,
     AgentChatSessionCreateRequest,
     RiskChatMessageRequest,
 )
@@ -1072,6 +1073,48 @@ def append_agent_chat_user_message(
         },
         "消息已写入统一 Agent 对话",
     )
+
+
+@router.post("/chat/sessions/{session_id}/recovery-events")
+def record_agent_chat_recovery_event(
+    session_id: str,
+    body: AgentChatRecoveryActionEventRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """记录统一 Agent 对话恢复动作事件；V1 复用 system 消息作为轻量审计流。"""
+    _load_chat_session_or_404(db, current_user, session_id)
+    title = body.title or body.action
+    content = f"恢复动作事件：{title}（{body.status}）"
+    if body.error:
+        content = f"{content}；错误：{body.error[:200]}"
+
+    event_payload = {
+        "action": body.action,
+        "title": title,
+        "status": body.status,
+        "source_run_id": body.source_run_id,
+        "new_run_id": body.new_run_id,
+        "error": body.error,
+    }
+    message = chat_session_service.append_chat_message(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+        role="system",
+        content=content,
+        intent="recovery_event",
+        tool_name="agent_chat.recovery_event",
+        run_id=body.new_run_id or body.source_run_id,
+        metadata_json={
+            "runtime_handler": "agent_chat.recovery_event",
+            "recovery_event": event_payload,
+            "source": "agent_chat_page",
+            **(body.metadata_json or {}),
+        },
+    )
+    return success(message, "恢复动作事件已记录")
 
 
 @router.post("/chat/sessions/{session_id}/close")

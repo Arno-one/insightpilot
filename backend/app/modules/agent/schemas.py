@@ -25,5 +25,15 @@ class AgentChatMessageCreateRequest(BaseModel):
     metadata_json: dict | None = None
 
 
+class AgentChatRecoveryActionEventRequest(BaseModel):
+    action: str = Field(..., min_length=1, max_length=80)
+    title: str | None = Field(None, max_length=120)
+    status: Literal["opened", "running", "succeeded", "failed"]
+    source_run_id: str | None = Field(None, max_length=64)
+    new_run_id: str | None = Field(None, max_length=64)
+    error: str | None = Field(None, max_length=1000)
+    metadata_json: dict | None = None
+
+
 class AgentChatIntentRouteRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4000)
