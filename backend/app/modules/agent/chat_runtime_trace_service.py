@@ -33,6 +33,53 @@ def _loads_json(value: Any) -> dict[str, Any]:
     return json.loads(value)
 
 
+def _build_template_plan(handler: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+    """基于已识别 handler 生成稳定模板计划，避免 V1 过早依赖不确定的 LLM Planner 输出。"""
+    intent = (input_payload.get("intent_route") or {}).get("intent") or "unknown"
+    question = input_payload.get("question") or ""
+    templates: dict[str, list[dict[str, Any]]] = {
+        "followup.plan_strategy": [
+            {"step_code": "load_context", "title": "读取客户上下文", "tool_name": "customer.context"},
+            {"step_code": "build_strategy", "title": "生成跟进策略", "tool_name": "followup.plan_strategy"},
+            {"step_code": "summarize_reply", "title": "汇总可读回复", "tool_name": "agent.coordinator"},
+        ],
+        "data.query_sql": [
+            {"step_code": "understand_question", "title": "理解数据问题", "tool_name": "intent_router"},
+            {"step_code": "generate_sql", "title": "生成并校验 SQL", "tool_name": "data.query_sql"},
+            {"step_code": "summarize_result", "title": "汇总查询结果", "tool_name": "agent.coordinator"},
+        ],
+        "data.analyze_business": [
+            {"step_code": "prepare_query", "title": "准备经营分析查询", "tool_name": "data.query_sql"},
+            {"step_code": "analyze_rows", "title": "分析经营数据", "tool_name": "data.analyze_business"},
+            {"step_code": "summarize_insight", "title": "汇总结论和建议", "tool_name": "agent.coordinator"},
+        ],
+    }
+    steps = templates.get(
+        handler,
+        [
+            {"step_code": "understand_task", "title": "理解任务", "tool_name": "intent_router"},
+            {"step_code": "execute_handler", "title": f"调用 {handler}", "tool_name": handler},
+            {"step_code": "summarize_reply", "title": "汇总回复", "tool_name": "agent.coordinator"},
+        ],
+    )
+    planned_steps = [
+        {
+            **step,
+            "step_order": index + 1,
+            "depends_on": [steps[index - 1]["step_code"]] if index else [],
+        }
+        for index, step in enumerate(steps)
+    ]
+    return {
+        "planner": "template_planner_v1",
+        "intent": intent,
+        "handler": handler,
+        "objective": str(question)[:1000],
+        "summary": " -> ".join(step["title"] for step in planned_steps),
+        "steps": planned_steps,
+    }
+
+
 def _build_runtime_step_queue(
     *,
     handler: str,
@@ -51,6 +98,7 @@ def _build_runtime_step_queue(
         "intent_route": input_payload.get("intent_route"),
         "selected_handler": handler,
     }
+    plan = _build_template_plan(handler, input_payload)
     return [
         {
             "step_id": new_id("step"),
@@ -68,13 +116,27 @@ def _build_runtime_step_queue(
         },
         {
             "step_id": new_id("step"),
-            "step_code": "tool_handler",
+            "step_code": "template_planner",
             "step_order": 2,
+            "node_name": "agent_chat_planner",
+            "tool_name": "template_planner_v1",
+            "step_title": "生成结构化执行计划",
+            "step_type": "planner",
+            "depends_on": ["intent_route"],
+            "input_payload": route_output,
+            "output_payload": plan,
+            "status": "success",
+            "error_message": None,
+        },
+        {
+            "step_id": new_id("step"),
+            "step_code": "tool_handler",
+            "step_order": 3,
             "node_name": "agent_chat_tool",
             "tool_name": str(handler)[:80],
             "step_title": f"调用 {handler} 处理统一对话请求"[:120],
             "step_type": "tool_call",
-            "depends_on": ["intent_route"],
+            "depends_on": ["template_planner"],
             "input_payload": input_payload,
             "output_payload": output_payload,
             "status": status,
@@ -250,6 +312,7 @@ def record_successful_runtime_trace(
         status="success",
     )
     step_id = step_records[-1]["step_id"]
+    planner_plan = step_records[1]["output_payload"]
 
     db.execute(
         text(
@@ -302,6 +365,7 @@ def record_successful_runtime_trace(
         "runtime_plan_id": plan_result["plan_id"],
         "runtime_plan_step_id": plan_result["plan_step_id"],
         "runtime_plan_step_ids": plan_result["plan_step_ids"],
+        "runtime_planner": planner_plan,
     }
     db.execute(
         text(
@@ -323,7 +387,7 @@ def record_successful_runtime_trace(
     assistant_message["run_id"] = run_id
     assistant_message["metadata_json"] = metadata
     db.commit()
-    return {"run_id": run_id, "step_id": step_id, "step_ids": step_ids, **plan_result}
+    return {"run_id": run_id, "step_id": step_id, "step_ids": step_ids, "planner": planner_plan, **plan_result}
 
 
 def record_failed_runtime_trace(
@@ -364,6 +428,7 @@ def record_failed_runtime_trace(
         error_message=error_message,
     )
     step_id = step_records[-1]["step_id"]
+    planner_plan = step_records[1]["output_payload"]
 
     db.execute(
         text(
@@ -417,6 +482,7 @@ def record_failed_runtime_trace(
         "runtime_plan_id": plan_result["plan_id"],
         "runtime_plan_step_id": plan_result["plan_step_id"],
         "runtime_plan_step_ids": plan_result["plan_step_ids"],
+        "runtime_planner": planner_plan,
         "runtime_status": "failed",
         "runtime_error": error_message,
         "recovery_plan": recovery_plan or [],
@@ -441,4 +507,4 @@ def record_failed_runtime_trace(
     assistant_message["run_id"] = run_id
     assistant_message["metadata_json"] = metadata
     db.commit()
-    return {"run_id": run_id, "step_id": step_id, "step_ids": step_ids, **plan_result}
+    return {"run_id": run_id, "step_id": step_id, "step_ids": step_ids, "planner": planner_plan, **plan_result}

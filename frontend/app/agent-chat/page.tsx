@@ -255,6 +255,14 @@ function getRecoveryPlan(item: AgentChatMessage): RecoveryPlanItem[] {
   return value.filter((entry): entry is RecoveryPlanItem => typeof entry === "object" && entry !== null);
 }
 
+function getRuntimePlanner(item: AgentChatMessage): Record<string, unknown> | null {
+  const value = item.metadata_json?.runtime_planner;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
 function getRecoveryEvent(item: AgentChatMessage): RecoveryEvent | null {
   const value = item.metadata_json?.recovery_event;
   if (typeof value !== "object" || value === null) {
@@ -505,11 +513,13 @@ function MessageBody({
 }) {
   const nl2sqlMeta = getNL2SQLMeta(item);
   const recoveryPlan = getRecoveryPlan(item);
+  const planner = getRuntimePlanner(item);
   const runId = getMessageRunId(item);
   if (!nl2sqlMeta) {
     return (
       <>
         <p>{item.content}</p>
+        <RuntimePlannerSummary planner={planner} />
         {recoveryPlan.length ? (
           <RecoveryPlanList
             items={recoveryPlan}
@@ -563,6 +573,7 @@ function MessageBody({
           onInspectTrace={onInspectTrace}
         />
       ) : null}
+      <RuntimePlannerSummary planner={planner} />
     </div>
   );
 }
@@ -584,6 +595,28 @@ function RecoveryPlanList({ items, runId, retryContent, sending, onRetry, onInsp
           />
         </div>
       ))}
+    </div>
+  );
+}
+
+function RuntimePlannerSummary({ planner }: { planner: Record<string, unknown> | null }) {
+  if (!planner) {
+    return null;
+  }
+  const steps = Array.isArray(planner.steps) ? planner.steps.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null) : [];
+  return (
+    <div className={styles.runtimePlanner}>
+      <strong>执行计划</strong>
+      <span>{typeof planner.summary === "string" ? planner.summary : "已生成结构化执行计划。"}</span>
+      {steps.length ? (
+        <div className={styles.runtimePlannerSteps}>
+          {steps.map((step, index) => (
+            <em key={`${String(step.step_code || "step")}-${index}`}>
+              {index + 1}. {String(step.title || step.step_code || "计划步骤")}
+            </em>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

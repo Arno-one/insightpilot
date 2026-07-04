@@ -149,6 +149,21 @@ type StepPreviewRecord = Record<string, unknown>;
 type RunFilter = "all" | "failed";
 
 const STEP_META: Record<string, StepMeta> = {
+  agent_chat_intent_route: {
+    stage: "Router",
+    label: "识别对话意图",
+    description: "先解析用户问题和会话上下文，确定后续要交给哪个工具处理。",
+  },
+  agent_chat_planner: {
+    stage: "Planner",
+    label: "生成执行计划",
+    description: "使用稳定模板拆解本次任务，生成可审计的步骤计划。",
+  },
+  agent_chat_tool: {
+    stage: "Executor",
+    label: "执行对话工具",
+    description: "按 Planner 生成的计划调用具体工具，并记录输入输出。",
+  },
   load_crm_data: {
     stage: "Data",
     label: "加载 CRM 数据",
