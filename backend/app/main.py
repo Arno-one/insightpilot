@@ -21,6 +21,7 @@ from app.modules.agent.router import router as agent_router
 from app.modules.notification.router import router as notification_router
 from app.modules.nl2sql.router import router as nl2sql_router
 from app.modules.rag.router import router as rag_router
+from app.modules.evaluation.router import router as evaluation_router
 from app.modules.system.router import router as system_router
 
 
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_router, prefix="/api/agent", tags=["Agent执行追踪"])
     app.include_router(nl2sql_router, prefix="/api/nl2sql", tags=["NL2SQL数据问答"])
     app.include_router(rag_router, prefix="/api/rag", tags=["RAG知识库"])
+    app.include_router(evaluation_router, prefix="/api/evaluation", tags=["Evaluation评测"])
     app.include_router(system_router, prefix="/api/system", tags=["系统管理"])
 
     @app.get("/health")

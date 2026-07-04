@@ -1,0 +1,217 @@
+import json
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.shared.ids import new_id
+
+
+def _dumps(value: Any) -> str:
+    return json.dumps(value if value is not None else {}, ensure_ascii=False, default=str)
+
+
+def _loads(value: Any):
+    if isinstance(value, (dict, list)):
+        return value
+    if not value:
+        return {} if value is None else value
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return value
+
+
+def _row_to_dataset(row) -> dict:
+    item = dict(row)
+    item["metadata_json"] = _loads(item.get("metadata_json")) or {}
+    return item
+
+
+def _row_to_case(row) -> dict:
+    item = dict(row)
+    item["tags"] = _loads(item.pop("tags_json", None)) or []
+    item["metadata_json"] = _loads(item.get("metadata_json")) or {}
+    return item
+
+
+def create_dataset(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    name: str,
+    description: str | None,
+    target_type: str,
+    metadata_json: dict | None = None,
+) -> dict:
+    dataset_id = new_id("evalds")
+    db.execute(
+        text(
+            """
+            INSERT INTO evaluation_dataset (
+              tenant_id, dataset_id, name, description, target_type, metadata_json, created_by_user_id
+            )
+            VALUES (
+              :tenant_id, :dataset_id, :name, :description, :target_type, :metadata_json, :created_by_user_id
+            )
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "dataset_id": dataset_id,
+            "name": name,
+            "description": description,
+            "target_type": target_type,
+            "metadata_json": _dumps(metadata_json),
+            "created_by_user_id": user_id,
+        },
+    )
+    db.commit()
+    return get_dataset(db, tenant_id=tenant_id, dataset_id=dataset_id)
+
+
+def get_dataset(db: Session, *, tenant_id: str, dataset_id: str) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT dataset_id, tenant_id, name, description, target_type, status,
+                   metadata_json, created_by_user_id, created_at, updated_at
+            FROM evaluation_dataset
+            WHERE tenant_id = :tenant_id AND dataset_id = :dataset_id
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "dataset_id": dataset_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError("评测数据集不存在")
+    return _row_to_dataset(row)
+
+
+def list_datasets(db: Session, *, tenant_id: str, target_type: str | None = None, limit: int = 100) -> list[dict]:
+    filters = ["tenant_id = :tenant_id"]
+    params = {"tenant_id": tenant_id, "target_type": target_type, "limit": max(1, min(limit, 500))}
+    if target_type:
+        filters.append("target_type = :target_type")
+    rows = db.execute(
+        text(
+            f"""
+            SELECT dataset_id, tenant_id, name, description, target_type, status,
+                   metadata_json, created_by_user_id, created_at, updated_at
+            FROM evaluation_dataset
+            WHERE {' AND '.join(filters)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).mappings().all()
+    return [_row_to_dataset(row) for row in rows]
+
+
+def create_case(
+    db: Session,
+    *,
+    tenant_id: str,
+    user_id: str,
+    dataset_id: str,
+    title: str,
+    user_input: str,
+    expected_behavior: str,
+    target_type: str,
+    target_name: str,
+    tags: list[str] | None = None,
+    metadata_json: dict | None = None,
+) -> dict:
+    # 中文注释：创建 case 前先校验 dataset 属于当前租户，避免跨租户挂载评测样本。
+    get_dataset(db, tenant_id=tenant_id, dataset_id=dataset_id)
+    case_id = new_id("evalcase")
+    db.execute(
+        text(
+            """
+            INSERT INTO evaluation_case (
+              tenant_id, case_id, dataset_id, title, user_input, expected_behavior,
+              target_type, target_name, tags_json, metadata_json, created_by_user_id
+            )
+            VALUES (
+              :tenant_id, :case_id, :dataset_id, :title, :user_input, :expected_behavior,
+              :target_type, :target_name, :tags_json, :metadata_json, :created_by_user_id
+            )
+            """
+        ),
+        {
+            "tenant_id": tenant_id,
+            "case_id": case_id,
+            "dataset_id": dataset_id,
+            "title": title,
+            "user_input": user_input,
+            "expected_behavior": expected_behavior,
+            "target_type": target_type,
+            "target_name": target_name,
+            "tags_json": json.dumps(tags or [], ensure_ascii=False, default=str),
+            "metadata_json": _dumps(metadata_json),
+            "created_by_user_id": user_id,
+        },
+    )
+    db.commit()
+    return get_case(db, tenant_id=tenant_id, case_id=case_id)
+
+
+def get_case(db: Session, *, tenant_id: str, case_id: str) -> dict:
+    row = db.execute(
+        text(
+            """
+            SELECT case_id, tenant_id, dataset_id, title, user_input, expected_behavior,
+                   target_type, target_name, tags_json, metadata_json, status,
+                   created_by_user_id, created_at, updated_at
+            FROM evaluation_case
+            WHERE tenant_id = :tenant_id AND case_id = :case_id
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "case_id": case_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError("评测样本不存在")
+    return _row_to_case(row)
+
+
+def list_cases(
+    db: Session,
+    *,
+    tenant_id: str,
+    dataset_id: str | None = None,
+    target_type: str | None = None,
+    target_name: str | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    filters = ["tenant_id = :tenant_id"]
+    params = {
+        "tenant_id": tenant_id,
+        "dataset_id": dataset_id,
+        "target_type": target_type,
+        "target_name": target_name,
+        "limit": max(1, min(limit, 500)),
+    }
+    if dataset_id:
+        filters.append("dataset_id = :dataset_id")
+    if target_type:
+        filters.append("target_type = :target_type")
+    if target_name:
+        filters.append("target_name = :target_name")
+    rows = db.execute(
+        text(
+            f"""
+            SELECT case_id, tenant_id, dataset_id, title, user_input, expected_behavior,
+                   target_type, target_name, tags_json, metadata_json, status,
+                   created_by_user_id, created_at, updated_at
+            FROM evaluation_case
+            WHERE {' AND '.join(filters)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        ),
+        params,
+    ).mappings().all()
+    return [_row_to_case(row) for row in rows]
