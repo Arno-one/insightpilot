@@ -356,7 +356,9 @@ def _append_failed_runtime_trace_reply(
 ) -> tuple[dict, dict]:
     """工具异常时写入一条失败助手消息，并同步落 Agent Trace。"""
     error_message = str(exc)[:1000] or "工具运行失败"
-    reply = f"工具运行失败，已记录 Trace 供排查。\n\n错误：{error_message}"
+    recovery_plan = _build_runtime_recovery_plan(handler, resolved_intent, error_message)
+    recovery_lines = "\n".join(f"- {item['title']}：{item['description']}" for item in recovery_plan)
+    reply = f"工具运行失败，已记录 Trace 供排查。\n\n错误：{error_message}\n\n恢复建议\n{recovery_lines}"
     assistant_message = chat_session_service.append_chat_message(
         db,
         tenant_id=current_user["tenant_id"],
@@ -370,6 +372,7 @@ def _append_failed_runtime_trace_reply(
             "runtime_handler": handler,
             "runtime_status": "failed",
             "runtime_error": error_message,
+            "recovery_plan": recovery_plan,
         },
     )
     trace_result = chat_runtime_trace_service.record_failed_runtime_trace(
@@ -382,6 +385,7 @@ def _append_failed_runtime_trace_reply(
         intent_route=route_result.model_dump(),
         handler=handler,
         error_message=error_message,
+        recovery_plan=recovery_plan,
     )
     return assistant_message, {
         "handled": True,
@@ -389,10 +393,59 @@ def _append_failed_runtime_trace_reply(
         "status": "failed",
         "reason": "工具运行失败，已写入 Trace",
         "error": error_message,
+        "recovery_plan": recovery_plan,
         "reply": reply,
         "run_id": trace_result["run_id"],
         "step_id": trace_result["step_id"],
     }
+
+
+def _build_runtime_recovery_plan(handler: str, intent: str, error_message: str) -> list[dict]:
+    """根据失败工具生成可执行恢复建议，避免用户只看到技术报错。"""
+    plan = [
+        {
+            "action": "inspect_trace",
+            "title": "查看 Trace",
+            "description": "打开本次 Trace，确认失败节点、输入上下文和错误信息。",
+        },
+        {
+            "action": "retry",
+            "title": "重试",
+            "description": "如果是临时数据或服务抖动，可在同一会话里重新发送请求。",
+        },
+    ]
+    if intent == intent_router.INTENT_FOLLOW_UP_STRATEGY:
+        plan.append(
+            {
+                "action": "check_customer_context",
+                "title": "补齐客户上下文",
+                "description": "确认会话已关联客户，并检查客户画像、商机、风险和跟进记录是否完整。",
+            }
+        )
+    if intent == intent_router.INTENT_OPPORTUNITY_ANALYSIS:
+        plan.append(
+            {
+                "action": "narrow_scope",
+                "title": "缩小扫描范围",
+                "description": "可先限定客户或负责人，降低商机扫描的数据范围。",
+            }
+        )
+    if "permission" in error_message.lower() or "权限" in error_message:
+        plan.append(
+            {
+                "action": "check_permission",
+                "title": "检查权限",
+                "description": "确认当前账号具备客户读取和对应 Agent 运行权限。",
+            }
+        )
+    plan.append(
+        {
+            "action": "manual_review",
+            "title": "转人工排查",
+            "description": f"保留工具名 {handler} 和 Trace Run ID，交给管理员或开发人员定位。",
+        }
+    )
+    return plan
 
 
 @router.get("/runs")

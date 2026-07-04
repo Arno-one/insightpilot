@@ -151,6 +151,7 @@ def record_failed_runtime_trace(
     intent_route: dict[str, Any],
     handler: str,
     error_message: str,
+    recovery_plan: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """记录统一 Agent Chat 工具失败，保证失败也能进入 Trace 审计链。"""
     run_id = new_id("run")
@@ -168,6 +169,7 @@ def record_failed_runtime_trace(
         "handler": handler,
         "tool_name": assistant_message.get("tool_name"),
         "error": error_message,
+        "recovery_plan": recovery_plan or [],
     }
 
     db.execute(
@@ -226,6 +228,7 @@ def record_failed_runtime_trace(
         "runtime_step_id": step_id,
         "runtime_status": "failed",
         "runtime_error": error_message,
+        "recovery_plan": recovery_plan or [],
     }
     db.execute(
         text(

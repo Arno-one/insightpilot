@@ -152,7 +152,9 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         assert data["runtime"]["status"] == "failed"
         assert data["runtime"]["run_id"] == run_id
         assert "策略工具模拟失败" in data["runtime"]["error"]
+        assert data["runtime"]["recovery_plan"][0]["action"] == "inspect_trace"
         assert data["assistant_message"]["metadata_json"]["runtime_status"] == "failed"
+        assert data["assistant_message"]["metadata_json"]["recovery_plan"]
 
         detail_response = client.get(f"/api/agent/runs/{run_id}", headers=headers)
         assert detail_response.status_code == 200
@@ -161,6 +163,7 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         assert detail["run"]["run_type"] == "agent_chat_runtime"
         assert detail["run"]["status"] == "failed"
         assert "策略工具模拟失败" in detail["run"]["error_message"]
+        assert detail["run"]["output_json"]["recovery_plan"][0]["action"] == "inspect_trace"
         assert detail["steps"][0]["status"] == "failed"
         assert detail["steps"][0]["tool_name"] == "followup.plan_strategy"
     finally:
