@@ -110,3 +110,60 @@ def test_unified_agent_chat_runtime_writes_agent_trace(monkeypatch):
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
         _cleanup_risk_chat_customer_fixture(tenant_id, customer_id, risk_snapshot_id)
+
+
+def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
+    _ensure_agent_chat_tables_exist()
+    client = TestClient(app)
+    headers, tenant_id, user_id = _build_headers(client)
+    customer_id, risk_snapshot_id = _create_risk_chat_customer_fixture(tenant_id, user_id)
+    session_ids: list[str] = []
+    run_id: str | None = None
+
+    def raise_followup_error(*args, **kwargs):
+        raise RuntimeError("策略工具模拟失败")
+
+    monkeypatch.setattr(followup_strategy_tool, "run_followup_strategy_tool", raise_followup_error)
+
+    try:
+        create_response = client.post(
+            "/api/agent/chat/sessions",
+            headers=headers,
+            json={
+                "agent_scope": "customer",
+                "intent": "unknown",
+                "title": "统一对话失败 Trace 测试",
+                "related_customer_id": customer_id,
+            },
+        )
+        assert create_response.status_code == 200
+        session_id = create_response.json()["data"]["session_id"]
+        session_ids.append(session_id)
+
+        message_response = client.post(
+            f"/api/agent/chat/sessions/{session_id}/messages",
+            headers=headers,
+            json={"role": "user", "content": "帮我生成这个客户的跟进策略"},
+        )
+        assert message_response.status_code == 200
+        data = message_response.json()["data"]
+        run_id = data["assistant_message"]["run_id"]
+
+        assert data["runtime"]["status"] == "failed"
+        assert data["runtime"]["run_id"] == run_id
+        assert "策略工具模拟失败" in data["runtime"]["error"]
+        assert data["assistant_message"]["metadata_json"]["runtime_status"] == "failed"
+
+        detail_response = client.get(f"/api/agent/runs/{run_id}", headers=headers)
+        assert detail_response.status_code == 200
+        detail = detail_response.json()["data"]
+
+        assert detail["run"]["run_type"] == "agent_chat_runtime"
+        assert detail["run"]["status"] == "failed"
+        assert "策略工具模拟失败" in detail["run"]["error_message"]
+        assert detail["steps"][0]["status"] == "failed"
+        assert detail["steps"][0]["tool_name"] == "followup.plan_strategy"
+    finally:
+        _cleanup_agent_chat_sessions(tenant_id, session_ids)
+        _cleanup_agent_runtime_trace(tenant_id, run_id)
+        _cleanup_risk_chat_customer_fixture(tenant_id, customer_id, risk_snapshot_id)

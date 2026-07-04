@@ -343,6 +343,58 @@ def _run_risk_agent_chat_reply(db: Session, current_user: dict, customer_id: str
     }
 
 
+def _append_failed_runtime_trace_reply(
+    db: Session,
+    current_user: dict,
+    *,
+    session_id: str,
+    user_message: dict,
+    route_result: intent_router.IntentRouteResult,
+    resolved_intent: str,
+    handler: str,
+    exc: Exception,
+) -> tuple[dict, dict]:
+    """工具异常时写入一条失败助手消息，并同步落 Agent Trace。"""
+    error_message = str(exc)[:1000] or "工具运行失败"
+    reply = f"工具运行失败，已记录 Trace 供排查。\n\n错误：{error_message}"
+    assistant_message = chat_session_service.append_chat_message(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+        role="assistant",
+        content=reply,
+        intent=resolved_intent,
+        tool_name=handler,
+        metadata_json={
+            "runtime_handler": handler,
+            "runtime_status": "failed",
+            "runtime_error": error_message,
+        },
+    )
+    trace_result = chat_runtime_trace_service.record_failed_runtime_trace(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        intent_route=route_result.model_dump(),
+        handler=handler,
+        error_message=error_message,
+    )
+    return assistant_message, {
+        "handled": True,
+        "handler": handler,
+        "status": "failed",
+        "reason": "工具运行失败，已写入 Trace",
+        "error": error_message,
+        "reply": reply,
+        "run_id": trace_result["run_id"],
+        "step_id": trace_result["step_id"],
+    }
+
+
 @router.get("/runs")
 def list_agent_runs(
     current_user: dict = Depends(require_permission("agent:log:read")),
@@ -768,71 +820,95 @@ def append_agent_chat_user_message(
                 "reason": "当前会话没有可提交审批的上一轮建议动作",
             }
     elif resolved_intent == intent_router.INTENT_OPPORTUNITY_ANALYSIS:
-        opportunity_result = opportunity_tool.run_opportunity_scan_tool(
-            db,
-            current_user,
-            question=body.content,
-            customer_id=current_session.get("related_customer_id"),
-        )
-        assistant_message = chat_session_service.append_chat_message(
-            db,
-            tenant_id=current_user["tenant_id"],
-            user_id=current_user["user_id"],
-            session_id=session_id,
-            role="assistant",
-            content=opportunity_result["reply"],
-            intent=resolved_intent,
-            tool_name="opportunity.scan",
-            metadata_json={
-                "runtime_handler": "opportunity.scan",
-                "total": opportunity_result["total"],
-                "quote_timeout_count": opportunity_result["quote_timeout_count"],
-                "heat_change_count": opportunity_result["heat_change_count"],
-                "priority_count": opportunity_result["priority_count"],
-                "recommended_action_count": opportunity_result["recommended_action_count"],
-                "recommended_actions": opportunity_result["recommended_actions"],
+        try:
+            opportunity_result = opportunity_tool.run_opportunity_scan_tool(
+                db,
+                current_user,
+                question=body.content,
+                customer_id=current_session.get("related_customer_id"),
+            )
+            assistant_message = chat_session_service.append_chat_message(
+                db,
+                tenant_id=current_user["tenant_id"],
+                user_id=current_user["user_id"],
+                session_id=session_id,
+                role="assistant",
+                content=opportunity_result["reply"],
+                intent=resolved_intent,
+                tool_name="opportunity.scan",
+                metadata_json={
+                    "runtime_handler": "opportunity.scan",
+                    "total": opportunity_result["total"],
+                    "quote_timeout_count": opportunity_result["quote_timeout_count"],
+                    "heat_change_count": opportunity_result["heat_change_count"],
+                    "priority_count": opportunity_result["priority_count"],
+                    "recommended_action_count": opportunity_result["recommended_action_count"],
+                    "recommended_actions": opportunity_result["recommended_actions"],
+                    "opportunity": opportunity_result["opportunity_result"],
+                    "error": opportunity_result["error"],
+                },
+            )
+            runtime_result = {
+                "handled": True,
+                "handler": "opportunity.scan",
+                "reply": opportunity_result["reply"],
                 "opportunity": opportunity_result["opportunity_result"],
-                "error": opportunity_result["error"],
-            },
-        )
-        runtime_result = {
-            "handled": True,
-            "handler": "opportunity.scan",
-            "reply": opportunity_result["reply"],
-            "opportunity": opportunity_result["opportunity_result"],
-        }
+            }
+        except Exception as exc:
+            assistant_message, runtime_result = _append_failed_runtime_trace_reply(
+                db,
+                current_user,
+                session_id=session_id,
+                user_message=message,
+                route_result=route_result,
+                resolved_intent=resolved_intent,
+                handler="opportunity.scan",
+                exc=exc,
+            )
     elif resolved_intent == intent_router.INTENT_FOLLOW_UP_STRATEGY and current_session.get("related_customer_id"):
-        strategy_result = followup_strategy_tool.run_followup_strategy_tool(
-            db,
-            current_user,
-            customer_id=current_session["related_customer_id"],
-            question=body.content,
-        )
-        assistant_message = chat_session_service.append_chat_message(
-            db,
-            tenant_id=current_user["tenant_id"],
-            user_id=current_user["user_id"],
-            session_id=session_id,
-            role="assistant",
-            content=strategy_result["reply"],
-            intent=resolved_intent,
-            tool_name="followup.plan_strategy",
-            metadata_json={
-                "runtime_handler": "followup.plan_strategy",
-                "customer_id": strategy_result["customer_id"],
-                "strategy_level": strategy_result["strategy_level"],
-                "recommended_action_count": strategy_result["recommended_action_count"],
-                "recommended_actions": strategy_result["recommended_actions"],
+        try:
+            strategy_result = followup_strategy_tool.run_followup_strategy_tool(
+                db,
+                current_user,
+                customer_id=current_session["related_customer_id"],
+                question=body.content,
+            )
+            assistant_message = chat_session_service.append_chat_message(
+                db,
+                tenant_id=current_user["tenant_id"],
+                user_id=current_user["user_id"],
+                session_id=session_id,
+                role="assistant",
+                content=strategy_result["reply"],
+                intent=resolved_intent,
+                tool_name="followup.plan_strategy",
+                metadata_json={
+                    "runtime_handler": "followup.plan_strategy",
+                    "customer_id": strategy_result["customer_id"],
+                    "strategy_level": strategy_result["strategy_level"],
+                    "recommended_action_count": strategy_result["recommended_action_count"],
+                    "recommended_actions": strategy_result["recommended_actions"],
+                    "strategy": strategy_result["strategy_result"],
+                    "error": strategy_result["error"],
+                },
+            )
+            runtime_result = {
+                "handled": True,
+                "handler": "followup.plan_strategy",
+                "reply": strategy_result["reply"],
                 "strategy": strategy_result["strategy_result"],
-                "error": strategy_result["error"],
-            },
-        )
-        runtime_result = {
-            "handled": True,
-            "handler": "followup.plan_strategy",
-            "reply": strategy_result["reply"],
-            "strategy": strategy_result["strategy_result"],
-        }
+            }
+        except Exception as exc:
+            assistant_message, runtime_result = _append_failed_runtime_trace_reply(
+                db,
+                current_user,
+                session_id=session_id,
+                user_message=message,
+                route_result=route_result,
+                resolved_intent=resolved_intent,
+                handler="followup.plan_strategy",
+                exc=exc,
+            )
     elif resolved_intent == intent_router.INTENT_FOLLOW_UP_STRATEGY:
         runtime_result = {
             "handled": False,
@@ -910,7 +986,7 @@ def append_agent_chat_user_message(
             "reason": "风险分析需要会话先关联客户",
         }
 
-    if assistant_message and runtime_result.get("handled"):
+    if assistant_message and runtime_result.get("handled") and runtime_result.get("status") != "failed":
         trace_result = chat_runtime_trace_service.record_successful_runtime_trace(
             db,
             tenant_id=current_user["tenant_id"],

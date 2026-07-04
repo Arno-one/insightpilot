@@ -55,7 +55,9 @@ type AgentChatDetail = {
 type RuntimeResult = {
   handled: boolean;
   handler: string | null;
+  status?: string;
   reason?: string;
+  error?: string;
   reply?: string;
   run_id?: string;
   step_id?: string;
@@ -487,7 +489,9 @@ function AgentChatContent() {
                 <strong>本次运行</strong>
                 <p>
                   {runtime
-                    ? runtime.handled
+                    ? runtime.status === "failed"
+                      ? `运行失败：${runtime.error || runtime.reason || "工具异常"}`
+                      : runtime.handled
                       ? `已由 ${runtime.handler} 处理并写入统一消息。`
                       : runtime.reason || "当前能力尚未接入运行时。"
                     : "发送消息后这里会展示路由和运行结果。"}
