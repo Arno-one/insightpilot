@@ -96,7 +96,22 @@ type RecoveryPlanListProps = {
   runId: string;
   retryContent: string;
   sending: boolean;
-  onRetry: (content: string) => void;
+  onRetry: (content: string, sourceRunId: string, item: RecoveryPlanItem) => void;
+  onInspectTrace: (item: RecoveryPlanItem, runId: string) => void;
+};
+
+type RecoveryActionStatus = {
+  action: string;
+  title: string;
+  status: "opened" | "running" | "succeeded" | "failed";
+  sourceRunId: string;
+  newRunId?: string;
+  error?: string;
+};
+
+type SendMessageOutcome = {
+  data: SendMessageResult | null;
+  error: string | null;
 };
 
 function intentLabel(intent: string | null | undefined) {
@@ -203,11 +218,13 @@ function MessageBody({
   retryContent,
   sending,
   onRetry,
+  onInspectTrace,
 }: {
   item: AgentChatMessage;
   retryContent: string;
   sending: boolean;
-  onRetry: (content: string) => void;
+  onRetry: (content: string, sourceRunId: string, item: RecoveryPlanItem) => void;
+  onInspectTrace: (item: RecoveryPlanItem, runId: string) => void;
 }) {
   const nl2sqlMeta = getNL2SQLMeta(item);
   const recoveryPlan = getRecoveryPlan(item);
@@ -217,7 +234,14 @@ function MessageBody({
       <>
         <p>{item.content}</p>
         {recoveryPlan.length ? (
-          <RecoveryPlanList items={recoveryPlan} runId={runId} retryContent={retryContent} sending={sending} onRetry={onRetry} />
+          <RecoveryPlanList
+            items={recoveryPlan}
+            runId={runId}
+            retryContent={retryContent}
+            sending={sending}
+            onRetry={onRetry}
+            onInspectTrace={onInspectTrace}
+          />
         ) : null}
       </>
     );
@@ -253,20 +277,34 @@ function MessageBody({
         {nl2sqlMeta.sessionId ? <span>Session {nl2sqlMeta.sessionId}</span> : null}
       </div>
       {recoveryPlan.length ? (
-        <RecoveryPlanList items={recoveryPlan} runId={runId} retryContent={retryContent} sending={sending} onRetry={onRetry} />
+        <RecoveryPlanList
+          items={recoveryPlan}
+          runId={runId}
+          retryContent={retryContent}
+          sending={sending}
+          onRetry={onRetry}
+          onInspectTrace={onInspectTrace}
+        />
       ) : null}
     </div>
   );
 }
 
-function RecoveryPlanList({ items, runId, retryContent, sending, onRetry }: RecoveryPlanListProps) {
+function RecoveryPlanList({ items, runId, retryContent, sending, onRetry, onInspectTrace }: RecoveryPlanListProps) {
   return (
     <div className={styles.recoveryPlan}>
       {items.map((item, index) => (
         <div className={styles.recoveryItem} key={`${item.action || "recovery"}-${index}`}>
           <strong>{item.title || item.action || "恢复建议"}</strong>
           <span>{item.description || "请查看 Trace 详情后继续处理。"}</span>
-          <RecoveryPlanAction item={item} runId={runId} retryContent={retryContent} sending={sending} onRetry={onRetry} />
+          <RecoveryPlanAction
+            item={item}
+            runId={runId}
+            retryContent={retryContent}
+            sending={sending}
+            onRetry={onRetry}
+            onInspectTrace={onInspectTrace}
+          />
         </div>
       ))}
     </div>
@@ -279,16 +317,18 @@ function RecoveryPlanAction({
   retryContent,
   sending,
   onRetry,
+  onInspectTrace,
 }: {
   item: RecoveryPlanItem;
   runId: string;
   retryContent: string;
   sending: boolean;
-  onRetry: (content: string) => void;
+  onRetry: (content: string, sourceRunId: string, item: RecoveryPlanItem) => void;
+  onInspectTrace: (item: RecoveryPlanItem, runId: string) => void;
 }) {
   if (item.action === "inspect_trace" && runId) {
     return (
-      <Link className={styles.recoveryAction} href={`/agent-trace?runId=${encodeURIComponent(runId)}`}>
+      <Link className={styles.recoveryAction} href={`/agent-trace?runId=${encodeURIComponent(runId)}`} onClick={() => onInspectTrace(item, runId)}>
         查看 Trace
       </Link>
     );
@@ -296,7 +336,7 @@ function RecoveryPlanAction({
 
   if (item.action === "retry") {
     return (
-      <button className={styles.recoveryAction} type="button" disabled={sending || !retryContent} onClick={() => onRetry(retryContent)}>
+      <button className={styles.recoveryAction} type="button" disabled={sending || !retryContent} onClick={() => onRetry(retryContent, runId, item)}>
         {sending ? "重试中..." : "重新发送"}
       </button>
     );
@@ -320,6 +360,7 @@ function AgentChatContent() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [runtime, setRuntime] = useState<RuntimeResult | null>(null);
+  const [recoveryAction, setRecoveryAction] = useState<RecoveryActionStatus | null>(null);
 
   const selectedCustomer = useMemo(
     () => customers.find((item) => item.customer_id === selectedCustomerId) || null,
@@ -335,6 +376,7 @@ function AgentChatContent() {
     setActiveSessionId(sessionId);
     setMessages(response.data.messages);
     setRuntime(null);
+    setRecoveryAction(null);
   }
 
   async function loadInitialData() {
@@ -389,13 +431,14 @@ function AgentChatContent() {
     await loadSessions(response.data.session_id);
     setMessages([]);
     setRuntime(null);
+    setRecoveryAction(null);
     return response.data;
   }
 
-  async function sendMessage(nextContent?: string) {
+  async function sendMessage(nextContent?: string): Promise<SendMessageOutcome | null> {
     const content = (nextContent ?? draft).trim();
     if (!content) {
-      return;
+      return null;
     }
 
     setSending(true);
@@ -417,17 +460,43 @@ function AgentChatContent() {
       if (!response.data.runtime.handled) {
         setMessage(response.data.runtime.reason || "当前意图已记录，后续版本会接入更多 Agent 能力。");
       }
+      return { data: response.data, error: null };
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : "消息发送失败。");
+      const detail = exc instanceof Error ? exc.message : "消息发送失败。";
+      setError(detail);
+      return { data: null, error: detail };
     } finally {
       setSending(false);
     }
   }
 
-  async function retryMessage(content: string) {
+  async function retryMessage(content: string, sourceRunId: string, item: RecoveryPlanItem) {
     // 恢复建议里的重试动作复用原发送链路，继续走统一 Runtime 和后端审批边界。
     setDraft(content);
-    await sendMessage(content);
+    setRecoveryAction({
+      action: "retry",
+      title: item.title || "重新发送",
+      status: "running",
+      sourceRunId,
+    });
+    const outcome = await sendMessage(content);
+    setRecoveryAction({
+      action: "retry",
+      title: item.title || "重新发送",
+      status: outcome?.data ? "succeeded" : "failed",
+      sourceRunId,
+      newRunId: outcome?.data?.runtime.run_id,
+      error: outcome?.error || undefined,
+    });
+  }
+
+  function recordTraceInspection(item: RecoveryPlanItem, runId: string) {
+    setRecoveryAction({
+      action: item.action || "inspect_trace",
+      title: item.title || "查看 Trace",
+      status: "opened",
+      sourceRunId: runId,
+    });
   }
 
   async function closeSession() {
@@ -549,6 +618,7 @@ function AgentChatContent() {
                       retryContent={getPreviousUserContent(messages, index)}
                       sending={sending}
                       onRetry={retryMessage}
+                      onInspectTrace={recordTraceInspection}
                     />
                   </div>
                 ))
@@ -611,6 +681,32 @@ function AgentChatContent() {
                   <Link className={styles.runtimeTraceLink} href={`/agent-trace?runId=${encodeURIComponent(runtime.run_id)}`}>
                     查看本次 Trace
                   </Link>
+                ) : null}
+                {recoveryAction ? (
+                  <div className={styles.recoveryStatus}>
+                    <strong>{recoveryAction.title}</strong>
+                    <span>
+                      {recoveryAction.status === "opened"
+                        ? "已打开 Trace 查看入口。"
+                        : recoveryAction.status === "running"
+                        ? "正在重新提交上一条用户消息。"
+                        : recoveryAction.status === "succeeded"
+                        ? "重试已提交并生成新的运行结果。"
+                        : `重试失败：${recoveryAction.error || "未知异常"}`}
+                    </span>
+                    <div className={styles.recoveryStatusLinks}>
+                      {recoveryAction.sourceRunId ? (
+                        <Link href={`/agent-trace?runId=${encodeURIComponent(recoveryAction.sourceRunId)}`}>
+                          原 Trace {shortRunId(recoveryAction.sourceRunId)}
+                        </Link>
+                      ) : null}
+                      {recoveryAction.newRunId ? (
+                        <Link href={`/agent-trace?runId=${encodeURIComponent(recoveryAction.newRunId)}`}>
+                          新 Trace {shortRunId(recoveryAction.newRunId)}
+                        </Link>
+                      ) : null}
+                    </div>
+                  </div>
                 ) : null}
               </div>
               <div className="summary-item">
