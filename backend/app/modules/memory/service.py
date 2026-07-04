@@ -1,9 +1,12 @@
+import json
+from datetime import datetime
 from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.modules.agent import chat_session_service, conversation_memory_service
+from app.modules.crm import service as crm_service
 from app.modules.nl2sql import dao as nl2sql_dao
 
 
@@ -13,6 +16,26 @@ SOURCE_TYPES: tuple[ShortTermSource, ...] = ("agent_chat", "risk_chat", "nl2sql"
 
 def _loads_metadata(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _loads_json(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def _standard_session(
@@ -322,4 +345,172 @@ def summarize_short_term_memory(
         "session_count": len(sessions),
         "by_source": by_source,
         "latest_sessions": sessions[:10],
+    }
+
+
+def _load_latest_customer_memory(db: Session, *, tenant_id: str, customer_id: str) -> dict[str, Any]:
+    row = db.execute(
+        text(
+            """
+            SELECT memory_id, customer_id, memory_scope, summary_text, summary_json,
+                   source_run_id, last_compiled_at, updated_at
+            FROM customer_memory
+            WHERE tenant_id = :tenant_id
+              AND customer_id = :customer_id
+              AND memory_scope = 'customer'
+            ORDER BY last_compiled_at DESC, id DESC
+            LIMIT 1
+            """
+        ),
+        {"tenant_id": tenant_id, "customer_id": customer_id},
+    ).mappings().first()
+    if not row:
+        return {}
+    item = dict(row)
+    item["summary_json"] = _loads_json(item.get("summary_json"))
+    return item
+
+
+def _build_recommended_focus(
+    *,
+    risk_state: dict[str, Any],
+    opportunity_state: dict[str, Any],
+    follow_up_state: dict[str, Any],
+    approval_state: dict[str, Any],
+    task_state: dict[str, Any],
+) -> list[str]:
+    focus: list[str] = []
+    if risk_state.get("latest_risk_level") in {"high", "medium"}:
+        focus.append("优先处理当前风险，并核对最新风险建议")
+    if approval_state.get("pending_count"):
+        focus.append("先查看待审批动作，避免重复创建外发或执行任务")
+    if task_state.get("active_count"):
+        focus.append("跟进未完成任务的执行结果")
+    if opportunity_state.get("open_count"):
+        focus.append("结合开放商机阶段推进成交动作")
+    if not follow_up_state.get("latest_follow_up_at"):
+        focus.append("补充最近跟进信息，避免上下文缺口影响 Agent 判断")
+    return focus[:5]
+
+
+def load_customer_working_memory(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    customer_id: str,
+) -> dict[str, Any]:
+    bundle = crm_service.load_customer_detail_bundle(db, current_user, customer_id)
+    customer = bundle["customer"]
+    risks = list(bundle.get("risk_snapshots") or [])
+    deals = list(bundle.get("deals") or [])
+    follow_ups = list(bundle.get("follow_ups") or [])
+    approvals = list(bundle.get("approvals") or [])
+    tasks = list(bundle.get("tasks") or [])
+    latest_memory = _load_latest_customer_memory(
+        db,
+        tenant_id=current_user["tenant_id"],
+        customer_id=customer_id,
+    )
+
+    latest_risk = risks[0] if risks else {}
+    open_deals = [item for item in deals if item.get("close_result") == "open"]
+    latest_deal = deals[0] if deals else {}
+    latest_follow_up = follow_ups[0] if follow_ups else {}
+    pending_approvals = [item for item in approvals if item.get("status") == "pending"]
+    active_tasks = [item for item in tasks if item.get("status") in {"pending", "in_progress"}]
+
+    profile = {
+        "customer_id": customer["customer_id"],
+        "customer_name": customer["customer_name"],
+        "owner_user_id": customer["owner_user_id"],
+        "owner_user_name": customer.get("owner_user_name"),
+        "lifecycle_stage": customer.get("lifecycle_stage"),
+        "intent_level": customer.get("intent_level"),
+        "customer_level": customer.get("customer_level"),
+        "industry": customer.get("industry"),
+        "region": customer.get("region"),
+        "competitor_involved": bool(customer.get("competitor_involved")),
+        "last_sentiment": customer.get("last_sentiment"),
+        "next_follow_up_at": _iso(customer.get("next_follow_up_at")),
+        "last_follow_up_at": _iso(customer.get("last_follow_up_at")),
+    }
+    risk_state = {
+        "latest_risk_snapshot_id": latest_risk.get("risk_snapshot_id"),
+        "latest_risk_level": latest_risk.get("risk_level"),
+        "latest_risk_score": latest_risk.get("risk_score"),
+        "latest_reason": latest_risk.get("llm_reason"),
+        "latest_suggestion": latest_risk.get("llm_suggestion"),
+        "latest_status": latest_risk.get("status"),
+        "recent_count": len(risks),
+    }
+    opportunity_state = {
+        "total_count": len(deals),
+        "open_count": len(open_deals),
+        "latest_deal_id": latest_deal.get("deal_id"),
+        "latest_deal_name": latest_deal.get("deal_name"),
+        "latest_stage": latest_deal.get("stage"),
+        "latest_amount": latest_deal.get("amount"),
+        "latest_quote_amount": latest_deal.get("quote_amount"),
+        "latest_close_result": latest_deal.get("close_result"),
+    }
+    follow_up_state = {
+        "recent_count": len(follow_ups),
+        "latest_follow_up_id": latest_follow_up.get("follow_up_id"),
+        "latest_follow_up_type": latest_follow_up.get("follow_up_type"),
+        "latest_sentiment": latest_follow_up.get("sentiment"),
+        "latest_feedback": latest_follow_up.get("customer_feedback"),
+        "latest_next_action": latest_follow_up.get("next_action"),
+        "latest_follow_up_at": _iso(latest_follow_up.get("occurred_at")),
+        "next_follow_up_at": _iso(latest_follow_up.get("next_follow_up_at") or customer.get("next_follow_up_at")),
+    }
+    approval_state = {
+        "total_count": len(approvals),
+        "pending_count": len(pending_approvals),
+        "latest_approval_id": approvals[0].get("approval_id") if approvals else None,
+        "latest_status": approvals[0].get("status") if approvals else None,
+        "latest_review_comment": approvals[0].get("review_comment") if approvals else None,
+    }
+    task_state = {
+        "total_count": len(tasks),
+        "active_count": len(active_tasks),
+        "latest_task_id": tasks[0].get("task_id") if tasks else None,
+        "latest_task_title": tasks[0].get("title") if tasks else None,
+        "latest_task_status": tasks[0].get("status") if tasks else None,
+        "latest_due_at": _iso(tasks[0].get("due_at")) if tasks else None,
+    }
+    memory_state = {
+        "memory_id": latest_memory.get("memory_id"),
+        "summary_text": latest_memory.get("summary_text") or "",
+        "summary_json": latest_memory.get("summary_json") or {},
+        "source_run_id": latest_memory.get("source_run_id"),
+        "last_compiled_at": _iso(latest_memory.get("last_compiled_at")),
+    }
+    recommended_focus = _build_recommended_focus(
+        risk_state=risk_state,
+        opportunity_state=opportunity_state,
+        follow_up_state=follow_up_state,
+        approval_state=approval_state,
+        task_state=task_state,
+    )
+
+    return {
+        "source_type": "customer_working_memory",
+        "memory_id": f"customer_working:{customer_id}",
+        "customer_id": customer_id,
+        "generated_at": datetime.now().isoformat(),
+        "profile": profile,
+        "risk_state": risk_state,
+        "opportunity_state": opportunity_state,
+        "follow_up_state": follow_up_state,
+        "approval_state": approval_state,
+        "task_state": task_state,
+        "memory_state": memory_state,
+        "recommended_focus": recommended_focus,
+        "raw_refs": {
+            "risk_snapshot_count": len(risks),
+            "deal_count": len(deals),
+            "follow_up_count": len(follow_ups),
+            "approval_count": len(approvals),
+            "task_count": len(tasks),
+        },
     }

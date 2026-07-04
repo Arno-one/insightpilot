@@ -48,3 +48,13 @@ def get_short_term_memory_detail(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return success(data, "查询成功", total=len(data["messages"]))
+
+
+@router.get("/customers/{customer_id}/working")
+def get_customer_working_memory(
+    customer_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.load_customer_working_memory(db, current_user, customer_id=customer_id)
+    return success(data, "查询成功")
