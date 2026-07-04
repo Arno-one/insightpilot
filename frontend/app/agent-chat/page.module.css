@@ -78,6 +78,55 @@
   line-height: 1.8;
 }
 
+.recoveryEventMessage {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 680px);
+  justify-self: center;
+  padding: 10px 12px;
+  border: 1px dashed rgba(255, 200, 87, 0.28);
+  border-radius: var(--radius-md);
+  background: rgba(255, 200, 87, 0.06);
+}
+
+.recoveryEventMessage div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.recoveryEventMessage strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.recoveryEventMessage span,
+.recoveryEventMessage p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.recoveryEventLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recoveryEventLinks a {
+  color: #ffe7a1;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.recoveryEventLinks a:hover {
+  text-decoration: underline;
+}
+
 .traceLink,
 .runtimeTraceLink {
   display: inline-flex;

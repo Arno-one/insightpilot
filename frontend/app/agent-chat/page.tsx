@@ -124,6 +124,15 @@ type RecoveryActionEventPayload = {
   metadata_json?: Record<string, unknown>;
 };
 
+type RecoveryEvent = {
+  action?: string;
+  title?: string;
+  status?: RecoveryActionStatus["status"];
+  source_run_id?: string;
+  new_run_id?: string;
+  error?: string;
+};
+
 function intentLabel(intent: string | null | undefined) {
   const labels: Record<string, string> = {
     risk_analysis: "风险分析",
@@ -201,6 +210,14 @@ function getRecoveryPlan(item: AgentChatMessage): RecoveryPlanItem[] {
   return value.filter((entry): entry is RecoveryPlanItem => typeof entry === "object" && entry !== null);
 }
 
+function getRecoveryEvent(item: AgentChatMessage): RecoveryEvent | null {
+  const value = item.metadata_json?.recovery_event;
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as RecoveryEvent;
+}
+
 function getPreviousUserContent(messages: AgentChatMessage[], currentIndex: number) {
   for (let index = currentIndex - 1; index >= 0; index -= 1) {
     const item = messages[index];
@@ -209,6 +226,22 @@ function getPreviousUserContent(messages: AgentChatMessage[], currentIndex: numb
     }
   }
   return "";
+}
+
+function recoveryEventStatusLabel(status: RecoveryEvent["status"]) {
+  if (status === "opened") {
+    return "已查看";
+  }
+  if (status === "running") {
+    return "执行中";
+  }
+  if (status === "succeeded") {
+    return "已成功";
+  }
+  if (status === "failed") {
+    return "失败";
+  }
+  return "已记录";
 }
 
 function MessageTraceLink({ item }: { item: AgentChatMessage }) {
@@ -220,6 +253,27 @@ function MessageTraceLink({ item }: { item: AgentChatMessage }) {
     <Link className={styles.traceLink} href={`/agent-trace?runId=${encodeURIComponent(runId)}`}>
       Trace {shortRunId(runId)}
     </Link>
+  );
+}
+
+function RecoveryEventMessage({ item, event }: { item: AgentChatMessage; event: RecoveryEvent }) {
+  const title = event.title || event.action || "恢复动作";
+  return (
+    <div className={styles.recoveryEventMessage}>
+      <div>
+        <strong>{title}</strong>
+        <span>{recoveryEventStatusLabel(event.status)}</span>
+      </div>
+      <p>{event.error ? `错误：${event.error}` : item.content}</p>
+      <div className={styles.recoveryEventLinks}>
+        {event.source_run_id ? (
+          <Link href={`/agent-trace?runId=${encodeURIComponent(event.source_run_id)}`}>原 Trace {shortRunId(event.source_run_id)}</Link>
+        ) : null}
+        {event.new_run_id ? (
+          <Link href={`/agent-trace?runId=${encodeURIComponent(event.new_run_id)}`}>新 Trace {shortRunId(event.new_run_id)}</Link>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -661,28 +715,34 @@ function AgentChatContent() {
 
             <div className={styles.messageList}>
               {messages.length ? (
-                messages.map((item, index) => (
-                  <div
-                    className={`${styles.message} ${
-                      item.role === "assistant" ? styles.messageAssistant : item.role === "user" ? styles.messageUser : ""
-                    }`}
-                    key={item.message_id}
-                  >
-                    <div className="meta-row">
-                      <span className={`pill ${item.role === "assistant" ? "tone-success" : "tone-info"}`}>{roleLabel(item.role)}</span>
-                      <span className="meta-chip">{intentLabel(item.intent)}</span>
-                      <span className="meta-chip">{formatDateTime(item.created_at)}</span>
-                      <MessageTraceLink item={item} />
+                messages.map((item, index) => {
+                  const recoveryEvent = getRecoveryEvent(item);
+                  if (recoveryEvent) {
+                    return <RecoveryEventMessage event={recoveryEvent} item={item} key={item.message_id} />;
+                  }
+                  return (
+                    <div
+                      className={`${styles.message} ${
+                        item.role === "assistant" ? styles.messageAssistant : item.role === "user" ? styles.messageUser : ""
+                      }`}
+                      key={item.message_id}
+                    >
+                      <div className="meta-row">
+                        <span className={`pill ${item.role === "assistant" ? "tone-success" : "tone-info"}`}>{roleLabel(item.role)}</span>
+                        <span className="meta-chip">{intentLabel(item.intent)}</span>
+                        <span className="meta-chip">{formatDateTime(item.created_at)}</span>
+                        <MessageTraceLink item={item} />
+                      </div>
+                      <MessageBody
+                        item={item}
+                        retryContent={getPreviousUserContent(messages, index)}
+                        sending={sending}
+                        onRetry={retryMessage}
+                        onInspectTrace={recordTraceInspection}
+                      />
                     </div>
-                    <MessageBody
-                      item={item}
-                      retryContent={getPreviousUserContent(messages, index)}
-                      sending={sending}
-                      onRetry={retryMessage}
-                      onInspectTrace={recordTraceInspection}
-                    />
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className={`${styles.message} ${styles.messageEmpty}`}>
                   <strong>还没有消息</strong>
