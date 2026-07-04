@@ -186,6 +186,54 @@ def _build_recovery_event_summary(messages: list[dict]) -> dict | None:
     }
 
 
+def _attach_recovery_event_summaries(db: Session, current_user: dict, sessions: list[dict]) -> list[dict]:
+    """给会话列表批量补充恢复事件摘要，避免前端进入详情前看不到恢复状态。"""
+    session_ids = [item["session_id"] for item in sessions]
+    if not session_ids:
+        return sessions
+
+    rows = db.execute(
+        text(
+            """
+            SELECT session_id, metadata_json
+            FROM agent_chat_message
+            WHERE tenant_id = :tenant_id
+              AND user_id = :user_id
+              AND session_id IN :session_ids
+              AND tool_name = 'agent_chat.recovery_event'
+            ORDER BY created_at ASC, id ASC
+            """
+        ).bindparams(bindparam("session_ids", expanding=True)),
+        {
+            "tenant_id": current_user["tenant_id"],
+            "user_id": current_user["user_id"],
+            "session_ids": session_ids,
+        },
+    ).mappings().all()
+
+    events_by_session: dict[str, list[dict]] = {session_id: [] for session_id in session_ids}
+    for row in rows:
+        metadata = _loads_json(row.get("metadata_json"))
+        event = metadata.get("recovery_event") if isinstance(metadata, dict) else None
+        if isinstance(event, dict):
+            events_by_session.setdefault(row["session_id"], []).append(event)
+
+    enriched: list[dict] = []
+    for session in sessions:
+        events = events_by_session.get(session["session_id"], [])
+        summary = None
+        if events:
+            summary = {
+                "total": len(events),
+                "failed_count": sum(1 for event in events if event.get("status") == "failed"),
+                "succeeded_count": sum(1 for event in events if event.get("status") == "succeeded"),
+                "running_count": sum(1 for event in events if event.get("status") == "running"),
+                "last_event": events[-1],
+            }
+        enriched.append({**session, "recovery_event_summary": summary})
+    return enriched
+
+
 def _load_latest_data_query_context(messages: list[dict]) -> dict | None:
     """从统一会话中提取最近一次数据查询上下文，支持下一轮继续追问。"""
     for index in range(len(messages) - 1, -1, -1):
@@ -651,6 +699,7 @@ def list_agent_chat_sessions(
         status=status,
         limit=limit,
     )
+    data = _attach_recovery_event_summaries(db, current_user, data)
     return success(data, "查询成功", total=len(data))
 
 

@@ -33,6 +33,7 @@ type AgentChatSession = {
   last_message_at: string | null;
   created_at: string;
   updated_at: string;
+  recovery_event_summary?: ServerRecoveryEventSummary | null;
 };
 
 type AgentChatMessage = {
@@ -259,6 +260,14 @@ function recoveryEventStatusLabel(status: RecoveryEvent["status"]) {
     return "失败";
   }
   return "已记录";
+}
+
+function recoveryEventSessionLabel(summary: ServerRecoveryEventSummary | null | undefined) {
+  if (!summary) {
+    return "";
+  }
+  const status = recoveryEventStatusLabel(summary.last_event?.status);
+  return `恢复${status} · ${summary.total} 条`;
 }
 
 function buildRecoveryEventSummary(messages: AgentChatMessage[]): RecoveryEventSummary | null {
@@ -743,6 +752,15 @@ function AgentChatContent() {
                     <small>
                       {intentLabel(session.intent)} · {session.message_count} 条
                     </small>
+                    {session.recovery_event_summary ? (
+                      <em
+                        className={`${styles.sessionRecovery} ${
+                          session.recovery_event_summary.last_event?.status === "failed" ? styles.sessionRecoveryFailed : ""
+                        }`}
+                      >
+                        {recoveryEventSessionLabel(session.recovery_event_summary)}
+                      </em>
+                    ) : null}
                   </button>
                 ))
               ) : (
