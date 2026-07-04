@@ -32,6 +32,7 @@ from app.modules.auth.dependencies import require_permission
 from app.modules.crm import service as crm_service
 from app.modules.llm.client import generate_risk_chat_reply
 from app.shared.response import success
+from app.shared.runtime_queue import runtime_queue
 
 router = APIRouter()
 
@@ -1145,6 +1146,15 @@ def get_agent_latency_distribution_metrics(
     """查询 Runtime Step 与 LLM 调用耗时分布，供慢节点定位使用。"""
     metrics = _build_latency_distribution_metrics(db, current_user["tenant_id"], limit=limit)
     return success(metrics, "查询成功", total=len(metrics["slow_operations"]))
+
+
+@router.get("/runtime-queue/overview")
+def get_runtime_queue_overview(
+    current_user: dict = Depends(require_permission("agent:log:read")),
+):
+    """中文注释：Runtime Queue V1 只读观测入口，后续可替换为外部队列实现。"""
+    overview = runtime_queue.overview(tenant_id=current_user["tenant_id"])
+    return success(overview, "查询成功", total=overview["task_count"])
 
 
 @router.get("/runs/{run_id}")
