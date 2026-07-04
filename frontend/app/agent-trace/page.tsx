@@ -110,6 +110,17 @@ type RecoveryLink = {
   created_at: string | null;
 };
 
+type TimelineItem = {
+  event_type: "run" | "plan" | "step" | "rag" | "action_run" | "action_step" | "recovery" | string;
+  title: string;
+  status: string | null;
+  occurred_at: string | null;
+  finished_at: string | null;
+  duration_ms: number;
+  ref_id: string | null;
+  metadata: Record<string, unknown>;
+};
+
 type RunDetail = {
   run: AgentRun & {
     input_json: unknown;
@@ -120,6 +131,7 @@ type RunDetail = {
   rag_traces: RagTrace[];
   action_runs: ActionRun[];
   recovery_links: RecoveryLink[];
+  timeline: TimelineItem[];
 };
 
 type ApprovalSummary = {
@@ -281,6 +293,49 @@ function getRecoveryActionLabel(action: string | null | undefined) {
     retry: "整轮重试",
   };
   return labels[action || ""] || action || "恢复动作";
+}
+
+function getTimelineTypeLabel(eventType: string) {
+  const labels: Record<string, string> = {
+    run: "Run",
+    plan: "Plan",
+    step: "Step",
+    rag: "RAG",
+    action_run: "Action",
+    action_step: "Action Step",
+    recovery: "Recovery",
+  };
+  return labels[eventType] || eventType || "Event";
+}
+
+function getTimelineTitle(item: TimelineItem) {
+  if (item.event_type === "step") {
+    return getStepMeta(String(item.metadata?.node_name || item.title)).label;
+  }
+  if (item.event_type === "action_step") {
+    return getActionStepLabel(item.title);
+  }
+  if (item.event_type === "recovery") {
+    return getRecoveryActionLabel(String(item.metadata?.action || item.title));
+  }
+  return item.title;
+}
+
+function getTimelineDescription(item: TimelineItem) {
+  if (item.event_type === "step") {
+    const toolName = item.metadata?.tool_name ? `工具 ${String(item.metadata.tool_name)}` : "无工具";
+    return `${toolName} · ${item.ref_id || "无引用"}`;
+  }
+  if (item.event_type === "plan") {
+    return `计划步骤 ${formatValue(item.metadata?.step_count)} · 意图 ${formatValue(item.metadata?.source_intent)}`;
+  }
+  if (item.event_type === "rag") {
+    return `命中 ${formatValue(item.metadata?.hit_count)} 条 · 策略 ${formatValue(item.metadata?.strategy)}`;
+  }
+  if (item.event_type === "recovery") {
+    return `源 Run ${formatValue(item.metadata?.source_run_id)} · 新 Run ${formatValue(item.metadata?.new_run_id)}`;
+  }
+  return item.ref_id || "无引用 ID";
 }
 
 function getApprovalSummaryFromRunOutput(output: unknown): ApprovalSummary | null {
@@ -916,6 +971,51 @@ export default function AgentTracePage() {
                       <summary>查看 Run 输入与输出</summary>
                       <pre>{prettyJson({ input: detail.run.input_json, output: detail.run.output_json })}</pre>
                     </details>
+                  </article>
+
+                  <article className="command-panel">
+                    <div className="section-heading">
+                      <div>
+                        <p className="eyebrow">Trace Timeline V2</p>
+                        <h2>统一时间线</h2>
+                      </div>
+                      <span className="meta-chip">{detail.timeline.length} 个事件</span>
+                    </div>
+
+                    {!detail.timeline.length ? <p className="muted-text">当前 Run 暂无可展示的时间线事件。</p> : null}
+
+                    {detail.timeline.length ? (
+                      <div className={styles.timelineV2}>
+                        {detail.timeline.map((item, index) => {
+                          const statusMeta = getStatusMeta(item.status || "running");
+                          const title = getTimelineTitle(item);
+
+                          return (
+                            <article className={styles.timelineItem} key={`${item.event_type}-${item.ref_id || index}`}>
+                              <div className={styles.timelineMarker}>
+                                <span>{index + 1}</span>
+                              </div>
+                              <div className={styles.timelineBody}>
+                                <div className={styles.timelineHeader}>
+                                  <div>
+                                    <p className="eyebrow">{getTimelineTypeLabel(item.event_type)}</p>
+                                    <h3>{title}</h3>
+                                  </div>
+                                  <span className={`pill ${statusMeta.toneClass}`}>{statusMeta.label}</span>
+                                </div>
+                                <p className={`panel-copy ${styles.wrapText}`}>{getTimelineDescription(item)}</p>
+                                <div className="meta-row">
+                                  <span className="meta-chip">发生于 {formatDateTime(item.occurred_at)}</span>
+                                  <span className="meta-chip">完成于 {formatDateTime(item.finished_at)}</span>
+                                  <span className="meta-chip">耗时 {formatDuration(item.duration_ms)}</span>
+                                  <span className="meta-chip">引用 {item.ref_id || "无"}</span>
+                                </div>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    ) : null}
                   </article>
 
                   <article className="command-panel">

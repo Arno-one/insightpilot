@@ -191,6 +191,151 @@ def _load_agent_run_recovery_links(db: Session, tenant_id: str, run_id: str) -> 
     return links
 
 
+def _build_agent_run_timeline(
+    *,
+    run_data: dict,
+    steps: list[dict],
+    plans: list[dict],
+    rag_traces: list[dict],
+    action_runs: list[dict],
+    recovery_links: list[dict],
+) -> list[dict]:
+    """中文注释：Trace Timeline V2 只聚合现有数据，不引入新表，保证旧详情结构继续兼容。"""
+    items: list[dict] = []
+    run_id = run_data.get("run_id")
+
+    if run_data.get("started_at"):
+        items.append(
+            {
+                "event_type": "run",
+                "title": "Run 开始",
+                "status": run_data.get("status"),
+                "occurred_at": run_data.get("started_at"),
+                "finished_at": run_data.get("finished_at"),
+                "duration_ms": run_data.get("total_duration_ms") or 0,
+                "ref_id": run_id,
+                "metadata": {
+                    "run_type": run_data.get("run_type"),
+                    "graph_name": run_data.get("graph_name"),
+                },
+            }
+        )
+
+    for plan in plans:
+        items.append(
+            {
+                "event_type": "plan",
+                "title": plan.get("plan_title") or "执行计划",
+                "status": plan.get("status"),
+                "occurred_at": plan.get("planned_at") or plan.get("created_at"),
+                "finished_at": plan.get("finished_at"),
+                "duration_ms": 0,
+                "ref_id": plan.get("plan_id"),
+                "metadata": {
+                    "plan_type": plan.get("plan_type"),
+                    "step_count": len(plan.get("steps") or []),
+                    "source_intent": plan.get("source_intent"),
+                },
+            }
+        )
+
+    for step in steps:
+        items.append(
+            {
+                "event_type": "step",
+                "title": step.get("node_name") or "Agent Step",
+                "status": step.get("status"),
+                "occurred_at": step.get("started_at") or step.get("created_at"),
+                "finished_at": step.get("finished_at"),
+                "duration_ms": step.get("duration_ms") or 0,
+                "ref_id": step.get("step_id"),
+                "metadata": {
+                    "node_name": step.get("node_name"),
+                    "tool_name": step.get("tool_name"),
+                    "error_message": step.get("error_message"),
+                },
+            }
+        )
+
+    for rag_trace in rag_traces:
+        items.append(
+            {
+                "event_type": "rag",
+                "title": "RAG 检索",
+                "status": "success",
+                "occurred_at": rag_trace.get("created_at"),
+                "finished_at": rag_trace.get("created_at"),
+                "duration_ms": rag_trace.get("total_ms") or 0,
+                "ref_id": rag_trace.get("trace_id"),
+                "metadata": {
+                    "strategy": rag_trace.get("strategy"),
+                    "hit_count": rag_trace.get("hit_count"),
+                    "top_k": rag_trace.get("top_k"),
+                },
+            }
+        )
+
+    for action_run in action_runs:
+        items.append(
+            {
+                "event_type": "action_run",
+                "title": action_run.get("chain_code") or "动作链",
+                "status": action_run.get("status"),
+                "occurred_at": action_run.get("created_at"),
+                "finished_at": action_run.get("finished_at"),
+                "duration_ms": 0,
+                "ref_id": action_run.get("action_run_id"),
+                "metadata": {
+                    "approval_id": action_run.get("approval_id"),
+                    "current_step_code": action_run.get("current_step_code"),
+                    "can_retry": action_run.get("can_retry"),
+                },
+            }
+        )
+        for step in action_run.get("steps") or []:
+            items.append(
+                {
+                    "event_type": "action_step",
+                    "title": step.get("step_code") or "动作步骤",
+                    "status": step.get("status"),
+                    "occurred_at": step.get("started_at") or step.get("created_at"),
+                    "finished_at": step.get("finished_at"),
+                    "duration_ms": 0,
+                    "ref_id": step.get("step_run_id"),
+                    "metadata": {
+                        "tool_name": step.get("tool_name"),
+                        "action_run_id": action_run.get("action_run_id"),
+                        "retry_count": step.get("retry_count"),
+                        "error_message": step.get("error_message"),
+                    },
+                }
+            )
+
+    for link in recovery_links:
+        event = link.get("recovery_event") or {}
+        recovery_title = event.get("title") or event.get("action") or "恢复事件"
+        items.append(
+            {
+                "event_type": "recovery",
+                "title": recovery_title,
+                "status": event.get("status") or "opened",
+                "occurred_at": link.get("created_at"),
+                "finished_at": link.get("created_at"),
+                "duration_ms": 0,
+                "ref_id": link.get("message_id"),
+                "metadata": {
+                    "action": event.get("action"),
+                    "source_run_id": event.get("source_run_id"),
+                    "new_run_id": event.get("new_run_id"),
+                    "resume_from_step": event.get("resume_from_step"),
+                    "title": recovery_title,
+                },
+            }
+        )
+
+    return sorted(items, key=lambda item: str(item.get("occurred_at") or ""))
+
+
 def _collect_action_approval_ids(run_output: object) -> list[str]:
     """中文注释：优先从 Agent Run 输出里提取审批单，减少详情页回查数据库的次数。"""
     if not isinstance(run_output, dict):
@@ -818,6 +963,14 @@ def get_agent_run_detail(
     )
     plans = _load_agent_run_plans(db, current_user["tenant_id"], run_id)
     recovery_links = _load_agent_run_recovery_links(db, current_user["tenant_id"], run_id)
+    timeline = _build_agent_run_timeline(
+        run_data=run_data,
+        steps=steps,
+        plans=plans,
+        rag_traces=rag_traces,
+        action_runs=action_runs,
+        recovery_links=recovery_links,
+    )
 
     return success(
         {
@@ -827,6 +980,7 @@ def get_agent_run_detail(
             "rag_traces": rag_traces,
             "action_runs": action_runs,
             "recovery_links": recovery_links,
+            "timeline": timeline,
         },
         "查询成功",
         total=len(steps),

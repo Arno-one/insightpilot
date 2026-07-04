@@ -231,6 +231,68 @@
   font-size: 1rem;
 }
 
+.timelineV2 {
+  position: relative;
+  display: grid;
+  gap: 14px;
+}
+
+.timelineV2::before {
+  content: "";
+  position: absolute;
+  left: 17px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: rgba(14, 116, 144, 0.16);
+}
+
+.timelineItem {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.timelineMarker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgb(14, 116, 144);
+  color: white;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.timelineBody {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.92);
+}
+
+.timelineHeader {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.timelineHeader h3 {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
   .traceToolbar {
     gap: 12px;
@@ -241,6 +303,10 @@
   }
 
   .actionRunStepItem {
+    padding: 12px;
+  }
+
+  .timelineBody {
     padding: 12px;
   }
 }

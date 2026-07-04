@@ -108,6 +108,9 @@ def test_runtime_orchestration_stage_main_chain_regression(monkeypatch):
             "tool_handler",
             "coordinator",
         ]
+        assert [item["event_type"] for item in detail["timeline"]].count("step") == 5
+        assert {"run", "plan", "step"}.issubset({item["event_type"] for item in detail["timeline"]})
+        assert any(item["title"] == "agent_chat_coordinator" for item in detail["timeline"])
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
