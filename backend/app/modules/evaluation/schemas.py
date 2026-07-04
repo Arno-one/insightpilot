@@ -63,3 +63,17 @@ class ToolEvaluationResultCreateRequest(BaseModel):
     failure_reason: str | None = Field(None, max_length=4000)
     elapsed_ms: int = Field(0, ge=0)
     metadata_json: dict | None = None
+
+
+class AgentEvaluationResultCreateRequest(BaseModel):
+    case_id: str = Field(..., min_length=1, max_length=64)
+    agent_type: str = Field(..., min_length=1, max_length=80)
+    agent_name: str = Field(..., min_length=1, max_length=120)
+    run_id: str | None = Field(None, max_length=64)
+    status: Literal["completed", "failed", "partial", "cancelled"]
+    expected_status: Literal["completed", "failed", "partial", "cancelled"] = "completed"
+    completion_score: float = Field(0, ge=0, le=1)
+    failure_reason_category: str | None = Field(None, max_length=80)
+    failure_reason: str | None = Field(None, max_length=4000)
+    elapsed_ms: int = Field(0, ge=0)
+    metadata_json: dict | None = None
