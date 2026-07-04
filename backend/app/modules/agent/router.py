@@ -1403,8 +1403,7 @@ def get_mcp_gateway_registry(
     current_user: dict = Depends(require_permission("crm:customer:read:self")),
 ):
     """中文注释：只读输出 MCP Gateway 注册表，不触发任何工具执行或外发动作。"""
-    _ = current_user
-    registry = build_shared_mcp_gateway().list_server_registry()
+    registry = build_shared_mcp_gateway().list_server_registry(current_user)
     return success(registry, "查询成功", total=registry["server_count"])
 
 

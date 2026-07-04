@@ -32,9 +32,14 @@ class MCPToolDefinition:
     def qualified_name(self) -> str:
         return f"{self.server_name}.{self.tool_name}"
 
-    def to_registry_entry(self, display_name: str) -> dict[str, Any]:
+    def to_registry_entry(self, display_name: str, current_user: dict[str, Any] | None = None) -> dict[str, Any]:
         """中文注释：把工具定义转换为注册表条目，供前端和后续治理能力只读消费。"""
         scope = self.server_name
+        policy = _build_tool_permission_policy(self.qualified_name, self.server_name, self.tool_name)
+        permissions = set((current_user or {}).get("permission_codes") or [])
+        missing_permissions = [
+            permission for permission in policy["required_permissions"] if permission not in permissions
+        ]
         return {
             "name": self.qualified_name,
             "tool_name": self.tool_name,
@@ -45,7 +50,90 @@ class MCPToolDefinition:
             "source": self.source,
             "scope": scope,
             "scopes": [scope],
+            **policy,
+            "available": current_user is None or not missing_permissions,
+            "missing_permissions": missing_permissions if current_user is not None else [],
         }
+
+
+def _build_tool_permission_policy(qualified_name: str, server_name: str, tool_name: str) -> dict[str, Any]:
+    """中文注释：MCP Tool Permission V1 先用稳定规则补齐权限、风险和副作用标签。"""
+    exact_permissions = {
+        "report.query": ["report:read:team"],
+        "report.generate": ["agent:run:business_report"],
+        "task.create_from_approval": ["approval:review:agent_task"],
+        "notify.send_task_assignment": ["approval:review:agent_task"],
+        "mail.send_task_assignment": ["approval:review:agent_task"],
+        "mail.get_delivery_status": ["task:read:team"],
+        "mail.list_failed_deliveries": ["task:read:team"],
+        "mail.retry_failed_delivery": ["task:read:team"],
+        "calendar.create_follow_up_event": ["approval:review:agent_task"],
+    }
+    server_permissions = {
+        "crm": ["crm:customer:read:self"],
+        "profile": ["crm:customer:read:self"],
+        "approval": ["crm:customer:read:self"],
+        "data": ["crm:customer:read:self"],
+        "execution": ["crm:customer:read:self"],
+        "followup": ["crm:customer:read:self"],
+        "manager": ["crm:customer:read:self"],
+        "opportunity": ["crm:customer:read:self"],
+    }
+    side_effect_names = {
+        "approval.create_draft",
+        "execution.propose_actions",
+        "report.generate",
+        "task.create_from_approval",
+        "notify.send_task_assignment",
+        "mail.send_task_assignment",
+        "mail.retry_failed_delivery",
+        "calendar.create_follow_up_event",
+    }
+    approval_required_names = {
+        "approval.create_draft",
+        "execution.propose_actions",
+        "task.create_from_approval",
+        "notify.send_task_assignment",
+        "mail.send_task_assignment",
+        "mail.retry_failed_delivery",
+        "calendar.create_follow_up_event",
+    }
+    high_risk_names = {
+        "approval.create_draft",
+        "execution.propose_actions",
+        "task.create_from_approval",
+        "notify.send_task_assignment",
+        "mail.send_task_assignment",
+        "mail.retry_failed_delivery",
+        "calendar.create_follow_up_event",
+    }
+    medium_risk_servers = {"data", "report", "manager", "opportunity"}
+
+    required_permissions = exact_permissions.get(qualified_name, server_permissions.get(server_name, []))
+    if qualified_name in high_risk_names:
+        risk_level = "high"
+    elif server_name in medium_risk_servers or tool_name.startswith(("query", "analyze", "generate")):
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    return {
+        "permission_policy_version": "mcp_tool_permission_v1",
+        "required_permissions": required_permissions,
+        "risk_level": risk_level,
+        "approval_required": qualified_name in approval_required_names,
+        "side_effect": qualified_name in side_effect_names,
+        "governance_tags": [
+            tag
+            for tag, enabled in {
+                "requires_permission": bool(required_permissions),
+                "requires_approval": qualified_name in approval_required_names,
+                "has_side_effect": qualified_name in side_effect_names,
+                "read_only": qualified_name not in side_effect_names,
+            }.items()
+            if enabled
+        ],
+    }
 
 
 class MCPServerAdapter:
@@ -76,17 +164,23 @@ class MCPServerAdapter:
     def get_tool(self, qualified_name: str) -> MCPToolDefinition | None:
         return self._tools.get(qualified_name)
 
-    def list_tool_specs(self) -> list[dict[str, Any]]:
+    def list_tool_specs(self, current_user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         return [
-            tool.to_registry_entry(self.display_name)
+            tool.to_registry_entry(self.display_name, current_user)
             for tool in self._tools.values()
         ]
 
-    def to_registry_entry(self) -> dict[str, Any]:
+    def to_registry_entry(self, current_user: dict[str, Any] | None = None) -> dict[str, Any]:
         """中文注释：聚合单个 MCP Server 的注册信息，V1 只暴露只读元数据。"""
-        tools = self.list_tool_specs()
+        tools = self.list_tool_specs(current_user)
         scopes = sorted({scope for tool in tools for scope in tool.get("scopes", [])})
         sources = sorted({tool["source"] for tool in tools})
+        risk_order = {"low": 1, "medium": 2, "high": 3}
+        max_risk_level = max(
+            (tool["risk_level"] for tool in tools),
+            key=lambda risk_level: risk_order.get(risk_level, 0),
+            default="low",
+        )
         return {
             "server_name": self.server_name,
             "display_name": self.display_name,
@@ -96,6 +190,10 @@ class MCPServerAdapter:
             "scope": self.server_name,
             "scopes": scopes or [self.server_name],
             "tool_count": len(tools),
+            "available_tool_count": sum(1 for tool in tools if tool["available"]),
+            "max_risk_level": max_risk_level,
+            "approval_required_tool_count": sum(1 for tool in tools if tool["approval_required"]),
+            "side_effect_tool_count": sum(1 for tool in tools if tool["side_effect"]),
             "tools": tools,
         }
 
@@ -118,15 +216,15 @@ class MCPGateway:
             if tool:
                 existing.register(tool)
 
-    def list_tool_specs(self) -> list[dict[str, Any]]:
+    def list_tool_specs(self, current_user: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         specs: list[dict[str, Any]] = []
         for adapter in self._servers.values():
-            specs.extend(adapter.list_tool_specs())
+            specs.extend(adapter.list_tool_specs(current_user))
         return specs
 
-    def list_server_registry(self) -> dict[str, Any]:
+    def list_server_registry(self, current_user: dict[str, Any] | None = None) -> dict[str, Any]:
         """中文注释：输出统一 MCP Gateway 注册表，为权限、审计和健康检查打基础。"""
-        servers = [adapter.to_registry_entry() for adapter in self._servers.values()]
+        servers = [adapter.to_registry_entry(current_user) for adapter in self._servers.values()]
         tools = [tool for server in servers for tool in server["tools"]]
         scope_summary: dict[str, dict[str, Any]] = {}
         for tool in tools:
@@ -138,8 +236,13 @@ class MCPGateway:
 
         return {
             "registry_version": "mcp_gateway_registry_v1",
+            "permission_policy_version": "mcp_tool_permission_v1",
             "server_count": len(servers),
             "tool_count": len(tools),
+            "available_tool_count": sum(1 for tool in tools if tool["available"]),
+            "high_risk_tool_count": sum(1 for tool in tools if tool["risk_level"] == "high"),
+            "approval_required_tool_count": sum(1 for tool in tools if tool["approval_required"]),
+            "side_effect_tool_count": sum(1 for tool in tools if tool["side_effect"]),
             "scope_count": len(scope_summary),
             "servers": servers,
             "tools": tools,
