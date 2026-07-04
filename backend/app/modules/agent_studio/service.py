@@ -318,6 +318,75 @@ def build_agent_manifest(
     }
 
 
+def validate_agent_tool_policy(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    definition_id: str | None = None,
+    agent_code: str | None = None,
+) -> dict[str, Any]:
+    manifest = build_agent_manifest(db, current_user, definition_id=definition_id, agent_code=agent_code)
+    tool_manifest = manifest["tool_manifest"]
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    for tool_name in tool_manifest["missing_tools"]:
+        errors.append(
+            {
+                "code": "tool_not_registered",
+                "tool_name": tool_name,
+                "message": "工具未注册，Agent 运行时无法调用",
+            }
+        )
+
+    denied_tools = set(tool_manifest["denied_tools"])
+    for tool in tool_manifest["blocked_tools"]:
+        tool_name = tool["name"]
+        if tool_name in denied_tools:
+            errors.append(
+                {
+                    "code": "tool_denied_by_policy",
+                    "tool_name": tool_name,
+                    "message": "工具同时出现在允许和禁用策略中",
+                }
+            )
+            continue
+        errors.append(
+            {
+                "code": "tool_permission_missing",
+                "tool_name": tool_name,
+                "required_permissions": tool.get("required_permissions", []),
+                "message": "当前用户缺少工具所需权限",
+            }
+        )
+
+    if not tool_manifest["allowed_tools"]:
+        warnings.append(
+            {
+                "code": "empty_allowed_tools",
+                "message": "当前 Agent 未声明可用工具，运行时只能执行纯对话或后续兼容路径",
+            }
+        )
+
+    # 中文注释：校验结果保持只读，先为发布页和自动化门禁提供依据，不在本轮改变发布行为。
+    return {
+        "validation_version": "agent_tool_policy_validation_v1",
+        "valid": not errors,
+        "definition": manifest["definition"],
+        "summary": {
+            "allowed_count": len(tool_manifest["allowed_tools"]),
+            "enabled_count": len(tool_manifest["enabled_tools"]),
+            "blocked_count": len(tool_manifest["blocked_tools"]),
+            "missing_count": len(tool_manifest["missing_tools"]),
+            "warning_count": len(warnings),
+            "error_count": len(errors),
+        },
+        "errors": errors,
+        "warnings": warnings,
+        "tool_manifest": tool_manifest,
+    }
+
+
 def list_agent_definitions(
     db: Session,
     current_user: dict[str, Any],

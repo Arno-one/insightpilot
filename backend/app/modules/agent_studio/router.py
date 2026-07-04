@@ -75,6 +75,19 @@ def get_agent_manifest_by_code(
     return success(item, "Agent Manifest 已生成")
 
 
+@router.get("/definitions/by-code/{agent_code}/tool-policy/validation")
+def validate_agent_tool_policy_by_code(
+    agent_code: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.validate_agent_tool_policy(db, current_user, agent_code=agent_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "Agent Tool Policy 校验完成")
+
+
 @router.get("/definitions/{definition_id}")
 def get_agent_definition(
     definition_id: str,
@@ -99,6 +112,19 @@ def get_agent_manifest(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return success(item, "Agent Manifest 已生成")
+
+
+@router.get("/definitions/{definition_id}/tool-policy/validation")
+def validate_agent_tool_policy(
+    definition_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    try:
+        item = service.validate_agent_tool_policy(db, current_user, definition_id=definition_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return success(item, "Agent Tool Policy 校验完成")
 
 
 @router.post("/definitions/{definition_id}/clone")
