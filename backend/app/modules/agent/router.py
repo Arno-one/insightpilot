@@ -1361,6 +1361,180 @@ def record_agent_chat_recovery_event(
     return success(message, "恢复动作事件已记录")
 
 
+@router.post("/runs/{run_id}/steps/{step_id}/retry")
+def retry_agent_run_step(
+    run_id: str,
+    step_id: str,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    """重试失败的统一对话内部工具步骤；V1 只允许无外发副作用的策略类工具。"""
+    step_row = db.execute(
+        text(
+            """
+            SELECT ast.step_id, ast.run_id, ast.node_name, ast.tool_name, ast.input_json,
+                   ast.output_json, ast.status, ast.error_message, ar.user_id
+            FROM agent_step ast
+            JOIN agent_run ar
+              ON ar.tenant_id = ast.tenant_id
+             AND ar.run_id = ast.run_id
+            WHERE ast.tenant_id = :tenant_id
+              AND ast.run_id = :run_id
+              AND ast.step_id = :step_id
+              AND ar.user_id = :user_id
+            LIMIT 1
+            """
+        ),
+        {
+            "tenant_id": current_user["tenant_id"],
+            "user_id": current_user["user_id"],
+            "run_id": run_id,
+            "step_id": step_id,
+        },
+    ).mappings().first()
+    if not step_row:
+        raise HTTPException(status_code=404, detail="可重试步骤不存在或无权访问")
+    if step_row["status"] != "failed" or step_row["node_name"] != "agent_chat_tool":
+        raise HTTPException(status_code=400, detail="仅支持重试失败的统一对话工具步骤")
+
+    handler = step_row["tool_name"]
+    if handler != "followup.plan_strategy":
+        raise HTTPException(status_code=400, detail="该工具暂未开放内部重试，外发或高风险动作不会自动重试")
+
+    input_payload = _loads_json(step_row["input_json"])
+    session_id = input_payload.get("session_id")
+    question = input_payload.get("question") or ""
+    if not session_id or not question:
+        raise HTTPException(status_code=400, detail="原步骤缺少可重试的会话或问题上下文")
+
+    session = _load_chat_session_or_404(db, current_user, session_id)
+    if not session.get("related_customer_id"):
+        raise HTTPException(status_code=400, detail="跟进策略重试需要会话关联客户")
+    user_message = chat_session_service.get_chat_message(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        message_id=input_payload["message_id"],
+    )
+    route_payload = input_payload.get("intent_route") or {}
+
+    try:
+        retry_result = followup_strategy_tool.run_followup_strategy_tool(
+            db,
+            current_user,
+            customer_id=session["related_customer_id"],
+            question=question,
+        )
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=retry_result["reply"],
+            intent=route_payload.get("intent"),
+            tool_name="followup.plan_strategy",
+            metadata_json={
+                "runtime_handler": "followup.plan_strategy",
+                "retry_source_run_id": run_id,
+                "retry_source_step_id": step_id,
+                "strategy_level": retry_result["strategy_level"],
+                "recommended_action_count": retry_result["recommended_action_count"],
+                "recommended_actions": retry_result["recommended_actions"],
+                "strategy": retry_result["strategy_result"],
+                "error": retry_result["error"],
+            },
+        )
+        trace_result = chat_runtime_trace_service.record_successful_runtime_trace(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            intent_route=route_payload,
+            runtime_result={
+                "handled": True,
+                "handler": "followup.plan_strategy",
+                "reply": retry_result["reply"],
+                "retry": {"source_run_id": run_id, "source_step_id": step_id},
+                "strategy": retry_result["strategy_result"],
+            },
+        )
+        recovery_status = "succeeded"
+        recovery_error = None
+    except Exception as exc:
+        recovery_status = "failed"
+        recovery_error = str(exc)[:1000] or "步骤重试失败"
+        recovery_plan = _build_runtime_recovery_plan(handler, route_payload.get("intent") or "unknown", recovery_error)
+        assistant_message = chat_session_service.append_chat_message(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            role="assistant",
+            content=f"步骤重试失败，已写入 Trace。错误：{recovery_error}",
+            intent=route_payload.get("intent"),
+            tool_name=handler,
+            metadata_json={
+                "runtime_handler": handler,
+                "runtime_status": "failed",
+                "runtime_error": recovery_error,
+                "retry_source_run_id": run_id,
+                "retry_source_step_id": step_id,
+                "recovery_plan": recovery_plan,
+            },
+        )
+        trace_result = chat_runtime_trace_service.record_failed_runtime_trace(
+            db,
+            tenant_id=current_user["tenant_id"],
+            user_id=current_user["user_id"],
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            intent_route=route_payload,
+            handler=handler,
+            error_message=recovery_error,
+            recovery_plan=recovery_plan,
+        )
+
+    event_payload = {
+        "action": "step_retry",
+        "title": "重试失败步骤",
+        "status": recovery_status,
+        "source_run_id": run_id,
+        "new_run_id": trace_result["run_id"],
+        "error": recovery_error,
+    }
+    recovery_event = chat_session_service.append_chat_message(
+        db,
+        tenant_id=current_user["tenant_id"],
+        user_id=current_user["user_id"],
+        session_id=session_id,
+        role="system",
+        content=f"恢复动作事件：重试失败步骤（{recovery_status}）",
+        intent="recovery_event",
+        tool_name="agent_chat.recovery_event",
+        run_id=trace_result["run_id"],
+        metadata_json={
+            "runtime_handler": "agent_chat.recovery_event",
+            "recovery_event": event_payload,
+            "source": "agent_step_retry",
+            "source_step_id": step_id,
+            "new_step_id": trace_result["step_id"],
+        },
+    )
+    return success(
+        {
+            "retry": event_payload,
+            "trace": trace_result,
+            "assistant_message": assistant_message,
+            "recovery_event": recovery_event,
+        },
+        "步骤重试已完成",
+    )
+
+
 @router.post("/chat/sessions/{session_id}/close")
 def close_agent_chat_session(
     session_id: str,

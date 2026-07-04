@@ -211,6 +211,7 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
     customer_id, risk_snapshot_id = _create_risk_chat_customer_fixture(tenant_id, user_id)
     session_ids: list[str] = []
     run_id: str | None = None
+    retry_run_id: str | None = None
 
     def raise_followup_error(*args, **kwargs):
         raise RuntimeError("策略工具模拟失败")
@@ -256,6 +257,7 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         detail_response = client.get(f"/api/agent/runs/{run_id}", headers=headers)
         assert detail_response.status_code == 200
         detail = detail_response.json()["data"]
+        failed_step_id = detail["steps"][1]["step_id"]
 
         assert detail["run"]["run_type"] == "agent_chat_runtime"
         assert detail["run"]["status"] == "failed"
@@ -271,8 +273,49 @@ def test_unified_agent_chat_runtime_writes_failed_agent_trace(monkeypatch):
         assert detail["plans"][0]["steps"][0]["status"] == "success"
         assert detail["plans"][0]["steps"][1]["status"] == "failed"
         assert "策略工具模拟失败" in detail["plans"][0]["steps"][1]["error_message"]
+
+        monkeypatch.setattr(
+            followup_strategy_tool,
+            "run_followup_strategy_tool",
+            lambda db_rw, current_user, *, customer_id, question: {
+                "reply": "重试后的跟进策略已生成。",
+                "strategy_result": {
+                    "protocol": "followup.strategy.v1",
+                    "customer_id": customer_id,
+                    "strategy_level": "rescue",
+                    "recommended_actions": [],
+                    "recommended_action_count": 0,
+                },
+                "tool_name": "followup.plan_strategy",
+                "customer_id": customer_id,
+                "strategy_level": "rescue",
+                "recommended_actions": [],
+                "recommended_action_count": 0,
+                "error": None,
+            },
+        )
+        retry_response = client.post(f"/api/agent/runs/{run_id}/steps/{failed_step_id}/retry", headers=headers)
+        assert retry_response.status_code == 200
+        retry_data = retry_response.json()["data"]
+        retry_run_id = retry_data["trace"]["run_id"]
+
+        assert retry_run_id != run_id
+        assert retry_data["retry"]["status"] == "succeeded"
+        assert retry_data["retry"]["source_run_id"] == run_id
+        assert retry_data["retry"]["new_run_id"] == retry_run_id
+        assert retry_data["assistant_message"]["metadata_json"]["retry_source_step_id"] == failed_step_id
+        assert retry_data["recovery_event"]["tool_name"] == "agent_chat.recovery_event"
+        assert retry_data["recovery_event"]["metadata_json"]["source"] == "agent_step_retry"
+
+        retry_detail_response = client.get(f"/api/agent/runs/{retry_run_id}", headers=headers)
+        assert retry_detail_response.status_code == 200
+        retry_detail = retry_detail_response.json()["data"]
+        assert retry_detail["run"]["status"] == "success"
+        assert len(retry_detail["steps"]) == 2
+        assert retry_detail["steps"][1]["tool_name"] == "followup.plan_strategy"
     finally:
         _cleanup_agent_chat_sessions(tenant_id, session_ids)
+        _cleanup_agent_runtime_trace(tenant_id, retry_run_id)
         _cleanup_agent_runtime_trace(tenant_id, run_id)
         _cleanup_risk_chat_customer_fixture(tenant_id, customer_id, risk_snapshot_id)
 
