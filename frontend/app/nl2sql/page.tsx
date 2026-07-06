@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { EmptyCard, ErrorCard, LoadingCard } from "@/components/DataState";
 import { AppShell } from "@/components/layout/AppShell";
+import { ThemedSelect } from "@/components/ui/ThemedSelect";
 import { apiFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/presentation";
 import styles from "./page.module.css";
@@ -222,23 +223,25 @@ function NL2SQLPageContent() {
         <div className={`page-actions ${styles.headingActions}`}>
           <label className={styles.historySelect}>
             <span>历史会话</span>
-            <select
+            <ThemedSelect
+              className={`themed-select-compact ${styles.historyDropdown}`}
+              options={[
+                { value: "", label: "新的数据问题" },
+                ...sessions.map((session) => ({
+                  value: session.session_id,
+                  label: `${session.title} · ${session.last_question || "暂无问题"}`,
+                })),
+              ]}
               value={activeSessionId}
-              onChange={(event) => {
-                if (event.target.value) {
-                  void loadSessionDetail(event.target.value);
+              onChange={(value) => {
+                if (value) {
+                  void loadSessionDetail(value);
                 }
               }}
-            >
-              <option value="">新的数据问题</option>
-              {sessions.map((session) => (
-                <option key={session.session_id} value={session.session_id}>
-                  {session.title} · {session.last_question || "暂无问题"}
-                </option>
-              ))}
-            </select>
+              placeholder="选择历史会话"
+            />
           </label>
-          <button className="button-secondary" type="button" onClick={createSession} disabled={querying}>
+          <button className={`button-secondary ${styles.compactAction}`} type="button" onClick={createSession} disabled={querying}>
             新建问数会话
           </button>
         </div>

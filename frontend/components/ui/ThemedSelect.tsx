@@ -30,6 +30,7 @@ export function ThemedSelect<T extends string = string>({
   const listRef = useRef<HTMLUListElement>(null);
   const triggerId = useId();
   const closingRef = useRef(false);
+  const closingUnlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selectedOption = options.find((opt) => opt.value === value);
   const displayLabel = selectedOption?.label || placeholder || "";
@@ -38,11 +39,23 @@ export function ThemedSelect<T extends string = string>({
     closingRef.current = true;
     setOpen(false);
     setFocusedIdx(-1);
+    if (closingUnlockTimerRef.current) {
+      clearTimeout(closingUnlockTimerRef.current);
+    }
+    // 中文注释：关闭保护只用于吃掉同一轮事件，避免下次真实点击被永久拦截。
+    closingUnlockTimerRef.current = setTimeout(() => {
+      closingRef.current = false;
+      closingUnlockTimerRef.current = null;
+    }, 0);
   }, []);
 
   useEffect(() => {
     if (!open) return;
     closingRef.current = false;
+    if (closingUnlockTimerRef.current) {
+      clearTimeout(closingUnlockTimerRef.current);
+      closingUnlockTimerRef.current = null;
+    }
     const handler = (event: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         close();
@@ -51,6 +64,14 @@ export function ThemedSelect<T extends string = string>({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open, close]);
+
+  useEffect(() => {
+    return () => {
+      if (closingUnlockTimerRef.current) {
+        clearTimeout(closingUnlockTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!open || focusedIdx < 0 || !listRef.current) return;

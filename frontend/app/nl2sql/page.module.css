@@ -6,26 +6,54 @@
 
 .headingActions {
   margin-left: auto;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 8px;
   justify-content: flex-end;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+:global(.page-actions).headingActions {
+  display: flex;
 }
 
 .historySelect {
   display: grid;
   gap: 6px;
-  min-width: min(360px, 42vw);
+  width: clamp(220px, 20vw, 260px);
+  min-width: 0;
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 800;
 }
 
-.historySelect select {
-  min-height: 46px;
-  max-width: 100%;
-  padding: 0 42px 0 14px;
-  border: 1px solid rgba(151, 184, 210, 0.26);
-  border-radius: 999px;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.04);
+.historySelect > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyDropdown {
+  width: 100%;
+}
+
+.historyDropdown :global(.themed-select-trigger) {
+  min-height: 40px;
+  padding-right: 34px;
+  padding-left: 13px;
+  border-radius: 13px;
+}
+
+.compactAction {
+  width: fit-content;
+  min-width: 122px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: 13px;
+  font-size: 14px;
+  white-space: nowrap;
 }
 
 .workspace {
@@ -324,7 +352,8 @@
 
 @media (max-width: 1180px) {
   .historySelect {
-    min-width: min(100%, 420px);
+    width: clamp(210px, 34vw, 250px);
+    min-width: 0;
   }
 
   .chatSurface {
@@ -339,11 +368,17 @@
 @media (max-width: 720px) {
   .headingActions {
     width: 100%;
+    flex-wrap: wrap;
     justify-content: flex-start;
   }
 
   .historySelect {
-    width: 100%;
+    flex: 1 1 210px;
+    width: auto;
+  }
+
+  .compactAction {
+    width: fit-content;
   }
 
   .message {
