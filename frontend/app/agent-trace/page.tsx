@@ -1067,22 +1067,29 @@ export default function AgentTracePage() {
                 </div>
                 <span className="meta-chip">P99 {formatDuration(latencyOverview.runtime.p99_ms)}</span>
               </div>
-              <div className={styles.toolMetricGrid}>
+              <div className={styles.slowOperationGrid}>
                 {latencyOverview.slowOperations.map((item) => (
-                  <article className={styles.toolMetricCard} key={`${item.operation_type}-${item.ref_id}`}>
-                    <div className={styles.toolMetricHeader}>
-                      <strong className={styles.wrapText}>{item.name}</strong>
-                      <span className={`pill ${item.status === "failed" ? "tone-danger" : "tone-info"}`}>
+                  <article className={styles.slowOperationCard} key={`${item.operation_type}-${item.ref_id}`}>
+                    <div className={styles.slowOperationHeader}>
+                      <strong title={item.name}>{item.name}</strong>
+                      <span
+                        className={`${styles.slowDurationPill} ${item.status === "failed" ? "tone-danger" : "tone-info"}`}
+                      >
                         {formatDuration(item.duration_ms)}
                       </span>
                     </div>
-                    <div className="meta-row">
+                    <div className={styles.slowOperationMeta}>
                       <span className="meta-chip">{item.operation_type === "llm_call" ? "LLM" : "Step"}</span>
                       <span className="meta-chip">{item.status}</span>
-                      {item.run_id ? <span className="meta-chip">Run {item.run_id}</span> : null}
+                      {item.run_id ? (
+                        <span className={styles.slowOperationChip} title={`Run ${item.run_id}`}>
+                          Run {item.run_id}
+                        </span>
+                      ) : null}
                     </div>
-                    <p className={`panel-copy ${styles.wrapText}`}>
-                      {item.ref_id} · {formatDateTime(item.created_at)}
+                    <p className={styles.slowOperationRef} title={`${item.ref_id} · ${formatDateTime(item.created_at)}`}>
+                      <span>{item.ref_id}</span>
+                      <time>{formatDateTime(item.created_at)}</time>
                     </p>
                   </article>
                 ))}
