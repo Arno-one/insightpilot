@@ -219,7 +219,25 @@ function NL2SQLPageContent() {
           <h1>智能问数</h1>
           <p className="lead">用中文直接查询 CRM、风险、审批、任务和经营数据，系统会生成只读 SQL 并保留审计链路。</p>
         </div>
-        <div className="page-actions">
+        <div className={`page-actions ${styles.headingActions}`}>
+          <label className={styles.historySelect}>
+            <span>历史会话</span>
+            <select
+              value={activeSessionId}
+              onChange={(event) => {
+                if (event.target.value) {
+                  void loadSessionDetail(event.target.value);
+                }
+              }}
+            >
+              <option value="">新的数据问题</option>
+              {sessions.map((session) => (
+                <option key={session.session_id} value={session.session_id}>
+                  {session.title} · {session.last_question || "暂无问题"}
+                </option>
+              ))}
+            </select>
+          </label>
           <button className="button-secondary" type="button" onClick={createSession} disabled={querying}>
             新建问数会话
           </button>
@@ -232,39 +250,10 @@ function NL2SQLPageContent() {
         <LoadingCard detail="正在装载问数会话与历史查询。" />
       ) : (
         <section className={styles.layout}>
-          <aside className={`command-panel ${styles.sidebar}`}>
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">History</p>
-                <h2>问数会话</h2>
-              </div>
-            </div>
-            <div className="summary-list">
-              {sessions.length ? (
-                sessions.map((session) => (
-                  <button
-                    className={`${styles.sessionItem} ${session.session_id === activeSessionId ? styles.sessionItemActive : ""}`}
-                    key={session.session_id}
-                    type="button"
-                    onClick={() => loadSessionDetail(session.session_id)}
-                  >
-                    <strong>{session.title}</strong>
-                    <span>{session.last_question || "还没有查询问题"}</span>
-                    <small>
-                      {statusLabel(session.last_query_status)} · {session.message_count} 条
-                    </small>
-                  </button>
-                ))
-              ) : (
-                <EmptyCard text="还没有问数会话" detail="输入一个数据问题后，系统会自动创建会话并保存审计记录。" />
-              )}
-            </div>
-          </aside>
-
           <article className={`command-panel ${styles.workspace}`}>
             <div className="panel-header">
               <div>
-                <p className="eyebrow">Query Desk</p>
+                <p className="eyebrow">Query Conversation</p>
                 <h2>{activeSession?.title || "新的数据问题"}</h2>
               </div>
               <div className="meta-row">
@@ -273,83 +262,95 @@ function NL2SQLPageContent() {
               </div>
             </div>
 
-            <div className={styles.questionBox}>
-              <textarea
-                className="input-like textarea-like"
-                placeholder="例如：本月高风险客户有多少个？按负责人统计开放商机金额排行前5名。"
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                rows={4}
-                disabled={querying}
-              />
-              <div className={styles.quickQuestions}>
-                {quickQuestions.map((item) => (
-                  <button key={item} type="button" onClick={() => setQuestion(item)} disabled={querying}>
-                    {item}
-                  </button>
-                ))}
-              </div>
-              <div className="page-actions">
-                <button className="button" type="button" onClick={runQuery} disabled={querying || !question.trim()}>
-                  {querying ? "查询中..." : "运行查询"}
-                </button>
-              </div>
-            </div>
-
-            <div className={styles.resultShell}>
-              <div className={styles.resultHeader}>
-                <div>
-                  <p className="eyebrow">Result</p>
-                  <h3>查询结果</h3>
-                </div>
-                <div className="meta-row">
-                  <span className="meta-chip">{visibleResult?.row_count || 0} 行</span>
-                  <span className="meta-chip">{latestResult?.is_cached ? "缓存命中" : "实时结果"}</span>
-                </div>
-              </div>
-              <ResultTable result={visibleResult} />
-            </div>
-
-            <div className={styles.history}>
-              {messages.map((item) => (
-                <div className={styles.historyItem} key={item.message_id}>
-                  <div className="meta-row">
-                    <span className={`pill ${item.role === "assistant" ? "tone-success" : "tone-info"}`}>
-                      {item.role === "assistant" ? "结果" : "问题"}
-                    </span>
-                    <span className="meta-chip">{formatDateTime(item.created_at)}</span>
+            <div className={styles.chatSurface}>
+              <div className={styles.messageList}>
+                {messages.length ? (
+                  messages.map((item) => (
+                    <div
+                      className={`${styles.message} ${
+                        item.role === "assistant" ? styles.messageAssistant : item.role === "user" ? styles.messageUser : styles.messageSystem
+                      }`}
+                      key={item.message_id}
+                    >
+                      <div className={styles.messageMeta}>
+                        <span className={`pill ${item.role === "assistant" ? "tone-success" : "tone-info"}`}>
+                          {item.role === "assistant" ? "结果" : item.role === "user" ? "问题" : item.role}
+                        </span>
+                        <span className={styles.messageTime}>{formatDateTime(item.created_at)}</span>
+                        {item.query_id ? <span className={styles.messageChip}>Query {item.query_id}</span> : null}
+                      </div>
+                      <p>{item.question || item.content}</p>
+                    </div>
+                  ))
+                ) : (
+                  <div className={`${styles.message} ${styles.messageEmpty}`}>
+                    <strong>还没有问数消息</strong>
+                    <p>直接输入一个经营数据问题，系统会自动创建会话、生成只读 SQL，并在底部保留审计记录。</p>
                   </div>
-                  <strong>{item.question || item.content}</strong>
-                  {item.role === "assistant" ? <p>{item.content}</p> : null}
-                </div>
-              ))}
-            </div>
-          </article>
+                )}
+              </div>
 
-          <aside className={`command-panel ${styles.context}`}>
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Audit</p>
-                <h2>SQL 与审计</h2>
+              <div className={styles.composer}>
+                <textarea
+                  className="input-like textarea-like"
+                  placeholder="例如：本月高风险客户有多少个？按负责人统计开放商机金额排行前5名。"
+                  value={question}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  rows={4}
+                  disabled={querying}
+                />
+                <div className={styles.composerFooter}>
+                  <div className={styles.quickQuestions}>
+                    {quickQuestions.map((item) => (
+                      <button key={item} type="button" onClick={() => setQuestion(item)} disabled={querying}>
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="button" type="button" onClick={runQuery} disabled={querying || !question.trim()}>
+                    {querying ? "查询中..." : "运行查询"}
+                  </button>
+                </div>
               </div>
             </div>
-            <div className="summary-list">
-              <div className="summary-item">
-                <strong>执行状态</strong>
-                <p>{latestResult?.error || statusLabel(activeSession?.last_query_status)}</p>
+
+            <section className={styles.auditDock}>
+              <div className={styles.auditHeader}>
+                <div>
+                  <p className="eyebrow">SQL & Audit</p>
+                  <h3>SQL 与审计</h3>
+                </div>
+                <div className={styles.auditMeta}>
+                  <span>{statusLabel(activeSession?.last_query_status)}</span>
+                  <span>{latestResult ? `${latestResult.cost_ms} ms` : "等待查询"}</span>
+                  <span>{visibleResult?.row_count || 0} 行</span>
+                  <span>{latestResult?.is_cached ? "缓存命中" : "实时结果"}</span>
+                </div>
               </div>
-              <div className="summary-item">
-                <strong>查询编号</strong>
-                <p>{latestResult?.query_id || latestAssistantMessage?.query_id || "等待查询生成"}</p>
-              </div>
-              <div className="summary-item">
-                <strong>耗时</strong>
-                <p>{latestResult ? `${latestResult.cost_ms} ms` : "等待查询生成"}</p>
+              <div className={styles.auditGrid}>
+                <div className={styles.auditCard}>
+                  <strong>执行状态</strong>
+                  <p>{latestResult?.error || statusLabel(activeSession?.last_query_status)}</p>
+                </div>
+                <div className={styles.auditCard}>
+                  <strong>查询编号</strong>
+                  <p>{latestResult?.query_id || latestAssistantMessage?.query_id || "等待查询生成"}</p>
+                </div>
+                <pre className={styles.sqlBlock}>{visibleSql || "运行查询后这里会展示最终执行 SQL。"}</pre>
               </div>
               {latestResult?.error ? <div className={styles.errorBox}>{latestResult.error}</div> : null}
-              <pre className={styles.sqlBlock}>{visibleSql || "运行查询后这里会展示最终执行 SQL。"}</pre>
-            </div>
-          </aside>
+              <div className={styles.resultShell}>
+                <div className={styles.resultHeader}>
+                  <div>
+                    <p className="eyebrow">Result</p>
+                    <h3>查询结果</h3>
+                  </div>
+                </div>
+                <ResultTable result={visibleResult} />
+              </div>
+            </section>
+
+          </article>
         </section>
       )}
     </AppShell>

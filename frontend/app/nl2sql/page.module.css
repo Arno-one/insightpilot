@@ -1,63 +1,174 @@
 .layout {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(260px, 360px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
-  align-items: start;
 }
 
-.sidebar,
-.context {
-  position: sticky;
-  top: 26px;
+.headingActions {
+  margin-left: auto;
+  justify-content: flex-end;
 }
 
-.sessionItem {
+.historySelect {
   display: grid;
-  gap: 8px;
-  width: 100%;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  color: var(--text);
-  text-align: left;
-  background: rgba(255, 255, 255, 0.03);
-  cursor: pointer;
-}
-
-.sessionItem:hover,
-.sessionItemActive {
-  border-color: rgba(75, 211, 138, 0.38);
-  background: rgba(75, 211, 138, 0.08);
-}
-
-.sessionItem span,
-.sessionItem small {
+  gap: 6px;
+  min-width: min(360px, 42vw);
   color: var(--text-muted);
-  line-height: 1.55;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.historySelect select {
+  min-height: 46px;
+  max-width: 100%;
+  padding: 0 42px 0 14px;
+  border: 1px solid rgba(151, 184, 210, 0.26);
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .workspace {
-  min-height: 700px;
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  min-height: calc(100vh - 260px);
 }
 
-.questionBox {
+.chatSurface {
+  display: grid;
+  grid-template-rows: minmax(420px, 1fr) auto;
+  gap: 16px;
+  min-width: 0;
+  min-height: min(720px, calc(100vh - 320px));
+  padding: 18px;
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    rgba(255, 255, 255, 0.018);
+}
+
+.messageList {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.message {
+  display: grid;
+  gap: 10px;
+  max-width: min(820px, 86%);
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+}
+
+.message p,
+.message strong {
+  margin: 0;
+  min-width: 0;
+  color: var(--text);
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.message p {
+  color: var(--text-muted);
+}
+
+.messageUser {
+  justify-self: end;
+  border-color: rgba(57, 208, 255, 0.3);
+  background: rgba(57, 208, 255, 0.09);
+}
+
+.messageAssistant {
+  justify-self: start;
+  border-color: rgba(75, 211, 138, 0.24);
+  background: rgba(75, 211, 138, 0.075);
+}
+
+.messageSystem,
+.messageEmpty {
+  max-width: 100%;
+  justify-self: stretch;
+}
+
+.messageMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  align-items: center;
+}
+
+.messageMeta :global(.pill),
+.messageChip,
+.messageTime {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageChip,
+.messageTime {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+}
+
+.composer {
   display: grid;
   gap: 12px;
+  min-width: 0;
+  padding-top: 14px;
+  border-top: 1px solid rgba(151, 184, 210, 0.14);
+}
+
+.composer textarea {
+  min-height: 118px;
+  resize: vertical;
+}
+
+.composerFooter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
 }
 
 .quickQuestions {
   display: flex;
+  flex: 1 1 520px;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .quickQuestions button {
+  max-width: 100%;
   padding: 7px 10px;
   border: 1px solid rgba(151, 184, 210, 0.22);
   border-radius: 999px;
   color: var(--text-muted);
   background: rgba(255, 255, 255, 0.03);
   cursor: pointer;
+  overflow-wrap: anywhere;
 }
 
 .quickQuestions button:hover {
@@ -65,23 +176,90 @@
   border-color: rgba(57, 208, 255, 0.38);
 }
 
+.auditDock {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.auditHeader,
+.resultHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.auditHeader h3,
+.resultHeader h3 {
+  margin: 0;
+}
+
+.auditMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.auditMeta span {
+  max-width: 220px;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auditGrid {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(220px, 1fr) minmax(320px, 2fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.auditCard {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(151, 184, 210, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.auditCard strong {
+  color: var(--text);
+}
+
+.auditCard p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
 .resultShell {
   display: grid;
   gap: 14px;
-  margin-top: 18px;
-}
-
-.resultHeader {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
+  min-width: 0;
 }
 
 .tableWrap {
+  max-width: 100%;
   overflow-x: auto;
   border: 1px solid rgba(151, 184, 210, 0.18);
-  border-radius: 8px;
+  border-radius: 12px;
 }
 
 .resultTable {
@@ -93,10 +271,12 @@
 
 .resultTable th,
 .resultTable td {
+  max-width: 320px;
   padding: 10px 12px;
   border-bottom: 1px solid rgba(151, 184, 210, 0.12);
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 .resultTable th {
@@ -112,64 +292,70 @@
 .emptyResult {
   padding: 18px;
   border: 1px solid rgba(151, 184, 210, 0.18);
-  border-radius: 8px;
+  border-radius: 12px;
   color: var(--text-muted);
   background: rgba(255, 255, 255, 0.03);
 }
 
-.history {
-  display: grid;
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.historyItem {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid rgba(151, 184, 210, 0.16);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.historyItem strong {
-  color: var(--text);
-}
-
-.historyItem p {
-  margin: 0;
-  color: var(--text-muted);
-  line-height: 1.7;
-}
-
 .sqlBlock {
+  min-width: 0;
+  max-height: 260px;
   margin: 0;
-  max-height: 320px;
   overflow: auto;
   padding: 12px;
   border: 1px solid rgba(151, 184, 210, 0.18);
-  border-radius: 8px;
+  border-radius: 14px;
   color: #c6f3ff;
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.22);
   font-size: 12px;
   line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .errorBox {
   padding: 12px;
   border: 1px solid rgba(255, 108, 108, 0.28);
-  border-radius: 8px;
+  border-radius: 12px;
   color: #ffb8b8;
   background: rgba(255, 108, 108, 0.08);
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1180px) {
-  .layout {
-    grid-template-columns: 1fr;
+  .historySelect {
+    min-width: min(100%, 420px);
   }
 
-  .sidebar,
-  .context {
-    position: static;
+  .chatSurface {
+    min-height: 620px;
+  }
+
+  .auditGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .headingActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .historySelect {
+    width: 100%;
+  }
+
+  .message {
+    max-width: 100%;
+  }
+
+  .composerFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .composerFooter :global(.button) {
+    width: 100%;
   }
 }

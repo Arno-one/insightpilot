@@ -1,6 +1,6 @@
 .layout {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr) minmax(260px, 360px);
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -70,36 +70,68 @@
 }
 
 .thread {
-  min-height: 680px;
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  min-height: 760px;
 }
 
 .messageList {
   display: grid;
   align-content: start;
   gap: 14px;
-  min-height: 420px;
+  min-width: 0;
+  min-height: min(620px, calc(100vh - 360px));
+  overflow-y: auto;
 }
 
 .message {
   display: grid;
   gap: 10px;
-  max-width: 84%;
+  max-width: min(900px, 86%);
+  min-width: 0;
   padding: 16px 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
 }
 
 .message p {
   margin: 0;
+  min-width: 0;
   color: var(--text-muted);
   line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.message strong,
+.message span,
+.message a,
+.message em,
+.message pre {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.message :global(.meta-row) {
+  min-width: 0;
+}
+
+.message :global(.meta-row) > *,
+.runtimeDock :global(.meta-chip),
+.runtimeDock :global(.pill) {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recoveryEventMessage {
   display: grid;
   gap: 6px;
   width: min(100%, 680px);
+  min-width: 0;
   justify-self: center;
   padding: 10px 12px;
   border: 1px dashed rgba(255, 200, 87, 0.28);
@@ -132,13 +164,16 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .recoveryEventLinks a {
+  max-width: 100%;
   color: #ffe7a1;
   font-size: 12px;
   font-weight: 800;
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 
 .recoveryEventLinks a:hover {
@@ -166,6 +201,7 @@
   display: inline-flex;
   align-items: center;
   width: fit-content;
+  max-width: 100%;
   min-height: 28px;
   padding: 4px 10px;
   border: 1px solid rgba(57, 208, 255, 0.3);
@@ -175,6 +211,9 @@
   font-weight: 800;
   text-decoration: none;
   background: rgba(57, 208, 255, 0.08);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .traceLink:hover,
@@ -191,6 +230,7 @@
   display: grid;
   gap: 6px;
   margin-top: 12px;
+  min-width: 0;
   padding: 10px;
   border: 1px solid rgba(255, 200, 87, 0.24);
   border-radius: var(--radius-md);
@@ -203,22 +243,27 @@
 }
 
 .recoveryStatus span {
+  min-width: 0;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .recoveryStatusLinks {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .recoveryStatusLinks a {
+  max-width: 100%;
   color: #ffe7a1;
   font-size: 12px;
   font-weight: 800;
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 
 .recoveryStatusLinks a:hover {
@@ -229,14 +274,17 @@
   display: grid;
   gap: 5px;
   margin-top: 8px;
+  min-width: 0;
   padding-top: 8px;
   border-top: 1px solid rgba(255, 200, 87, 0.18);
 }
 
 .recoverySummary span {
+  min-width: 0;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .drawerBackdrop {
@@ -435,6 +483,7 @@
   display: grid;
   gap: 6px;
   margin-top: 4px;
+  min-width: 0;
   padding: 10px;
   border: 1px solid rgba(57, 208, 255, 0.22);
   border-radius: var(--radius-md);
@@ -451,15 +500,18 @@
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .runtimePlannerSteps {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .runtimePlannerSteps em {
+  max-width: 100%;
   padding: 4px 8px;
   border: 1px solid rgba(57, 208, 255, 0.2);
   border-radius: 999px;
@@ -471,13 +523,17 @@
   display: grid;
   gap: 12px;
   min-width: min(560px, 100%);
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .artifactHeader {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: flex-start;
   justify-content: space-between;
+  min-width: 0;
 }
 
 .artifactHeader div:first-child {
@@ -501,14 +557,18 @@
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+  min-width: 0;
 }
 
 .artifactStats span {
+  max-width: 100%;
   padding: 4px 8px;
   border: 1px solid rgba(75, 211, 138, 0.28);
   border-radius: 999px;
   color: var(--text);
   background: rgba(75, 211, 138, 0.08);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -538,9 +598,10 @@
 .resultPreview {
   margin: 0;
   overflow-x: auto;
-  white-space: pre;
+  white-space: pre-wrap;
   font-size: 12px;
   line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 
 .sqlDetails pre {
@@ -561,6 +622,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.artifactFooter span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .messageUser {
@@ -583,8 +650,64 @@
 .composer {
   display: grid;
   gap: 12px;
+  min-width: 0;
   margin-top: auto;
   padding-top: 6px;
+}
+
+.composer textarea {
+  min-height: 118px;
+  resize: vertical;
+}
+
+.runtimeDock {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(151, 184, 210, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.runtimeDockHeader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.runtimeDockHeader h2 {
+  margin: 0;
+}
+
+.runtimeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  min-width: 0;
+}
+
+.runtimeCard {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(151, 184, 210, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.runtimeCard strong {
+  color: var(--text);
+}
+
+.runtimeCard p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1180px) {
@@ -595,5 +718,19 @@
   .sidebar,
   .context {
     position: static;
+  }
+
+  .messageList {
+    min-height: 520px;
+  }
+}
+
+@media (max-width: 720px) {
+  .message {
+    max-width: 100%;
+  }
+
+  .runtimeGrid {
+    grid-template-columns: 1fr;
   }
 }

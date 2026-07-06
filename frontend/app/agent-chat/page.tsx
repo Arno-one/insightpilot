@@ -1084,17 +1084,16 @@ function AgentChatContent() {
                 </button>
               </div>
             </div>
-          </article>
 
-          <aside className={`command-panel ${styles.context}`}>
-            <div className="panel-header">
+            <section className={styles.runtimeDock}>
+              <div className={styles.runtimeDockHeader}>
               <div>
                 <p className="eyebrow">Runtime</p>
                 <h2>运行上下文</h2>
               </div>
-            </div>
-            <div className="summary-list">
-              <div className="summary-item">
+              </div>
+              <div className={styles.runtimeGrid}>
+              <div className={styles.runtimeCard}>
                 <strong>当前客户</strong>
                 {selectedCustomer ? (
                   <p>
@@ -1105,7 +1104,7 @@ function AgentChatContent() {
                   <p>当前会话未关联客户；风险分析需要先选择客户。</p>
                 )}
               </div>
-              <div className="summary-item">
+              <div className={styles.runtimeCard}>
                 <strong>本次运行</strong>
                 <p>
                   {runtime
@@ -1149,7 +1148,7 @@ function AgentChatContent() {
                 ) : null}
               </div>
               {recoveryEventSummary ? (
-                <div className="summary-item">
+                <div className={styles.runtimeCard}>
                   <strong>恢复事件</strong>
                   <p>
                     已记录 {recoveryEventSummary.total} 条，成功 {recoveryEventSummary.succeededCount} 条，失败{" "}
@@ -1182,7 +1181,7 @@ function AgentChatContent() {
                 </div>
               ) : null}
               {recoveryEventStats ? (
-                <div className="summary-item">
+                <div className={styles.runtimeCard}>
                   <strong>恢复统计</strong>
                   <p>
                     共 {recoveryEventStats.total_count} 条，成功率 {formatPercent(recoveryEventStats.success_rate)}，失败{" "}
@@ -1196,7 +1195,7 @@ function AgentChatContent() {
                   </div>
                 </div>
               ) : null}
-              <div className="summary-item">
+              <div className={styles.runtimeCard}>
                 <strong>能力边界</strong>
                 <p>当前版本已接 Risk Agent 和 NL2SQL 数据查询。报告解释和执行 Agent 会在后续版本挂入同一入口。</p>
               </div>
@@ -1205,8 +1204,9 @@ function AgentChatContent() {
                   返回客户工作台
                 </Link>
               ) : null}
-            </div>
-          </aside>
+              </div>
+            </section>
+          </article>
         </section>
       )}
       <RecoveryEventDrawer
