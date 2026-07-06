@@ -1,4 +1,6 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 
 from app.modules.system import router as system_router
 from app.shared import backup_recovery

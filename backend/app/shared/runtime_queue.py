@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Literal
 
 from app.shared.ids import new_id
+
+UTC = timezone.utc
 
 RuntimeQueueStatus = Literal["queued", "running", "success", "failed"]
 

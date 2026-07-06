@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Literal
+
+UTC = timezone.utc
 
 BackupMode = Literal["logical_dump", "event_log", "vector_snapshot", "artifact_export"]
 CheckStatus = Literal["pass", "warn", "fail"]
