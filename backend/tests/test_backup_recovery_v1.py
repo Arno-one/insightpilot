@@ -24,6 +24,7 @@ def test_backup_recovery_covers_enterprise_critical_tables():
         "agent_chat_message",
         "nl2sql_query_audit",
         "customer_memory",
+        "customer_memory_atomic",
         "rag_document",
         "agent_definition",
         "business_report",

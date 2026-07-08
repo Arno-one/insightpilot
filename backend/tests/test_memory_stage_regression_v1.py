@@ -68,6 +68,39 @@ def _ensure_memory_stage_tables_exist():
         db.execute(
             text(
                 """
+                CREATE TABLE IF NOT EXISTS customer_memory_atomic (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  atomic_memory_id VARCHAR(64) NOT NULL,
+                  memory_id VARCHAR(64) NOT NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  memory_scope VARCHAR(30) NOT NULL DEFAULT 'customer',
+                  memory_type VARCHAR(30) NOT NULL,
+                  order_index INT NOT NULL DEFAULT 0,
+                  title VARCHAR(255) NULL,
+                  content TEXT NOT NULL,
+                  confidence DECIMAL(6,4) NULL,
+                  occurred_at DATETIME NULL,
+                  source_table VARCHAR(64) NOT NULL,
+                  source_id VARCHAR(64) NULL,
+                  source_run_id VARCHAR(64) NULL,
+                  evidence_refs_json JSON NULL,
+                  entity_keys_json JSON NULL,
+                  metadata_json JSON NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_atomic_memory_id (atomic_memory_id),
+                  KEY idx_tenant_customer_type_time (tenant_id, customer_id, memory_type, occurred_at),
+                  KEY idx_tenant_memory_order (tenant_id, memory_id, order_index),
+                  KEY idx_tenant_source_run (tenant_id, source_run_id),
+                  KEY idx_tenant_source_table (tenant_id, source_table, source_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
                 CREATE TABLE IF NOT EXISTS memory_governance_state (
                   id BIGINT PRIMARY KEY AUTO_INCREMENT,
                   tenant_id VARCHAR(64) NOT NULL,
@@ -98,7 +131,7 @@ def _ensure_memory_stage_tables_exist():
 
 def _cleanup_memory_stage_fixture(tenant_id: str):
     with SessionLocal() as db:
-        for table in ["memory_governance_state", "memory_update_trace", "customer_memory"]:
+        for table in ["memory_governance_state", "memory_update_trace", "customer_memory_atomic", "customer_memory"]:
             db.execute(text(f"DELETE FROM {table} WHERE tenant_id = :tenant_id"), {"tenant_id": tenant_id})
         db.commit()
 
@@ -158,6 +191,23 @@ def test_memory_stage_overview_rolls_up_stage_capabilities():
             db.execute(
                 text(
                     """
+                    INSERT INTO customer_memory_atomic (
+                      tenant_id, atomic_memory_id, memory_id, customer_id, memory_scope, memory_type,
+                      order_index, title, content, confidence, occurred_at, source_table, source_id,
+                      source_run_id, evidence_refs_json, entity_keys_json, metadata_json
+                    )
+                    VALUES (
+                      :tenant_id, 'atom_stage_overview', 'memory_stage_overview', 'cust_stage_overview', 'customer', 'observation',
+                      1, '客户长期总结', 'Memory 阶段回归测试摘要。', NULL, :occurred_at, 'customer_memory', 'cust_stage_overview',
+                      'run_stage_overview', '[]', '[]', '{}'
+                    )
+                    """
+                ),
+                {"tenant_id": tenant_id, "occurred_at": now},
+            )
+            db.execute(
+                text(
+                    """
                     INSERT INTO memory_governance_state (
                       tenant_id, governance_id, memory_id, customer_id, memory_scope,
                       governance_status, refresh_status, reason
@@ -177,10 +227,12 @@ def test_memory_stage_overview_rolls_up_stage_capabilities():
         assert overview["source_type"] == "memory_system_overview"
         assert overview["stage_status"] == "memory_stage_v1_ready"
         assert overview["customer_memory"]["total_count"] == 1
+        assert overview["atomic_memory"]["total_count"] == 1
         assert overview["update_trace"]["total_count"] == 1
         assert overview["update_trace"]["recent_traces"][0]["trace_id"] == "trace_stage_overview"
         assert overview["governance"]["by_governance_status"]["disabled"] == 1
         assert overview["governance"]["by_refresh_status"]["requested"] == 1
+        assert "atomic_long_term_memory" in overview["capabilities"]
         assert "context_compression" in overview["capabilities"]
         assert "memory_governance" in overview["capabilities"]
     finally:

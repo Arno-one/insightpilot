@@ -8,8 +8,50 @@ from app.core.database import SessionLocal
 from app.modules.memory import service as memory_service
 
 
+def _ensure_customer_memory_atomic_table_exists():
+    with SessionLocal() as db:
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS customer_memory_atomic (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  atomic_memory_id VARCHAR(64) NOT NULL,
+                  memory_id VARCHAR(64) NOT NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  memory_scope VARCHAR(30) NOT NULL DEFAULT 'customer',
+                  memory_type VARCHAR(30) NOT NULL,
+                  order_index INT NOT NULL DEFAULT 0,
+                  title VARCHAR(255) NULL,
+                  content TEXT NOT NULL,
+                  confidence DECIMAL(6,4) NULL,
+                  occurred_at DATETIME NULL,
+                  source_table VARCHAR(64) NOT NULL,
+                  source_id VARCHAR(64) NULL,
+                  source_run_id VARCHAR(64) NULL,
+                  evidence_refs_json JSON NULL,
+                  entity_keys_json JSON NULL,
+                  metadata_json JSON NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_atomic_memory_id (atomic_memory_id),
+                  KEY idx_tenant_customer_type_time (tenant_id, customer_id, memory_type, occurred_at),
+                  KEY idx_tenant_memory_order (tenant_id, memory_id, order_index),
+                  KEY idx_tenant_source_run (tenant_id, source_run_id),
+                  KEY idx_tenant_source_table (tenant_id, source_table, source_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.commit()
+
+
 def _cleanup_context_packet_fixture(tenant_id: str, customer_id: str):
     with SessionLocal() as db:
+        db.execute(
+            text("DELETE FROM customer_memory_atomic WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
         db.execute(
             text("DELETE FROM customer_memory WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
             {"tenant_id": tenant_id, "customer_id": customer_id},
@@ -35,6 +77,7 @@ def test_customer_context_packet_compresses_memory_under_budget():
         "permission_codes": ["crm:customer:read:self"],
     }
     now = datetime.now()
+    _ensure_customer_memory_atomic_table_exists()
     _cleanup_context_packet_fixture(tenant_id, customer_id)
 
     try:
@@ -105,6 +148,29 @@ def test_customer_context_packet_compresses_memory_under_budget():
                     "last_compiled_at": now,
                 },
             )
+            db.execute(
+                text(
+                    """
+                    INSERT INTO customer_memory_atomic (
+                      tenant_id, atomic_memory_id, memory_id, customer_id, memory_scope, memory_type,
+                      order_index, title, content, confidence, occurred_at, source_table, source_id,
+                      source_run_id, evidence_refs_json, entity_keys_json, metadata_json
+                    )
+                    VALUES
+                      (:tenant_id, 'atom_context_world', 'memory_context_packet', :customer_id, 'customer', 'world',
+                       1, '客户画像事实', '客户尚未确认预算，且竞品已介入。', NULL, :occurred_at, 'crm_customer', :customer_id,
+                       'run_context_packet', '[]', '[]', '{}'),
+                      (:tenant_id, 'atom_context_opinion', 'memory_context_packet', :customer_id, 'customer', 'opinion',
+                       2, '风险判断', '系统判断需要主管介入并补充 ROI 证明。', 0.9100, :occurred_at, 'customer_risk_snapshot', 'risk_context_packet',
+                       'run_context_packet', '[]', '[]', '{}')
+                    """
+                ),
+                {
+                    "tenant_id": tenant_id,
+                    "customer_id": customer_id,
+                    "occurred_at": now,
+                },
+            )
             db.commit()
 
             packet = memory_service.build_customer_context_packet(
@@ -119,6 +185,7 @@ def test_customer_context_packet_compresses_memory_under_budget():
         assert packet["budget"]["used_chars"] <= 700
         assert packet["budget"]["overflow"] is True
         assert packet["raw_refs"]["customer_memory_id"] == "memory_context_packet"
+        assert packet["raw_refs"]["atomic_memory_count"] == 2
         assert packet["sections"][0]["section_type"] == "customer_profile"
         assert "上下文压缩测试客户" in packet["compressed_context"]
         assert "当前状态" in packet["compressed_context"]

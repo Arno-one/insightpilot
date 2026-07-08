@@ -10,6 +10,13 @@ from app.modules.crm import service as crm_service
 from app.modules.nl2sql import dao as nl2sql_dao
 from app.shared.ids import new_id
 
+ATOMIC_MEMORY_TYPE_ORDER: dict[str, int] = {
+    "world": 10,
+    "experience": 20,
+    "opinion": 30,
+    "observation": 40,
+}
+
 
 ShortTermSource = Literal["agent_chat", "risk_chat", "nl2sql"]
 SOURCE_TYPES: tuple[ShortTermSource, ...] = ("agent_chat", "risk_chat", "nl2sql")
@@ -29,6 +36,18 @@ def _loads_json(value: Any) -> dict[str, Any]:
     except (TypeError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _loads_json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _iso(value: Any) -> str | None:
@@ -367,6 +386,16 @@ def summarize_memory_system(
         ),
         {"tenant_id": tenant_id},
     ).mappings().first()
+    atomic_row = db.execute(
+        text(
+            """
+            SELECT COUNT(*) AS total_count, MAX(updated_at) AS latest_updated_at
+            FROM customer_memory_atomic
+            WHERE tenant_id = :tenant_id
+            """
+        ),
+        {"tenant_id": tenant_id},
+    ).mappings().first()
     trace_row = db.execute(
         text(
             """
@@ -415,6 +444,10 @@ def summarize_memory_system(
             "total_count": int((memory_row or {}).get("total_count") or 0),
             "latest_compiled_at": _iso((memory_row or {}).get("latest_compiled_at")),
         },
+        "atomic_memory": {
+            "total_count": int((atomic_row or {}).get("total_count") or 0),
+            "latest_updated_at": _iso((atomic_row or {}).get("latest_updated_at")),
+        },
         "update_trace": {
             "total_count": int((trace_row or {}).get("total_count") or 0),
             "latest_trace_at": _iso((trace_row or {}).get("latest_trace_at")),
@@ -429,6 +462,7 @@ def summarize_memory_system(
             "short_term_memory",
             "customer_working_memory",
             "customer_long_term_memory",
+            "atomic_long_term_memory",
             "memory_update_trace",
             "knowledge_citation",
             "context_compression",
@@ -477,6 +511,61 @@ def _trace_row_to_item(row: dict[str, Any]) -> dict[str, Any]:
     item["metadata_json"] = _loads_json(item.get("metadata_json"))
     item["created_at"] = _iso(item.get("created_at"))
     return item
+
+
+def _atomic_memory_row_to_item(row: dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    confidence = item.get("confidence")
+    item["confidence"] = float(confidence) if confidence not in (None, "") else None
+    item["occurred_at"] = _iso(item.get("occurred_at"))
+    item["evidence_refs"] = _loads_json_list(item.pop("evidence_refs_json", None))
+    item["entity_keys"] = _loads_json_list(item.pop("entity_keys_json", None))
+    item["metadata_json"] = _loads_json(item.get("metadata_json"))
+    item["type_order"] = ATOMIC_MEMORY_TYPE_ORDER.get(str(item.get("memory_type") or ""), 999)
+    return item
+
+
+def _load_customer_atomic_memories(
+    db: Session,
+    *,
+    tenant_id: str,
+    customer_id: str,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    limit_sql = ""
+    params: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "customer_id": customer_id,
+    }
+    if limit:
+        limit_sql = "\n            LIMIT :limit"
+        params["limit"] = max(1, min(limit, 200))
+    rows = db.execute(
+        text(
+            f"""
+            SELECT atomic_memory_id, memory_id, customer_id, memory_scope, memory_type, order_index,
+                   title, content, confidence, occurred_at, source_table, source_id, source_run_id,
+                   evidence_refs_json, entity_keys_json, metadata_json, created_at, updated_at
+            FROM customer_memory_atomic
+            WHERE tenant_id = :tenant_id
+              AND customer_id = :customer_id
+              AND memory_scope = 'customer'
+            ORDER BY
+              CASE memory_type
+                WHEN 'world' THEN 10
+                WHEN 'experience' THEN 20
+                WHEN 'opinion' THEN 30
+                WHEN 'observation' THEN 40
+                ELSE 999
+              END ASC,
+              order_index ASC,
+              occurred_at DESC,
+              created_at DESC{limit_sql}
+            """
+        ),
+        params,
+    ).mappings().all()
+    return [_atomic_memory_row_to_item(row) for row in rows]
 
 
 def list_customer_memory_update_traces(
@@ -720,6 +809,56 @@ def _join_non_empty(parts: list[str], separator: str = "；") -> str:
     return separator.join(part for part in parts if part)
 
 
+def _format_atomic_memory_lines(
+    items: list[dict[str, Any]],
+    *,
+    limit: int = 3,
+    max_chars: int = 180,
+    include_confidence: bool = False,
+) -> list[str]:
+    lines: list[str] = []
+    for item in items[:limit]:
+        prefix = f"{item.get('title')}：" if item.get("title") else ""
+        line = f"{prefix}{item.get('content') or ''}".strip()
+        if include_confidence and item.get("confidence") is not None:
+            line = f"{line}（置信度 {float(item['confidence']):.2f}）"
+        if line:
+            lines.append(_clip_text(line, max_chars))
+    return lines
+
+
+def _build_atomic_memory_groups(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    groups = {memory_type: [] for memory_type in ATOMIC_MEMORY_TYPE_ORDER}
+    for item in items:
+        groups.setdefault(str(item.get("memory_type") or "unknown"), []).append(item)
+    return groups
+
+
+def _build_atomic_recall_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    by_type = {memory_type: 0 for memory_type in ATOMIC_MEMORY_TYPE_ORDER}
+    latest_occurred_at = None
+    source_tables: dict[str, int] = {}
+    for item in items:
+        memory_type = str(item.get("memory_type") or "")
+        if memory_type in by_type:
+            by_type[memory_type] += 1
+        source_table = str(item.get("source_table") or "")
+        if source_table:
+            source_tables[source_table] = source_tables.get(source_table, 0) + 1
+        occurred_at = item.get("occurred_at")
+        if occurred_at and (latest_occurred_at is None or str(occurred_at) > str(latest_occurred_at)):
+            latest_occurred_at = occurred_at
+    return {
+        "total_count": len(items),
+        "by_type": by_type,
+        "latest_occurred_at": latest_occurred_at,
+        "top_source_tables": [
+            {"source_table": source_table, "count": count}
+            for source_table, count in sorted(source_tables.items(), key=lambda pair: (-pair[1], pair[0]))[:5]
+        ],
+    }
+
+
 def _build_long_term_usage_hints(
     *,
     preference_state: dict[str, Any],
@@ -927,6 +1066,13 @@ def load_customer_long_term_memory(
     summary_json = latest_memory.get("summary_json") or {}
     memory_profile = summary_json.get("profile") or {}
     profile_tags = summary_json.get("profile_tags") or {}
+    atomic_memories = _load_customer_atomic_memories(
+        db,
+        tenant_id=current_user["tenant_id"],
+        customer_id=customer_id,
+    )
+    atomic_groups = _build_atomic_memory_groups(atomic_memories)
+    recall_summary = _build_atomic_recall_summary(atomic_memories)
 
     preferred_follow_up_types = _top_values(follow_ups, "follow_up_type")
     preferred_follow_up_type = preferred_follow_up_types[0]["value"] if preferred_follow_up_types else None
@@ -1022,12 +1168,15 @@ def load_customer_long_term_memory(
         "summary_json": summary_json,
         "source_run_id": latest_memory.get("source_run_id"),
         "last_compiled_at": _iso(latest_memory.get("last_compiled_at")),
+        "atomic_memory_count": len(atomic_memories),
+        "atomic_memory_types": [memory_type for memory_type, items in atomic_groups.items() if items],
     }
     memory_quality = {
         "has_compiled_memory": bool(latest_memory),
         "profile_tag_count": len(profile_tags),
         "behavior_sample_count": len(follow_ups) + len(deals) + len(risks) + len(tasks),
         "has_feedback_samples": bool(preference_state["feedback_samples"]),
+        "has_atomic_memory": bool(atomic_memories),
     }
 
     return {
@@ -1040,6 +1189,9 @@ def load_customer_long_term_memory(
         "behavior_state": behavior_state,
         "memory_state": memory_state,
         "memory_quality": memory_quality,
+        "atomic_memories": atomic_memories,
+        "memory_groups": atomic_groups,
+        "recall_summary": recall_summary,
         "recommended_usage": _build_long_term_usage_hints(
             preference_state=preference_state,
             behavior_state=behavior_state,
@@ -1052,6 +1204,7 @@ def load_customer_long_term_memory(
             "approval_count": len(approvals),
             "task_count": len(tasks),
             "report_ref_count": len(report_refs),
+            "atomic_memory_count": len(atomic_memories),
         },
     }
 
@@ -1076,6 +1229,7 @@ def build_customer_context_packet(
     behavior_state = long_term["behavior_state"]
     long_term_profile = long_term["long_term_profile"]
     memory_state = long_term["memory_state"]
+    atomic_groups = long_term.get("memory_groups") or {}
 
     # 中文注释：Context Packet 只保留 Agent 决策所需事实，完整 JSON 仍可通过 Memory API 回查。
     sections = [
@@ -1113,6 +1267,13 @@ def build_customer_context_packet(
             ),
         ),
         _context_section(
+            section_type="long_term_facts",
+            title="长期事实",
+            priority=25,
+            source_refs=["customer_memory_atomic"],
+            content="\n".join(_format_atomic_memory_lines(atomic_groups.get("world") or [], limit=3, max_chars=180)),
+        ),
+        _context_section(
             section_type="long_term_preference",
             title="长期偏好",
             priority=30,
@@ -1125,6 +1286,20 @@ def build_customer_context_packet(
                     f"反馈样本:{' / '.join(preference_state.get('feedback_samples') or [])}",
                     f"行动样本:{' / '.join(preference_state.get('next_action_samples') or [])}",
                 ]
+            ),
+        ),
+        _context_section(
+            section_type="long_term_opinion",
+            title="长期判断",
+            priority=35,
+            source_refs=["customer_memory_atomic"],
+            content="\n".join(
+                _format_atomic_memory_lines(
+                    atomic_groups.get("opinion") or [],
+                    limit=2,
+                    max_chars=200,
+                    include_confidence=True,
+                )
             ),
         ),
         _context_section(
@@ -1141,10 +1316,17 @@ def build_customer_context_packet(
             ),
         ),
         _context_section(
+            section_type="agent_experience",
+            title="Agent 经验",
+            priority=45,
+            source_refs=["customer_memory_atomic"],
+            content="\n".join(_format_atomic_memory_lines(atomic_groups.get("experience") or [], limit=2, max_chars=180)),
+        ),
+        _context_section(
             section_type="compiled_memory",
             title="已编译记忆",
             priority=50,
-            source_refs=["customer_memory"],
+            source_refs=["customer_memory", "customer_memory_atomic"],
             content=_join_non_empty(
                 [
                     f"memory_id:{memory_state.get('memory_id')}",
@@ -1161,6 +1343,7 @@ def build_customer_context_packet(
             content=_join_non_empty(long_term.get("recommended_usage") or []),
         ),
     ]
+    sections = [section for section in sections if str(section.get("content") or "").strip()]
     packed_sections, compressed_context, overflow = _pack_context_sections(sections, max_chars=char_budget)
 
     return {
@@ -1179,6 +1362,7 @@ def build_customer_context_packet(
             "working_memory_id": working["memory_id"],
             "long_term_memory_id": long_term["memory_id"],
             "customer_memory_id": memory_state.get("memory_id"),
+            "atomic_memory_count": len(long_term.get("atomic_memories") or []),
             "knowledge_citation_count": 0,
         },
     }

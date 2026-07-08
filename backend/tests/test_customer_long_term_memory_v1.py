@@ -8,8 +8,50 @@ from app.core.database import SessionLocal
 from app.modules.memory import service as memory_service
 
 
+def _ensure_customer_memory_atomic_table_exists():
+    with SessionLocal() as db:
+        db.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS customer_memory_atomic (
+                  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                  tenant_id VARCHAR(64) NOT NULL,
+                  atomic_memory_id VARCHAR(64) NOT NULL,
+                  memory_id VARCHAR(64) NOT NULL,
+                  customer_id VARCHAR(64) NOT NULL,
+                  memory_scope VARCHAR(30) NOT NULL DEFAULT 'customer',
+                  memory_type VARCHAR(30) NOT NULL,
+                  order_index INT NOT NULL DEFAULT 0,
+                  title VARCHAR(255) NULL,
+                  content TEXT NOT NULL,
+                  confidence DECIMAL(6,4) NULL,
+                  occurred_at DATETIME NULL,
+                  source_table VARCHAR(64) NOT NULL,
+                  source_id VARCHAR(64) NULL,
+                  source_run_id VARCHAR(64) NULL,
+                  evidence_refs_json JSON NULL,
+                  entity_keys_json JSON NULL,
+                  metadata_json JSON NULL,
+                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  UNIQUE KEY uk_atomic_memory_id (atomic_memory_id),
+                  KEY idx_tenant_customer_type_time (tenant_id, customer_id, memory_type, occurred_at),
+                  KEY idx_tenant_memory_order (tenant_id, memory_id, order_index),
+                  KEY idx_tenant_source_run (tenant_id, source_run_id),
+                  KEY idx_tenant_source_table (tenant_id, source_table, source_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
+            )
+        )
+        db.commit()
+
+
 def _cleanup_customer_long_term_memory_fixture(tenant_id: str, customer_id: str):
     with SessionLocal() as db:
+        db.execute(
+            text("DELETE FROM customer_memory_atomic WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
+            {"tenant_id": tenant_id, "customer_id": customer_id},
+        )
         db.execute(
             text("DELETE FROM customer_memory WHERE tenant_id = :tenant_id AND customer_id = :customer_id"),
             {"tenant_id": tenant_id, "customer_id": customer_id},
@@ -55,6 +97,7 @@ def test_customer_long_term_memory_rolls_up_preferences_and_history():
         "permission_codes": ["crm:customer:read:self"],
     }
     now = datetime.now()
+    _ensure_customer_memory_atomic_table_exists()
     _cleanup_customer_long_term_memory_fixture(tenant_id, customer_id)
 
     try:
@@ -232,6 +275,32 @@ def test_customer_long_term_memory_rolls_up_preferences_and_history():
                     "last_compiled_at": now,
                 },
             )
+            db.execute(
+                text(
+                    """
+                    INSERT INTO customer_memory_atomic (
+                      tenant_id, atomic_memory_id, memory_id, customer_id, memory_scope, memory_type,
+                      order_index, title, content, confidence, occurred_at, source_table, source_id,
+                      source_run_id, evidence_refs_json, entity_keys_json, metadata_json
+                    )
+                    VALUES
+                      (:tenant_id, 'atom_long_world', 'memory_long_memory', :customer_id, 'customer', 'world',
+                       1, '客户画像事实', '客户长期关注 ROI、竞品对比和投入产出证明。', NULL, :occurred_at, 'crm_customer', :customer_id,
+                       'run_long_memory', '[]', '[]', '{}'),
+                      (:tenant_id, 'atom_long_opinion', 'memory_long_memory', :customer_id, 'customer', 'opinion',
+                       2, '风险判断', '系统判断客户仍在比较竞品 ROI，需要量化收益证明。', 0.8200, :occurred_at, 'customer_risk_snapshot', 'risk_long_memory',
+                       'run_long_memory', '[]', '[]', '{}'),
+                      (:tenant_id, 'atom_long_observation', 'memory_long_memory', :customer_id, 'customer', 'observation',
+                       3, '客户长期总结', '客户长期关注 ROI、竞品对比和投入产出证明。', NULL, :occurred_at, 'customer_memory', :customer_id,
+                       'run_long_memory', '[]', '[]', '{}')
+                    """
+                ),
+                {
+                    "tenant_id": tenant_id,
+                    "customer_id": customer_id,
+                    "occurred_at": now,
+                },
+            )
             db.commit()
 
             long_term = memory_service.load_customer_long_term_memory(db, current_user, customer_id=customer_id)
@@ -248,7 +317,12 @@ def test_customer_long_term_memory_rolls_up_preferences_and_history():
         assert long_term["behavior_state"]["risk_level_history"][0]["risk_level"] == "medium"
         assert long_term["behavior_state"]["task_result_history"][0]["status"] == "completed"
         assert long_term["memory_state"]["memory_id"] == "memory_long_memory"
+        assert long_term["memory_state"]["atomic_memory_count"] == 3
         assert long_term["memory_quality"]["has_compiled_memory"] is True
+        assert long_term["memory_quality"]["has_atomic_memory"] is True
+        assert long_term["recall_summary"]["by_type"]["opinion"] == 1
+        assert len(long_term["memory_groups"]["world"]) == 1
+        assert long_term["memory_groups"]["opinion"][0]["confidence"] == 0.82
         assert "wechat" in long_term["recommended_usage"][0]
     finally:
         _cleanup_customer_long_term_memory_fixture(tenant_id, customer_id)
