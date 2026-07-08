@@ -154,7 +154,13 @@ BACKUP_DOMAINS: tuple[BackupDomain, ...] = (
     BackupDomain(
         domain_id="memory_governance",
         name="客户记忆与治理",
-        tables=("customer_memory", "customer_memory_atomic", "memory_update_trace", "memory_governance_state"),
+        tables=(
+            "customer_memory",
+            "customer_memory_atomic",
+            "conversation_memory_extract_job",
+            "memory_update_trace",
+            "memory_governance_state",
+        ),
         backup_mode="logical_dump",
         restore_order=70,
         rpo_minutes=30,

@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
+from app.modules.memory.conversation_fact_service import CONVERSATION_FACT_SOURCE_TABLE
 from app.shared.ids import new_id
 
 ATOMIC_MEMORY_TYPE_WORLD = "world"
@@ -856,12 +857,14 @@ def _replace_customer_atomic_memories(
             WHERE tenant_id = :tenant_id
               AND customer_id = :customer_id
               AND memory_scope = :memory_scope
+              AND source_table <> :conversation_source_table
             """
         ),
         {
             "tenant_id": tenant_id,
             "customer_id": customer_id,
             "memory_scope": memory_scope,
+            "conversation_source_table": CONVERSATION_FACT_SOURCE_TABLE,
         },
     )
 

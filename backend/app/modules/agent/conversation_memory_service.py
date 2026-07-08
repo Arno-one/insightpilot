@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.redis import get_redis
+from app.modules.memory import conversation_fact_service
 
 MAX_RECENT_ROUNDS = 5
 MAX_RECENT_MESSAGES = MAX_RECENT_ROUNDS * 2
@@ -262,20 +263,31 @@ def append_conversation_messages(
     redis_client=None,
 ) -> tuple[dict[str, Any], bool]:
     memory = load_conversation_memory(tenant_id, user_id, customer_id, redis_client=redis_client)
-    memory["recent_messages"].extend(
-        [
-            _serialize_message(
-                str(item.get("role") or "assistant"),
-                str(item.get("content") or ""),
-                item.get("created_at"),
-            )
-            for item in messages
-            if _normalize_message_content(item.get("content"))
-        ]
-    )
+    normalized_messages = [
+        _serialize_message(
+            str(item.get("role") or "assistant"),
+            str(item.get("content") or ""),
+            item.get("created_at"),
+        )
+        for item in messages
+        if _normalize_message_content(item.get("content"))
+    ]
+    memory["recent_messages"].extend(normalized_messages)
     memory["updated_at"] = datetime.now().isoformat()
     memory, compacted = compact_conversation_memory(memory)
     saved = save_conversation_memory(tenant_id, user_id, customer_id, memory, redis_client=redis_client)
+    if normalized_messages:
+        # 中文注释：异步把对话里的稳定事实提炼到长期记忆，避免把会话原文直接混进长期层。
+        conversation_fact_service.enqueue_conversation_fact_extraction(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            customer_id=customer_id,
+            session_key=str(saved.get("session_key") or ""),
+            source_type=conversation_fact_service.CONVERSATION_FACT_SOURCE_TYPE,
+            trigger_messages=normalized_messages,
+            recent_messages=list(saved.get("recent_messages") or []),
+            history_summary=str(saved.get("history_summary") or ""),
+        )
     return saved, compacted
 
 

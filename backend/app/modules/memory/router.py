@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.auth.dependencies import require_permission
 from app.modules.memory import service
-from app.modules.memory.schemas import MemoryGovernanceActionRequest
+from app.modules.memory.schemas import LongTermMemorySearchRequest, MemoryGovernanceActionRequest
 from app.shared.response import success
 
 router = APIRouter()
@@ -78,6 +78,26 @@ def get_customer_long_term_memory(
 ):
     data = service.load_customer_long_term_memory(db, current_user, customer_id=customer_id)
     return success(data, "查询成功")
+
+
+@router.post("/customers/{customer_id}/long-term/search")
+def search_customer_long_term_memory(
+    customer_id: str,
+    body: LongTermMemorySearchRequest,
+    current_user: dict = Depends(require_permission("crm:customer:read:self")),
+    db: Session = Depends(get_db),
+):
+    data = service.search_customer_long_term_memory(
+        db,
+        current_user,
+        customer_id=customer_id,
+        question=body.question,
+        limit=body.limit,
+        memory_types=body.memory_types,
+        include_summary=body.include_summary,
+        max_chars=body.max_chars,
+    )
+    return success(data, "检索成功", total=len(data["hits"]))
 
 
 @router.get("/customers/{customer_id}/update-traces")

@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from typing import Any, Literal
 
@@ -15,6 +16,32 @@ ATOMIC_MEMORY_TYPE_ORDER: dict[str, int] = {
     "experience": 20,
     "opinion": 30,
     "observation": 40,
+}
+ATOMIC_MEMORY_SEARCH_TYPE_WEIGHT: dict[str, float] = {
+    "world": 3.8,
+    "experience": 3.2,
+    "opinion": 3.4,
+    "observation": 2.8,
+}
+ATOMIC_MEMORY_SEARCH_STOP_WORDS = {
+    "这个",
+    "那个",
+    "现在",
+    "最近",
+    "请问",
+    "一下",
+    "一下子",
+    "我们",
+    "你们",
+    "他们",
+    "客户",
+    "问题",
+    "情况",
+    "什么",
+    "怎么",
+    "为什么",
+    "是否",
+    "还有",
 }
 
 
@@ -809,6 +836,138 @@ def _join_non_empty(parts: list[str], separator: str = "；") -> str:
     return separator.join(part for part in parts if part)
 
 
+def _normalize_search_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _extract_query_terms(question: str) -> list[str]:
+    normalized = _normalize_search_text(question)
+    seen: set[str] = set()
+    terms: list[str] = []
+
+    def _push(term: str):
+        candidate = term.strip()
+        if len(candidate) < 2 or candidate in seen or candidate in ATOMIC_MEMORY_SEARCH_STOP_WORDS:
+            return
+        seen.add(candidate)
+        terms.append(candidate)
+
+    for segment in re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized):
+        if re.fullmatch(r"[a-z0-9_]+", segment):
+            _push(segment)
+            continue
+        compact = segment.strip()
+        if 2 <= len(compact) <= 8:
+            _push(compact)
+        max_ngram = min(len(compact), 4)
+        for size in range(2, max_ngram + 1):
+            for index in range(0, len(compact) - size + 1):
+                _push(compact[index : index + size])
+    return terms[:40]
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    text_value = str(value or "").strip()
+    if not text_value:
+        return None
+    try:
+        return datetime.fromisoformat(text_value)
+    except ValueError:
+        return None
+
+
+def _build_atomic_search_fields(item: dict[str, Any]) -> dict[str, str]:
+    metadata_json = item.get("metadata_json") or {}
+    return {
+        "title": _normalize_search_text(item.get("title")),
+        "content": _normalize_search_text(item.get("content")),
+        "source": _normalize_search_text(
+            " ".join(
+                [
+                    str(item.get("source_table") or ""),
+                    str(item.get("source_id") or ""),
+                    str(item.get("source_run_id") or ""),
+                ]
+            )
+        ),
+        "entity": _normalize_search_text(
+            " ".join(
+                [
+                    *[str(value) for value in item.get("entity_keys") or []],
+                    *[str(value) for value in item.get("evidence_refs") or []],
+                ]
+            )
+        ),
+        "metadata": _normalize_search_text(json.dumps(metadata_json, ensure_ascii=False, default=str)),
+    }
+
+
+def _score_atomic_memory_hit(
+    item: dict[str, Any],
+    *,
+    question: str,
+    terms: list[str],
+) -> dict[str, Any] | None:
+    normalized_question = _normalize_search_text(question)
+    fields = _build_atomic_search_fields(item)
+    matched_terms: list[str] = []
+    matched_fields: set[str] = set()
+    score = 0.0
+
+    if len(normalized_question) >= 4:
+        for field_name, field_value in fields.items():
+            if normalized_question and normalized_question in field_value:
+                matched_fields.add(field_name)
+                score += 10.0 if field_name in {"title", "content"} else 4.0
+
+    for term in terms:
+        term_score = 0.0
+        if term in fields["title"]:
+            term_score += 6.0
+            matched_fields.add("title")
+        if term in fields["content"]:
+            term_score += 5.0
+            matched_fields.add("content")
+        if term in fields["entity"]:
+            term_score += 3.5
+            matched_fields.add("entity")
+        if term in fields["source"]:
+            term_score += 2.5
+            matched_fields.add("source")
+        if term in fields["metadata"]:
+            term_score += 1.5
+            matched_fields.add("metadata")
+        if term_score > 0:
+            matched_terms.append(term)
+            score += term_score
+
+    if score <= 0:
+        return None
+
+    score += ATOMIC_MEMORY_SEARCH_TYPE_WEIGHT.get(str(item.get("memory_type") or ""), 1.0)
+    if item.get("confidence") is not None:
+        score += min(max(float(item["confidence"]), 0.0), 1.0)
+
+    occurred_at = _parse_iso_datetime(item.get("occurred_at"))
+    if occurred_at:
+        age_days = max((datetime.now(occurred_at.tzinfo) - occurred_at).days, 0)
+        if age_days <= 30:
+            score += 2.0
+        elif age_days <= 120:
+            score += 1.2
+        elif age_days <= 365:
+            score += 0.5
+
+    return {
+        **item,
+        "score": round(score, 4),
+        "matched_terms": matched_terms[:10],
+        "matched_fields": sorted(matched_fields),
+    }
+
+
 def _format_atomic_memory_lines(
     items: list[dict[str, Any]],
     *,
@@ -1205,6 +1364,149 @@ def load_customer_long_term_memory(
             "task_count": len(tasks),
             "report_ref_count": len(report_refs),
             "atomic_memory_count": len(atomic_memories),
+        },
+    }
+
+
+def _normalize_memory_type_filters(memory_types: list[str] | None) -> list[str]:
+    if not memory_types:
+        return list(ATOMIC_MEMORY_TYPE_ORDER.keys())
+    normalized: list[str] = []
+    for memory_type in memory_types:
+        candidate = str(memory_type or "").strip().lower()
+        if candidate in ATOMIC_MEMORY_TYPE_ORDER and candidate not in normalized:
+            normalized.append(candidate)
+    return normalized or list(ATOMIC_MEMORY_TYPE_ORDER.keys())
+
+
+def search_customer_long_term_memory(
+    db: Session,
+    current_user: dict[str, Any],
+    *,
+    customer_id: str,
+    question: str,
+    limit: int = 12,
+    memory_types: list[str] | None = None,
+    include_summary: bool = True,
+    max_chars: int | None = 1200,
+) -> dict[str, Any]:
+    crm_service.load_customer_or_404(db, current_user, customer_id)
+    normalized_question = str(question or "").strip()
+    if not normalized_question:
+        raise ValueError("检索问题不能为空")
+
+    resolved_types = _normalize_memory_type_filters(memory_types)
+    atomic_memories = _load_customer_atomic_memories(
+        db,
+        tenant_id=current_user["tenant_id"],
+        customer_id=customer_id,
+    )
+    filtered_items = [item for item in atomic_memories if str(item.get("memory_type") or "") in resolved_types]
+    query_terms = _extract_query_terms(normalized_question)
+    scored_hits = [
+        hit
+        for hit in (
+            _score_atomic_memory_hit(item, question=normalized_question, terms=query_terms) for item in filtered_items
+        )
+        if hit is not None
+    ]
+    scored_hits.sort(
+        key=lambda item: (
+            -float(item.get("score") or 0),
+            item.get("type_order") or 999,
+            str(item.get("occurred_at") or ""),
+            str(item.get("atomic_memory_id") or ""),
+        )
+    )
+    hits = scored_hits[: max(1, min(limit, 30))]
+    grouped_hits = {
+        memory_type: [item for item in hits if item.get("memory_type") == memory_type]
+        for memory_type in ATOMIC_MEMORY_TYPE_ORDER
+        if any(item.get("memory_type") == memory_type for item in hits)
+    }
+
+    latest_memory = _load_latest_customer_memory(db, tenant_id=current_user["tenant_id"], customer_id=customer_id)
+    summary_text = str(latest_memory.get("summary_text") or "")
+    summary_included = False
+    sections: list[dict[str, Any]] = []
+    if include_summary and summary_text:
+        summary_matched = not query_terms or any(term in _normalize_search_text(summary_text) for term in query_terms)
+        if summary_matched:
+            sections.append(
+                _context_section(
+                    section_type="compiled_memory",
+                    title="已编译记忆",
+                    content=_clip_text(summary_text, min(max_chars or 1200, 360)),
+                    source_refs=["customer_memory"],
+                    priority=15,
+                )
+            )
+            summary_included = True
+
+    priority = 20
+    for memory_type, title in [
+        ("world", "命中事实"),
+        ("opinion", "命中判断"),
+        ("experience", "命中经验"),
+        ("observation", "命中观察"),
+    ]:
+        items = grouped_hits.get(memory_type) or []
+        if not items:
+            continue
+        sections.append(
+            _context_section(
+                section_type=f"search_{memory_type}",
+                title=title,
+                content="\n".join(
+                    _format_atomic_memory_lines(
+                        items,
+                        limit=3,
+                        max_chars=220,
+                        include_confidence=memory_type == "opinion",
+                    )
+                ),
+                source_refs=["customer_memory_atomic"],
+                priority=priority,
+            )
+        )
+        priority += 5
+
+    context_budget = max(400, min(max_chars or 1200, 6000))
+    packed_sections, compressed_context, overflow = _pack_context_sections(sections, max_chars=context_budget)
+    recall_summary = {
+        **_build_atomic_recall_summary(hits),
+        "question": normalized_question,
+        "matched_count": len(hits),
+        "applied_memory_types": resolved_types,
+        "query_terms": query_terms[:12],
+        "summary_included": summary_included,
+        "top_score": hits[0]["score"] if hits else 0,
+    }
+
+    return {
+        "source_type": "customer_long_term_search",
+        "customer_id": customer_id,
+        "question": normalized_question,
+        "generated_at": datetime.now().isoformat(),
+        "query_terms": query_terms,
+        "memory_types": resolved_types,
+        "summary_memory": {
+            "memory_id": latest_memory.get("memory_id"),
+            "included": summary_included,
+            "summary_text": _clip_text(summary_text, 500) if summary_included else "",
+            "last_compiled_at": _iso(latest_memory.get("last_compiled_at")),
+        },
+        "hits": hits,
+        "grouped_hits": grouped_hits,
+        "recall_summary": recall_summary,
+        "suggested_context": {
+            "budget": {
+                "max_chars": context_budget,
+                "used_chars": len(compressed_context),
+                "overflow": overflow,
+            },
+            "sections": packed_sections,
+            "compressed_context": compressed_context,
         },
     }
 
